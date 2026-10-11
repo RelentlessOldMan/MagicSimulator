@@ -2,7 +2,7 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.1** (2026-10-11).
+Status: **draft v0.2** (2026-10-11). v0.2 adds review notes from MagicDecks and Cardinator.
 - Built: §1 deck format, §2 card index, and the `sync-cards` and `check` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
@@ -29,10 +29,13 @@ The MagicDecks format.
 - **Merge duplicates** into one line, e.g. `7 Island`.
 - **Card names:** the plain English oracle name. Two-sided and split cards use Scryfall's full name, e.g. `Expansion // Explosion`. No set codes, no collector numbers.
 - **Order after the blank line has no meaning.** Readers must not depend on it.
-- **Only commanders and mainboard.** No sideboard, maybeboard or signature spells. A companion sits outside the 100, so it goes in a trailing comment: `# companion: Name`.
+- **Only commanders and mainboard.** No sideboard, maybeboard or signature spells.
+- **Companion:** a companion sits outside the 100, so it goes in a comment as the last line: `# companion: Name`. If the source also lists it in the mainboard, it stays there too and counts toward the 100.
+- **A deck with no commander** (e.g. a 60-card constructed list): no tagged lines and no blank line, just the `N Name` block.
 
 ### Readers must also accept
 
+- CRLF line ends and a UTF-8 BOM. Windows editors and git autocrlf produce them.
 - `Nx Name`, e.g. `1x Sol Ring`.
 - A trailing set code, with or without a collector number: `(SET) 123`, `(SET)` or `[SET]`.
 - Moxfield markers such as `*F*` and `*E*`.
@@ -40,7 +43,7 @@ The MagicDecks format.
 - The same card on several lines. The counts are added together.
 - Names in any letter case, and with or without accents. `Lim-Dul's Vault` matches `Lim-Dûl's Vault`.
 - A single face name standing for a two-sided or split card.
-- Untagged lists, such as the `-moxfield.txt` files. These parse, but give a "no commander" warning.
+- Untagged lists, such as the `-moxfield.txt` files or 60-card decks. These parse, but give a "no commander" warning.
 
 ### Moxfield paste files (`<Deck>-moxfield.txt`)
 
@@ -154,6 +157,7 @@ sim cards [--deck x.txt] [--json out.json]
       "cumulative_by_turn": {"1": 0.312, "2": 0.513, "3": 0.603},
       "no_win": 0.105,
       "mean_turn": 1.9, "mean_turn_ci95": [1.88, 1.92], "median_turn": 2,
+      "mean_turn_capped": 2.8, "mean_turn_capped_ci95": [2.76, 2.84],
       "hand_size_kept": {"7": 0.41, "6": 0.30, "5": 0.29},
       "win_lines": {"consult_oracle": 0.55, "breach": 0.15, "doomsday": 0.10, "storm": 0.20}
     }
@@ -167,12 +171,13 @@ sim cards [--deck x.txt] [--json out.json]
 **Field meanings:**
 - **Win rates:** `win_by_turn` and `no_win` are fractions of all games. The win values plus `no_win` add up to 1.
 - **`mean_turn` / `median_turn`:** counted over winning games only.
+- **`mean_turn_capped`:** counted over all games, with each game that wasn't won counted as `max_turn + 1`. Use this to rank variants: a deck that wins less often but faster can't look better than it is.
 - **`win_lines`:** fractions of the wins. The keys come from the deck profile.
 - **`results`:** one row per (mulligan, seat) pair, plus `seat: "weighted"` rows when `--seat both`.
 - **`cards`:** per-game fractions, across all games in the run:
   - `drawn`: the card was seen in hand.
   - `cast`: it was cast or played.
-  - `in_win`: it was cast in a game that was won.
+  - `in_win`: it was cast in a game that was won. Planned later: `in_win_line`, meaning the card was part of the actual winning line.
 
 #### `compare` output (`magicsim.compare/1`)
 
@@ -189,7 +194,10 @@ sim cards [--deck x.txt] [--json out.json]
       "results": [
         {"mulligan": "A", "seat": "play",
          "t1_rate": 0.318, "delta_t1": 0.006, "delta_t1_ci95": [-0.002, 0.014],
-         "p_value": 0.14, "delta_mean_turn": -0.02}
+         "p_value": 0.14,
+         "delta_cumulative_by_turn": {"1": 0.006, "2": 0.004, "3": -0.001},
+         "delta_mean_turn": -0.02, "delta_mean_turn_capped": -0.05,
+         "delta_mean_turn_capped_ci95": [-0.09, -0.01]}
       ]
     }
   ]
@@ -198,7 +206,9 @@ sim cards [--deck x.txt] [--json out.json]
 
 - **The test:** each base game is paired with the variant game that used the same shuffle. `p_value` comes from McNemar's test on turn-1 wins, a test suited to paired results.
 - **`unreliable: true`** means the variant adds a card the simulator can't play. Don't optimize toward it.
-- **Swap rules:** a `--swap` whose `Out` card isn't in the deck is a usage error (exit 2).
+- **Rows:** one per (mulligan, seat) pair, including the `seat: "weighted"` rows. `delta_cumulative_by_turn` covers turns 1 through `max_turn`.
+- **Swap rules:** a `--swap` is a usage error (exit 2) if its `Out` card isn't in the deck or its `In` card isn't in the card index.
+- **Not checked by compare:** bans and color identity. Callers check those first (MagicDecks uses `validate_deck.py`).
 
 #### `cards` output (`magicsim.cards/1`)
 
@@ -213,11 +223,18 @@ sim cards [--deck x.txt] [--json out.json]
 
 A deck profile lives at `profiles/<Deck>.yaml` in this repo and holds settings for one deck. MagicDecks keeps only decklists and strategy write-ups.
 
+A profile is **optional**. Any deck runs without one, using what the engine can work out on its own. A profile only sharpens the results.
+
 ```yaml
-deck: C:/Playground/MagicDecks/For-The-Lulz.txt   # or relative to the profile
+deck: For-The-Lulz.txt                # relative to the profile's folder, or to --decks <root> / %MAGICDECKS_DIR%
 consultation_name: "Lightning Bolt"   # a card NOT in the deck, for Consultation/Pact
 win_lines: [consult_oracle, doomsday, breach, storm]
+key_cards: [Thassa's Oracle, Demonic Consultation, Tainted Pact, Doomsday, Underworld Breach]
+tutors: [Demonic Tutor, Vampiric Tutor, Mystical Tutor]   # optional; inferred from rules text if left out
 ```
+
+- **No absolute paths.** `deck:` is resolved against the profile's folder, then `--decks`, then `%MAGICDECKS_DIR%`.
+- **Mulligan policy B** uses `key_cards` and `tutors` to decide what counts as "a win piece or a tutor". Without a profile, the engine infers both: tutors from "search your library" text, and win pieces from the cards that appear in its winning lines.
 
 ## 5. Moxfield import
 
@@ -228,5 +245,17 @@ Cardinator.exe --moxfield <link | id> out.txt format=magicdecks
 ```
 
 - **Exit codes:** 0 written, 1 the fetch failed, 2 usage error.
+- **Overwrites:** it replaces an existing `.txt` without asking. It only refuses to overwrite a Cardinator set file. Don't point it at a hand-edited deck file.
 - `format=magicdecks` writes the §1 format.
-- Until that option ships, use the `.json` output.
+- `format=magicdecks` is planned for Cardinator 1.6.32. Until then, use the `.json` output.
+- The other direction also works: Cardinator's list import accepts §1 files, treats the tagged cards as commanders, and ignores `#` comments.
+
+## 6. Card support
+
+The simulator is **generic**: any deck, any player. The rules engine handles turns, mana, the stack, combat, mulligans and the search, the same way for every deck. Each card's behavior comes from one of three tiers:
+
+1. **Templates.** Common rules text is recognized automatically: lands, mana rocks, rituals, "draw N", tutors, vanilla and keyword creatures, simple burn, and so on.
+2. **Hand-coded cards.** Anything a template can't express.
+3. **Unsupported.** Treated as blank and reported, as §3 describes.
+
+Coverage grows over time. `sim cards` reports which tier each card uses.

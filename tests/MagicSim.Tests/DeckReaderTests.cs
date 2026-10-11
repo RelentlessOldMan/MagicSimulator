@@ -73,4 +73,20 @@ public class DeckReaderTests
         var deck = DeckReader.Parse(text);
         Assert.Equal(text, DeckWriter.Format(deck));
     }
+
+    [Fact]
+    public void AcceptsCrlfAndBom()
+    {
+        var deck = DeckReader.Parse("﻿1 Sol Ring *CMDR*\r\n\r\n1 Island\r\n");
+        Assert.Equal("Sol Ring", deck.Commanders.Single().Name);
+        Assert.Equal("Island", deck.Mainboard.Single().Name);
+        Assert.Empty(deck.Warnings);
+    }
+
+    [Fact]
+    public void WriterOmitsBlankLineWithoutCommander()
+    {
+        var deck = DeckReader.Parse("4 Lightning Bolt\n20 Mountain\n");
+        Assert.Equal("4 Lightning Bolt\n20 Mountain\n", DeckWriter.Format(deck));
+    }
 }
