@@ -12,17 +12,23 @@ public static class Keywords
         "Protection", "Landwalk", "Intimidate", "Fear", "Shadow", "Horsemanship", "Skulk",
         // Deck-building only.
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
+        // Handled where they matter: Devoid makes the card colorless.
+        "Devoid",
     };
 }
 
 /// <summary>Trigger modes the engine fires, and how each one matches an event.</summary>
 public static class Triggers
 {
-    public static readonly HashSet<string> Supported = new(StringComparer.Ordinal) { "ChangesZone", "Phase", "SpellCast", "Attacks" };
+    /// <summary>Triggers on events that never happen against goldfish opponents (blocking, other game variants).</summary>
+    private static readonly HashSet<string> NeverInGoldfish = new(StringComparer.Ordinal)
+    {
+        "Blocks", "AttackerBlocked", "AttackerBlockedByCreature", "ChaosEnsues", "SetInMotion", "PlaneswalkedTo",
+    };
 
     private static readonly HashSet<string> CommonParams = new(StringComparer.Ordinal)
     {
-        "Mode", "Execute", "TriggerDescription", "TriggerZones", "OptionalDecider", "Secondary", "ValidCard",
+        "Mode", "Execute", "TriggerDescription", "TriggerZones", "OptionalDecider", "Secondary", "ValidCard", "Static",
     };
 
     private static readonly Dictionary<string, HashSet<string>> ModeParams = new()
@@ -31,15 +37,29 @@ public static class Triggers
         ["Phase"] = new(StringComparer.Ordinal) { "Phase", "ValidPlayer" },
         ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer" },
         ["Attacks"] = new(StringComparer.Ordinal) { },
+        ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
+        ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer" },
+        ["Drawn"] = new(StringComparer.Ordinal) { },
+        ["LandPlayed"] = new(StringComparer.Ordinal) { },
+        ["Discarded"] = new(StringComparer.Ordinal) { },
+        ["LifeGained"] = new(StringComparer.Ordinal) { "ValidPlayer" },
+        ["Taps"] = new(StringComparer.Ordinal) { },
     };
+
+    public static readonly HashSet<string> Supported = new(ModeParams.Keys.Concat(NeverInGoldfish), StringComparer.Ordinal);
 
     public static void Validate(TriggerDef t, CompileContext ctx)
     {
-        if (!ModeParams.TryGetValue(t.Mode, out var own)) return;   // unsupported mode already reported
+        if (!ModeParams.TryGetValue(t.Mode, out var own)) return;   // unsupported (already reported) or never fires
         foreach (var key in t.P.Values.Keys)
-            if (!CommonParams.Contains(key) && !own.Contains(key))
+            if (!CommonParams.Contains(key) && !own.Contains(key) && !Presence.Params.Contains(key))
                 ctx.Need($"TriggerParam:{t.Mode}.{key}");
+        Presence.Validate(t.P, ctx);
         if (t["ValidCard"] is { } vc) Filter.Parse(vc, ctx);
+        if (t["ValidSource"] is { } vs) Filter.Parse(vs, ctx);
+        if (t["ValidTarget"] is { } vt) Filter.Parse(vt, ctx);
+        if (t["AttackingPlayer"] is { } ap && ap != "You") ctx.Need("AttackingPlayer:" + ap);
+        if (t["ValidPlayer"] is { } vp && vp is not ("You" or "Player" or "Opponent")) ctx.Need("TriggerValidPlayer:" + vp);
         if (t["TriggerZones"] is { } tz && tz != "Battlefield") ctx.Need("TriggerZones:" + tz);
         if (t["Phase"] is { } ph && ph is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "BeginCombat"))
             ctx.Need("TriggerPhase:" + ph);
@@ -56,7 +76,12 @@ public static class Triggers
         var sourceActive = source.Zone == Zone.Battlefield
             || (e.Mode == TriggerMode.ChangesZone && e.CardId == source.Id && e.From == Zone.Battlefield);
         if (!sourceActive) return false;
+        if (!ModeMatches(g, t, source, e, x)) return false;
+        return Presence.Hold(t.P, x);
+    }
 
+    private static bool ModeMatches(Game g, TriggerDef t, Card source, TriggerEvent e, EffectContext x)
+    {
         switch (t.Mode)
         {
             case "ChangesZone" when e.Mode == TriggerMode.ChangesZone:
@@ -69,10 +94,30 @@ public static class Triggers
                 return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
             case "Attacks" when e.Mode == TriggerMode.Attacks:
                 return CardMatches(g, t, e.CardId, x, source);
+            case "DamageDone" when e.Mode == TriggerMode.DamageDone:
+                if (t["CombatDamage"] is { } cd && (cd == "True") != e.Combat) return false;
+                if (t["ValidSource"] is { } vs && (e.CardId is not { } src || !FilterOf(source, vs).MatchesCard(g.State[src], x))) return false;
+                if (t["ValidTarget"] is { } vt)
+                {
+                    var f = FilterOf(source, vt);
+                    if (e.Player is { } p ? !f.MatchesPlayer(p, x) : e.TargetCardId is not { } tc || !f.MatchesCard(g.State[tc], x)) return false;
+                }
+                return true;
+            case "AttackersDeclared" when e.Mode == TriggerMode.AttackersDeclared:
+                return e.Player == source.Controller;
+            case "Drawn" when e.Mode == TriggerMode.Drawn:
+            case "LandPlayed" when e.Mode == TriggerMode.LandPlayed:
+            case "Discarded" when e.Mode == TriggerMode.Discarded:
+            case "Taps" when e.Mode == TriggerMode.Taps:
+                return CardMatches(g, t, e.CardId, x, source);
+            case "LifeGained" when e.Mode == TriggerMode.LifeGained:
+                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
             default:
                 return false;
         }
     }
+
+    private static Filter FilterOf(Card source, string text) => Effect.FilterFor(source.CurrentFace, text);
 
     private static bool CardMatches(Game g, TriggerDef t, int? cardId, EffectContext x, Card source)
     {
@@ -92,17 +137,6 @@ public static class Triggers
         "Opponent" => player != controller,
         _ => false,
     };
-}
-
-/// <summary>Static abilities. None are implemented yet; every mode is reported as missing.</summary>
-public static class Statics
-{
-    public static readonly HashSet<string> Supported = new(StringComparer.Ordinal);
-
-    public static void Validate(StaticDef s, CompileContext ctx)
-    {
-        if (!Supported.Contains(s.Mode)) ctx.Need("Static:" + s.Mode);
-    }
 }
 
 /// <summary>"Condition…$" parameters that decide whether one link of an ability chain happens.</summary>

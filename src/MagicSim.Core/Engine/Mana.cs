@@ -108,7 +108,7 @@ public sealed class ManaCost
 
     public ManaCost WithExtraGeneric(int extra) => extra == 0 ? this : new ManaCost
     {
-        Generic = Generic + extra, XCount = XCount, Shards = Shards, NoCost = NoCost,
+        Generic = Math.Max(0, Generic + extra), XCount = XCount, Shards = Shards, NoCost = NoCost,
     };
 
     public override string ToString()

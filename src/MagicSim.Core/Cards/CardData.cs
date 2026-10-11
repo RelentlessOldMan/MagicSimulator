@@ -23,6 +23,8 @@ public sealed record CardData
     [JsonPropertyName("loyalty")] public string? Loyalty { get; init; }
     [JsonPropertyName("commander_legality")] public string CommanderLegality { get; init; } = "not_legal";
     [JsonPropertyName("faces")] public List<CardFace>? Faces { get; init; }
+    /// <summary>EDHREC popularity rank (1 = most played), or null if unranked.</summary>
+    [JsonPropertyName("edhrec_rank")] public int? EdhrecRank { get; init; }
 }
 
 public sealed record CardFace

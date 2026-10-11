@@ -2,11 +2,12 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.5** (2026-10-11).
+Status: **draft v0.6** (2026-10-11).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
 - v0.5: card behavior comes from Forge scripts (§6), and Cardinator 1.6.32 has shipped (§5).
+- v0.6: the card index gains `edhrec_rank` (§2). It is additive, so older readers are unaffected.
 - Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
@@ -65,8 +66,10 @@ The simulator owns this file. Other tools may read it but should not write it.
 {"name":"Thassa's Oracle","layout":"normal","mana_cost":"{U}{U}","cmc":2,
  "type_line":"Creature — Merfolk Wizard","oracle_text":"…","colors":["U"],
  "color_identity":["U"],"produced_mana":[],"keywords":[],"power":"1","toughness":"3",
- "loyalty":null,"commander_legality":"legal","faces":null}
+ "loyalty":null,"commander_legality":"legal","faces":null,"edhrec_rank":15}
 ```
+
+- `edhrec_rank` is EDHREC's popularity rank from Scryfall (1 = most played), or `null` for unranked cards. Added in v0.6; older index files lack it, so readers must treat a missing key as `null`.
 
 **Cards with faces:**
 - `faces` is a list of `{name, mana_cost, type_line, oracle_text, power, toughness}`.
@@ -269,6 +272,8 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
  "pool": {"description": "Commander-legal cards with a Forge script", "cards": 32161,
           "scripted": 369, "hand_coded": 0, "supported_share": 0.0115,
           "next_to_implement": [{"requirement": "Api:Pump", "cards_needing": 4262, "cards_unlocked_alone": 458}]},
+ "popular": {"description": "The 5000 most-played Commander cards (EDHREC rank) with a Forge script", "cards": 4870,
+             "scripted": 2100, "hand_coded": 0, "supported_share": 0.4312, "next_to_implement": [...]},
  "deck": {"name": "For-The-Lulz",
           "cards": [{"name": "Dark Ritual", "tier": "unsupported", "missing": ["Api:Mana"]}]}}
 ```
@@ -278,6 +283,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
 - **`next_to_implement`:** the requirements that unblock the most cards. It's ranked first by how many cards that requirement *alone* is blocking, then by how many cards need it at all.
 - **`tier`:** one of `scripted`, `hand_coded` or `unsupported`.
 - **`missing`:** the requirement keys the engine doesn't support yet. `NoForgeScript` means Forge has no script for the card.
+- **`popular`:** the same report for the most-played cards only, so work can go where real decks feel it. It's empty if the card index has no `edhrec_rank` (re-run `sync-cards`).
 - **`deck`:** appears only when `--deck` is given.
 
 ## 4. Deck profiles (planned)

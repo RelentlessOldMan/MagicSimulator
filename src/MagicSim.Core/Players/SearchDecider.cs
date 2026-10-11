@@ -132,12 +132,16 @@ public sealed class SearchDecider : ChoiceDecider
             if (c.Controller != Game.Me) continue;
             if (RolloutPolicy.ProducesMana(c) || c.Types.Is(CardType.Land))
                 manaSources += IsOneShotMana(c) ? 0.35 : 1;   // Lotus Petal-style sources are spent once
-            else if (c.Types.Is(CardType.Creature)) power += Math.Max(0, c.Power);
-            else otherPermanents++;
+            else
+            {
+                // A card working on the battlefield is worth more than the same card in hand.
+                otherPermanents++;
+                if (c.Types.Is(CardType.Creature)) power += Math.Max(0, c.Power);
+            }
         }
         var hand = me.Hand.Sum(id => s[id].Def.IsBlank ? 0.3 : 1.0);
         var deckRisk = me.Library.Count < 5 ? (5 - me.Library.Count) * 20 : 0;
-        return 4 * oppDamage + 12 * manaSources + 6 * hand + 3 * power + 4 * otherPermanents + 0.5 * Math.Min(me.Life, 40) - deckRisk;
+        return 4 * oppDamage + 12 * manaSources + 5 * hand + 3 * power + 7 * otherPermanents + 0.5 * Math.Min(me.Life, 40) - deckRisk;
     }
 
     private static bool IsOneShotMana(Card c) =>

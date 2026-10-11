@@ -25,6 +25,9 @@ public abstract class Effect
     private static readonly ConcurrentDictionary<(FaceDef, string), Amount> AmountCache = new();
     private static readonly ConcurrentDictionary<(FaceDef, string), Filter> FilterCache = new();
 
+    /// <summary>Evaluates an amount expression of the context's source card.</summary>
+    public static int EvalAmount(EffectContext x, string text) => Amount(x, text, 0);
+
     protected static int Amount(EffectContext x, string? text, int fallback)
     {
         if (text is null) return fallback;
@@ -49,7 +52,10 @@ public static class Effects
         new GainLifeEffect(), new WinsGameEffect(), new LosesGameEffect(), new DigEffect(), new NameCardEffect(),
         new DigUntilEffect(), new MillEffect(), new DiscardEffect(), new PumpEffect(), new UntapEffect(), new TapEffect(),
         new PutCounterEffect(), new DestroyEffect(), new SacrificeEffect(), new ScryEffect(), new CleanupEffect(),
-        new ShuffleEffect(), new RevealHandEffect(),
+        new ShuffleEffect(), new RevealHandEffect(), new CharmEffect(), new TokenEffect(), new AttachEffect(),
+        new ChangeZoneAllEffect(), new DestroyAllEffect(), new DamageAllEffect(), new PumpAllEffect(), new PutCounterAllEffect(),
+        new CounterEffect(), new SurveilEffect(), new RearrangeTopOfLibraryEffect(), new RegenerateEffect(),
+        new ManaReflectedEffect(), new FlipCoinEffect(), new RepeatEffect(), new StoreSVarEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -57,6 +63,33 @@ public static class Effects
 }
 
 // ---- mana ------------------------------------------------------------------------------
+
+/// <summary>
+/// "Add one mana of any color [type] that [cards] could produce / are": Reflecting Pool, Fellwar Stone,
+/// Exotic Orchard, Chrome Mox. Goldfish opponents have no lands, so a land an opponent controls is
+/// assumed able to produce every color, as in a typical multiplayer game.
+/// </summary>
+sealed class ManaReflectedEffect : Effect
+{
+    public override string Api => "ManaReflected";
+    public override IReadOnlySet<string> Params { get; } = P("ColorOrType", "Valid", "ReflectProperty");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["ReflectProperty"] is not ("Is" or "Produce" or "Produced")) ctx.Need("ManaReflected.ReflectProperty:" + ab["ReflectProperty"]);
+        if (ab["Valid"] is { } v && v != "Defined.Imprinted") Filter.Parse(v, ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var mask = Game.ReflectedMask(x.Game, x.Host, x.Ability);
+        if (mask == 0) return;
+        var color = System.Numerics.BitOperations.PopCount((uint)mask) == 1
+            ? ManaColors.All.First(c => c.Mask() == mask)
+            : x.Game.Decider.ChooseColor(x.Game, x.Controller, x.Host, mask);
+        x.S.Players[x.Controller].Pool.Add(color);
+    }
+}
 
 sealed class ManaEffect : Effect
 {
@@ -68,16 +101,21 @@ sealed class ManaEffect : Effect
         ValidateAmount(ab, "Amount", ctx);
         var produced = ab["Produced"];
         if (produced is "Combo ColorIdentity") return;
-        if (Game.ProducedMask(produced) is null) ctx.Need("ManaProduced:" + produced);
+        if (Game.ProducedMask(produced) is null && FixedMana(produced) is null) ctx.Need("ManaProduced:" + produced);
     }
 
     public override void Resolve(EffectContext x)
     {
         var amount = Amount(x, x.Ability["Amount"], 1);
         var produced = x.Ability["Produced"]!;
+        var p = x.S.Players[x.Controller];
+        if (FixedMana(produced) is { } several)   // "U B": one of each
+        {
+            foreach (var c in several) p.Pool.Add(c, amount);
+            return;
+        }
         var mask = produced == "Combo ColorIdentity" ? x.Game.CommanderIdentity(x.Controller) : Game.ProducedMask(produced)!.Value;
         if (mask == 0) return;
-        var p = x.S.Players[x.Controller];
         var combo = produced.StartsWith("Combo", StringComparison.Ordinal);
         if (!combo)
         {
@@ -88,6 +126,20 @@ sealed class ManaEffect : Effect
         else
             for (var i = 0; i < amount; i++)
                 p.Pool.Add(Single(mask) ?? x.Game.Decider.ChooseColor(x.Game, x.Controller, x.Host, mask));
+    }
+
+    /// <summary>"U B" or "C C": a fixed list of symbols. Null for anything else.</summary>
+    public static List<ManaColor>? FixedMana(string? produced)
+    {
+        var words = produced?.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words is null || words.Length < 2) return null;
+        var list = new List<ManaColor>();
+        foreach (var w in words)
+        {
+            if (w.Length != 1 || ManaColors.FromLetter(w[0]) is not { } c) return null;
+            list.Add(c);
+        }
+        return list;
     }
 
     private static ManaColor? Single(ColorMask m) =>
@@ -119,7 +171,8 @@ sealed class ChangeZoneEffect : Effect
     public override string Api => "ChangeZone";
     public override IReadOnlySet<string> Params { get; } = P(
         "Origin", "Destination", "ChangeType", "ChangeNum", "Hidden", "Mandatory", "Tapped", "LibraryPosition", "Defined",
-        "ChangeTypeDesc", "Shuffle", "Reveal", "SelectPrompt", "Reorder", "Optional", "NoReveal");
+        "ChangeTypeDesc", "Shuffle", "Reveal", "SelectPrompt", "Reorder", "Optional", "NoReveal", "ShuffleNonMandatory",
+        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint");
 
     private static readonly HashSet<string> Zones = new() { "Library", "Hand", "Battlefield", "Graveyard", "Exile" };
 
@@ -131,6 +184,14 @@ sealed class ChangeZoneEffect : Effect
         if (ab["ChangeType"] is { } ct) Filter.Parse(ct, ctx);
         if (ab["ChangeNum"] is { } cn && cn != "All") Engine.Amount.Parse(cn, ctx);
         Defined.ValidateCards(ab["Defined"], ctx);
+        Defined.ValidatePlayers(ab["DefinedPlayer"], ctx);
+    }
+
+    /// <summary>RememberChanged$ / Imprint$: note the moved card on the source.</summary>
+    public static void Note(EffectContext x, int id)
+    {
+        if (x.Ability["RememberChanged"] == "True") (x.Host.Remembered ??= new()).Add(id);
+        if (x.Ability["Imprint"] == "True") (x.Host.Imprinted ??= new()).Add(id);
     }
 
     public override void Resolve(EffectContext x)
@@ -151,23 +212,36 @@ sealed class ChangeZoneEffect : Effect
                 if (!origins.Contains(c.Zone)) continue;
                 if (ab["Optional"] == "True" && !x.Game.Decider.ChooseYesNo(x.Game, x.Controller, x.Host, $"move {c.Name}?")) continue;
                 x.Game.MoveTo(c, dest, position, tapped);
+                Note(x, id);
             }
             return;
         }
 
-        // Hidden or chosen-from-zone: search/choose from the controller's cards in the origin zone.
+        // Hidden or chosen-from-zone: the searching player chooses from their own cards in the origin zones.
+        var searchers = ab["DefinedPlayer"] is { } dp ? Defined.Players(dp, x) : new List<int> { x.Controller };
+        foreach (var searcher in searchers)
+            if (!x.S.Players[searcher].IsGoldfish) Search(x, searcher, origins, dest, position, tapped);
+    }
+
+    private void Search(EffectContext x, int searcher, List<Zone> origins, Zone dest, int position, bool tapped)
+    {
+        var ab = x.Ability;
         var filter = ab["ChangeType"] is { } ct ? FilterFor(x.Host.CurrentFace, ct) : null;
-        var candidates = origins.SelectMany(z => x.S.ZoneList(x.Controller, z))
+        var candidates = origins.SelectMany(z => x.S.ZoneList(searcher, z))
             .Where(id => filter is null || filter.MatchesCard(x.S[id], x)).ToList();
         var num = ab["ChangeNum"] is "All" ? candidates.Count : Amount(x, ab["ChangeNum"], 1);
-        var mandatory = ab["Mandatory"] == "True" || origins.Contains(Zone.Hand) && ab["Hidden"] is null;
+        var mandatory = ab["Optional"] != "True" && (ab["Mandatory"] == "True" || origins.Contains(Zone.Hand) && ab["Hidden"] is null);
         var max = Math.Min(num, candidates.Count);
         var min = mandatory ? max : 0;
         var kind = origins.Contains(Zone.Library) ? Choice.Tutor : Choice.Generic;
-        var chosen = max == 0 ? new List<int>() : x.Game.Decider.ChooseCards(x.Game, x.Controller, kind, x.Host, candidates, min, max);
+        var chosen = max == 0 ? new List<int>() : x.Game.Decider.ChooseCards(x.Game, searcher, kind, x.Host, candidates, min, max);
         if (kind == Choice.Tutor) x.Game.Note($"  search: {(chosen.Count == 0 ? "nothing" : string.Join(", ", chosen.Select(id => x.S[id].Name)))}");
-        foreach (var id in chosen) x.Game.MoveTo(x.S[id], dest, position, tapped);
-        if (origins.Contains(Zone.Library) && ab["Shuffle"] != "False") x.Game.Shuffle(x.Controller);
+        foreach (var id in chosen)
+        {
+            x.Game.MoveTo(x.S[id], dest, position, tapped);
+            Note(x, id);
+        }
+        if (origins.Contains(Zone.Library) && ab["Shuffle"] != "False" && ab["NoShuffle"] != "True") x.Game.Shuffle(searcher);
     }
 }
 
@@ -176,7 +250,8 @@ sealed class DigEffect : Effect
     public override string Api => "Dig";
     public override IReadOnlySet<string> Params { get; } = P(
         "DigNum", "ChangeNum", "DestinationZone", "DestinationZone2", "LibraryPosition", "LibraryPosition2", "RestRandomOrder",
-        "ChangeValid", "Optional", "AnyNumber", "Reveal", "Defined", "NoMove", "SkipReorder", "ForceRevealToController");
+        "ChangeValid", "Optional", "AnyNumber", "Reveal", "Defined", "NoMove", "SkipReorder", "ForceRevealToController",
+        "RememberChanged", "Imprint");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -206,7 +281,11 @@ sealed class DigEffect : Effect
 
         var dest = Enum.Parse<Zone>(ab["DestinationZone"] ?? "Hand");
         var pos = ab["LibraryPosition"] is { } lp ? int.Parse(lp) : -1;
-        foreach (var id in chosen) x.Game.MoveTo(x.S[id], dest, pos);
+        foreach (var id in chosen)
+        {
+            x.Game.MoveTo(x.S[id], dest, pos);
+            ChangeZoneEffect.Note(x, id);
+        }
 
         var rest = looked.Except(chosen).ToList();
         if (ab["RestRandomOrder"] == "True") x.S.Rng.Shuffle(rest);
@@ -318,13 +397,12 @@ sealed class ScryEffect : Effect
     public override void Resolve(EffectContext x)
     {
         var n = Amount(x, x.Ability["ScryNum"], 1);
-        var lib = x.S.Players[x.Controller].Library;
-        var top = lib.Take(n).ToList();
+        var p = x.S.Players[x.Controller];
+        var top = p.Library.Take(n).ToList();
         if (top.Count == 0) return;
+        p.KnownTop = Math.Max(p.KnownTop, top.Count);   // looked at; cards put on the bottom stop counting
         var bottom = x.Game.Decider.ChooseCards(x.Game, x.Controller, Choice.PutOnBottom, x.Host, top, 0, top.Count);
         foreach (var id in bottom) x.Game.MoveTo(x.S[id], Zone.Library, -1);
-        var p = x.S.Players[x.Controller];
-        p.KnownTop = Math.Max(p.KnownTop, top.Count - bottom.Count);
         x.Game.Note($"  scry {n}: bottom {bottom.Count}");
     }
 }
@@ -341,11 +419,12 @@ sealed class RevealHandEffect : Effect
 sealed class CleanupEffect : Effect
 {
     public override string Api => "Cleanup";
-    public override IReadOnlySet<string> Params { get; } = P("ClearRemembered", "ClearNamedCard");
+    public override IReadOnlySet<string> Params { get; } = P("ClearRemembered", "ClearNamedCard", "ClearImprinted");
 
     public override void Resolve(EffectContext x)
     {
         if (x.Ability["ClearRemembered"] == "True") x.Host.Remembered = null;
+        if (x.Ability["ClearImprinted"] == "True") x.Host.Imprinted = null;
         if (x.Ability["ClearNamedCard"] == "True") x.Host.NamedCard = null;
     }
 }
@@ -380,7 +459,7 @@ sealed class DealDamageEffect : Effect
         foreach (var t in targets)
         {
             if (t.Player is { } p) x.Game.DamagePlayer(p, n, x.Host);
-            else if (t.CardId is { } id && x.S[id].Zone == Zone.Battlefield) x.S[id].Damage += n;
+            else if (t.CardId is { } id && x.S[id].Zone == Zone.Battlefield) x.Game.DamageCard(x.S[id], n, x.Host);
         }
     }
 }
@@ -460,32 +539,41 @@ abstract class CardsEffect : Effect
 sealed class PumpEffect : CardsEffect
 {
     public override string Api => "Pump";
-    public override IReadOnlySet<string> Params { get; } = P("NumAtt", "NumDef", "KW", "Defined");
+    public override IReadOnlySet<string> Params { get; } = P("NumAtt", "NumDef", "KW", "Defined", "RememberObjects");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         base.Validate(ab, ctx);
         ValidateAmount(ab, "NumAtt", ctx);
         ValidateAmount(ab, "NumDef", ctx);
-        if (ab["KW"] is { } kw)
-            foreach (var k in kw.Split('&', StringSplitOptions.TrimEntries))
-                if (!Keywords.Supported.Contains(Forge.ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + k);
+        ValidateKeywords(ab["KW"], ctx);
+        Defined.ValidateCards(ab["RememberObjects"], ctx);
+    }
+
+    public static void ValidateKeywords(string? kw, CompileContext ctx)
+    {
+        if (kw is null) return;
+        foreach (var k in kw.Split('&', StringSplitOptions.TrimEntries))
+            if (!Keywords.Supported.Contains(Forge.ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + Forge.ForgeRequirements.KeywordName(k));
+    }
+
+    public static void Apply(Card c, int att, int def, string? kw)
+    {
+        c.PowerBonus += att;
+        c.ToughnessBonus += def;
+        if (kw is null) return;
+        c.TempKeywords ??= new HashSet<string>(StringComparer.Ordinal);
+        foreach (var k in kw.Split('&', StringSplitOptions.TrimEntries)) c.TempKeywords.Add(Forge.ForgeRequirements.KeywordName(k));
     }
 
     public override void Resolve(EffectContext x)
     {
         var att = Amount(x, x.Ability["NumAtt"], 0);
         var def = Amount(x, x.Ability["NumDef"], 0);
-        foreach (var c in Cards(x))
-        {
-            c.PowerBonus += att;
-            c.ToughnessBonus += def;
-            if (x.Ability["KW"] is { } kw)
-            {
-                c.TempKeywords ??= new HashSet<string>(StringComparer.Ordinal);
-                foreach (var k in kw.Split('&', StringSplitOptions.TrimEntries)) c.TempKeywords.Add(Forge.ForgeRequirements.KeywordName(k));
-            }
-        }
+        // "Pump" with only RememberObjects$ is Forge's way to remember cards on the source.
+        if (x.Ability["RememberObjects"] is { } ro) (x.Host.Remembered ??= new()).AddRange(Defined.Cards(ro, x));
+        if (x.Ability["Defined"] is null && x.Ability.TargetFilter is null && x.Ability["RememberObjects"] is not null) return;
+        foreach (var c in Cards(x)) Apply(c, att, def, x.Ability["KW"]);
     }
 }
 
@@ -519,22 +607,17 @@ sealed class PutCounterEffect : CardsEffect
     {
         var n = Amount(x, x.Ability["CounterNum"], 1);
         var kind = x.Ability["CounterType"]!;
-        foreach (var c in Cards(x))
-        {
-            c.Counters ??= new();
-            c.Counters[kind] = c.CounterCount(kind) + n;
-        }
+        foreach (var c in Cards(x)) Game.AddCounters(c, kind, n);
     }
 }
 
 sealed class DestroyEffect : CardsEffect
 {
     public override string Api => "Destroy";
-    public override IReadOnlySet<string> Params { get; } = P("Defined");
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "NoRegen");
     public override void Resolve(EffectContext x)
     {
-        foreach (var c in Cards(x))
-            if (!c.HasKeyword("Indestructible")) x.Game.MoveTo(c, Zone.Graveyard);
+        foreach (var c in Cards(x)) x.Game.Destroy(c, regenerate: x.Ability["NoRegen"] != "True");
     }
 }
 

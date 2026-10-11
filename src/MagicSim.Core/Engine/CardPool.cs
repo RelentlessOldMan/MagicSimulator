@@ -14,6 +14,7 @@ public sealed class CardPool
     private readonly CardIndex? _index;
     private readonly ConcurrentDictionary<string, CardDef> _compiled = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CardDef> _blank = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CardDef?> _tokens = new(StringComparer.Ordinal);
 
     public CardPool(ForgeLibrary forge, CardIndex? index)
     {
@@ -32,11 +33,15 @@ public sealed class CardPool
         if (src is null) return null;
         return _compiled.GetOrAdd(src.FullName, _ =>
         {
-            var def = CardCompiler.Compile(src);
+            var def = CardCompiler.Compile(src, Token);
             def.ColorIdentity = Identity(src.FullName);
             return def;
         });
     }
+
+    /// <summary>A token script (TokenScript$ name) compiled, or null if Forge has no such script.</summary>
+    public CardDef? Token(string script) =>
+        _tokens.GetOrAdd(script, s => _forge.FindToken(s) is { } t ? CardCompiler.Compile(t, Token) : null);
 
     /// <summary>What a game uses: the compiled card if supported, else a blank stand-in.</summary>
     public CardDef? Resolve(string name)

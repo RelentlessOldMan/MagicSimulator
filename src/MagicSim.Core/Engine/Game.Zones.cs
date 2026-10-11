@@ -39,6 +39,8 @@ public sealed partial class Game
 
         if (from == Zone.Battlefield)
         {
+            c.LeftPower = c.Power;
+            c.LeftToughness = c.Toughness;
             c.Tapped = false;
             c.Damage = 0;
             c.PowerBonus = 0;
@@ -48,6 +50,9 @@ public sealed partial class Game
             c.AttachedTo = -1;
             c.Face = 0;
             c.Controller = c.Owner;
+            c.RegenShields = 0;
+            c.ClearStaticEffects();
+            State.Attackers.Remove(c.Id);
         }
         if (c.IsToken && to != Zone.Battlefield)
         {
@@ -60,9 +65,11 @@ public sealed partial class Game
         switch (to)
         {
             case Zone.Battlefield:
-                State.Battlefield.Add(c.Id);
                 c.Tapped = tapped;
                 c.ControlledSinceTurn = State.Turn;
+                // Replacement effects apply as it enters: it's on the battlefield but not yet counted there.
+                ApplyEntering(c);
+                State.Battlefield.Add(c.Id);
                 break;
             case Zone.Library:
                 var lib = State.Players[c.Owner].Library;
@@ -82,7 +89,29 @@ public sealed partial class Game
                 break;
         }
         if (to == Zone.Hand && c.Owner == Me) State.Record.Seen.Add(c.Name);
-        if (from != Zone.None) Fire(new TriggerEvent(TriggerMode.ChangesZone, CardId: c.Id, From: from, To: to));
+        if (from != Zone.None || c.IsToken) Fire(new TriggerEvent(TriggerMode.ChangesZone, CardId: c.Id, From: from, To: to));
+    }
+
+    /// <summary>"Enters with counters" and "as this enters" replacements (enters tapped, shocklands).</summary>
+    private void ApplyEntering(Card c)
+    {
+        var face = c.CurrentFace;
+        if (face.EtbCounters.Count == 0 && face.EtbReplacements.Count == 0) return;
+        foreach (var (kind, amount) in face.EtbCounters)
+        {
+            var x = new EffectContext { Game = this, Ability = PermanentSpell, Item = new StackItem { SourceId = c.Id, Ability = PermanentSpell, Controller = c.Controller, X = c.XPaid } };
+            AddCounters(c, kind, Effect.EvalAmount(x, amount));
+        }
+        foreach (var r in face.EtbReplacements)
+            RunChain(new StackItem { SourceId = c.Id, Ability = r, Controller = c.Controller, X = c.XPaid, Description = c.Name + " enters" });
+    }
+
+    /// <summary>Taps a permanent, firing "whenever this becomes tapped" triggers.</summary>
+    public void Tap(Card c)
+    {
+        if (c.Tapped) return;
+        c.Tapped = true;
+        Fire(new TriggerEvent(TriggerMode.Taps, CardId: c.Id, Player: c.Controller));
     }
 
     public void Draw(int player, int n, bool record = true)
@@ -95,6 +124,7 @@ public sealed partial class Game
             var c = State[p.Library[0]];
             MoveTo(c, Zone.Hand);
             if (record) Note($"draw {c.Name}");
+            if (record) Fire(new TriggerEvent(TriggerMode.Drawn, CardId: c.Id, Player: player));
         }
     }
 
@@ -102,6 +132,7 @@ public sealed partial class Game
     {
         Note($"discard {c.Name}");
         MoveTo(c, Zone.Graveyard);
+        Fire(new TriggerEvent(TriggerMode.Discarded, CardId: c.Id, Player: c.Owner));
     }
 
     public void Mill(int player, int n)
@@ -133,14 +164,25 @@ public sealed partial class Game
         State.Rng = new Rng(rng.NextULong());   // later shuffles and random picks are unknown too
     }
 
-    public void DamagePlayer(int player, int amount, Card? source)
+    public void DamagePlayer(int player, int amount, Card? source, bool combat = false)
     {
         if (amount <= 0) return;
         State.Players[player].Life -= amount;
         Note($"{source?.Name ?? "damage"} deals {amount} to player {player} (life {State.Players[player].Life})");
-        if (source is not null && player != Me) RememberWinCard(source);
-        if (source is not null && source.Controller is var ctl && source.HasKeyword("Lifelink"))
-            GainLife(ctl, amount);
+        if (source is null) return;
+        if (player != Me) RememberWinCard(source);
+        if (source.HasKeyword("Lifelink")) GainLife(source.Controller, amount);
+        Fire(new TriggerEvent(TriggerMode.DamageDone, CardId: source.Id, Player: player, Amount: amount, Combat: combat));
+    }
+
+    public void DamageCard(Card target, int amount, Card? source, bool combat = false)
+    {
+        if (amount <= 0 || target.Zone != Zone.Battlefield) return;
+        target.Damage += amount;
+        if (source is null) return;
+        if (source.HasKeyword("Lifelink")) GainLife(source.Controller, amount);
+        if (source.HasKeyword("Deathtouch") && target.Types.Is(CardType.Creature)) target.Damage = Math.Max(target.Damage, target.Toughness);
+        Fire(new TriggerEvent(TriggerMode.DamageDone, CardId: source.Id, TargetCardId: target.Id, Amount: amount, Combat: combat));
     }
 
     public void LoseLife(int player, int amount, Card? source)
@@ -155,6 +197,7 @@ public sealed partial class Game
     {
         if (amount <= 0) return;
         State.Players[player].Life += amount;
+        Fire(new TriggerEvent(TriggerMode.LifeGained, Player: player, Amount: amount));
     }
 
     public void PayLife(int player, int amount)
@@ -174,12 +217,12 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
-    int? Player = null, string? Phase = null);
+    int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false);
 
-public readonly record struct PendingTrigger(int SourceId, TriggerDef Trigger, int? TriggeredCardId, int Controller);
+public readonly record struct PendingTrigger(int SourceId, TriggerDef Trigger, TriggerEvent Event, int Controller);
 
 public sealed partial class Game
 {
@@ -197,7 +240,7 @@ public sealed partial class Game
             foreach (var t in src.CurrentFace.Triggers)
             {
                 if (src.Def.IsBlank || !Triggers.Matches(this, t, src, e)) continue;
-                _pending.Add(new PendingTrigger(id, t, e.CardId, src.Controller));
+                _pending.Add(new PendingTrigger(id, t, e, src.Controller));
             }
         }
     }
@@ -212,12 +255,17 @@ public sealed partial class Game
             var src = State[pt.SourceId];
             if (pt.Trigger["OptionalDecider"] is not null && !Decider.ChooseYesNo(this, pt.Controller, src, $"use {src.Name}'s trigger?"))
                 continue;
+            if (pt.Trigger.Modes is { Count: > 1 } modes)
+                exec = modes[Decider.ChooseOption(this, pt.Controller, src, modes.Select(m => m.Description).ToList())];
             var item = new StackItem
             {
                 Id = State.NextStackId++, SourceId = pt.SourceId, Ability = exec, Controller = pt.Controller,
-                TriggeredCardId = pt.TriggeredCardId, ChainTargets = ChooseChainTargets(src, exec, pt.Controller),
+                TriggeredCardId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.TargetCardId : pt.Event.CardId,
+                TriggeredPlayer = pt.Event.Player, ChainTargets = ChooseChainTargets(src, exec, pt.Controller),
                 Description = $"{src.Name} trigger",
             };
+            // "Static" triggers (bookkeeping such as forgetting an imprinted card) happen at once, without the stack.
+            if (pt.Trigger["Static"] == "True") { RunChain(item); continue; }
             State.Stack.Add(item);
             Note($"trigger: {src.Name}" + TargetText(item));
         }
@@ -243,8 +291,8 @@ public sealed partial class Game
     {
         if (!ab.IsManaAbility || !ab.Cost.Mana.IsZero || ab.Cost.Untap) return false;
         if (!ab.P.Values.Keys.All(k => k is "AB" or "Cost" or "Produced" or "Amount" or "SpellDescription" or "AILogic"
-                or "AIPreference" or "SubAbility" or "ActivationZone")) return false;
-        if (ProducedMask(ab["Produced"]) is null && ab["Produced"] != "Combo ColorIdentity") return false;
+                or "AIPreference" or "SubAbility" or "ActivationZone" or "ColorOrType" or "Valid" or "ReflectProperty")) return false;
+        if (ab.Api == "Mana" && ProducedMask(ab["Produced"]) is null && ab["Produced"] != "Combo ColorIdentity") return false;
         if (ab["Amount"] is not null && !int.TryParse(ab["Amount"], out _)) return false;
         foreach (var part in ab.Cost.Parts)
             if (!(part.Kind == CostPartKind.PayLife && int.TryParse(part.Amount, out _)
@@ -277,6 +325,35 @@ public sealed partial class Game
         return m;
     }
 
+    /// <summary>The colors a ManaReflected ability can make right now (see ManaReflectedEffect).</summary>
+    public static ColorMask ReflectedMask(Game g, Card source, AbilityDef ab)
+    {
+        var valid = ab["Valid"] ?? "Land.YouCtrl";
+        var x = g.ContextFor(source);
+        IEnumerable<Card> cards;
+        if (valid == "Defined.Imprinted") cards = (source.Imprinted ?? new List<int>()).Select(id => g.State[id]);
+        else
+        {
+            var filter = Effect.FilterFor(source.CurrentFace, valid);
+            if (valid.Contains("OppCtrl", StringComparison.Ordinal) && g.State.Players.Where(p => p.Index != source.Controller).All(p => p.IsGoldfish))
+                return ab["ColorOrType"] == "Type" ? ColorMask.AllColors | ManaColor.C.Mask() : ColorMask.AllColors;
+            cards = g.State.BattlefieldCards.Where(c => c.Id != source.Id && filter.MatchesCard(c, x));
+        }
+        ColorMask mask = 0;
+        foreach (var c in cards)
+        {
+            if (ab["ReflectProperty"] == "Is") { mask |= c.CurrentFace.Colors; continue; }
+            foreach (var other in c.CurrentFace.Activated)
+            {
+                if (other.Api != "Mana") continue;   // reflecting other reflectors could loop
+                mask |= other["Produced"] == "Combo ColorIdentity" ? g.CommanderIdentity(c.Controller)
+                    : ProducedMask(other["Produced"]) ?? ManaEffect.FixedMana(other["Produced"])?.Aggregate((ColorMask)0, (m, col) => m | col.Mask()) ?? 0;
+            }
+        }
+        if (ab["ColorOrType"] != "Type") mask &= ColorMask.AllColors;
+        return mask;
+    }
+
     public List<ManaSource> AutoSources(int player, int excludeId)
     {
         var list = new List<ManaSource>();
@@ -292,10 +369,13 @@ public sealed partial class Game
                 var fromHand = ab["ActivationZone"] == "Hand";
                 if (fromHand != (c.Zone == Zone.Hand)) continue;
                 if (ab.Cost.Tap && (c.Tapped || IsSick(c))) continue;
-                var mask = ab["Produced"] == "Combo ColorIdentity" ? CommanderIdentity(player) : ProducedMask(ab["Produced"])!.Value;
+                var mask = ab.Api == "ManaReflected" ? ReflectedMask(this, c, ab)
+                    : ab["Produced"] == "Combo ColorIdentity" ? CommanderIdentity(player) : ProducedMask(ab["Produced"])!.Value;
                 if (mask == 0) continue;
                 var life = ab.Cost.Parts.Where(q => q.Kind == CostPartKind.PayLife).Sum(q => int.Parse(q.Amount));
                 for (var sub = ab.Sub; sub is not null; sub = sub.Sub) life += SelfLife(sub)!.Value;
+                // "Whenever this becomes tapped, it deals 1 damage to you" (City of Brass) costs like a painland.
+                if (c.CurrentFace.Triggers.Any(t => t.Mode == "Taps")) life += 1;
                 var penalty = life * 2
                     + (ab.Cost.Parts.Any(q => q.Kind == CostPartKind.Sacrifice) ? 20 : 0)
                     + (ab.Cost.Parts.Any(q => q.Kind == CostPartKind.ExileSelf) ? 30 : 0);
@@ -360,7 +440,7 @@ public sealed partial class Game
     {
         var card = State[src.CardId];
         var ab = src.Ability;
-        if (ab.Cost.Tap) card.Tapped = true;
+        if (ab.Cost.Tap) Tap(card);
         foreach (var part in ab.Cost.Parts)
             switch (part.Kind)
             {
@@ -399,6 +479,8 @@ public sealed partial class Game
                     break;
                 case CostPartKind.ExileFromGraveyard:
                 case CostPartKind.TapUntapped:
+                case CostPartKind.ExileFromHand:
+                case CostPartKind.ReturnToHand:
                     if (CostCandidates(part, source, player).Count < AmountOf(part)) return false;
                     break;
                 case CostPartKind.ExileSelf:
@@ -426,6 +508,8 @@ public sealed partial class Game
             CostPartKind.TapUntapped => State.BattlefieldCards.Where(c => c.Controller == player && !c.Tapped && c.Id != source.Id),
             CostPartKind.Discard => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
             CostPartKind.ExileFromGraveyard => State.Players[player].Graveyard.Select(id => State[id]).Where(c => c.Id != source.Id),
+            CostPartKind.ExileFromHand => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
+            CostPartKind.ReturnToHand => State.BattlefieldCards.Where(c => c.Controller == player),
             _ => Enumerable.Empty<Card>(),
         };
         return pool.Where(c => filter is null || filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
@@ -449,7 +533,7 @@ public sealed partial class Game
         if (!ManaPayment.TryPay(ref p.Pool, cost.Mana, x, out var phyrexianLife)) return false;
         if (phyrexianLife > 0) PayLife(player, phyrexianLife);
 
-        if (cost.Tap) source.Tapped = true;
+        if (cost.Tap) Tap(source);
         foreach (var part in cost.Parts)
         {
             var n = AmountOf(part);
@@ -488,10 +572,18 @@ public sealed partial class Game
                     break;
                 case CostPartKind.TapUntapped:
                     foreach (var id in Decider.ChooseCards(this, player, Choice.TapForCost, source, CostCandidates(part, source, player), n, n))
-                        State[id].Tapped = true;
+                        Tap(State[id]);
                     break;
                 case CostPartKind.ExileSelf:
                     MoveTo(source, Zone.Exile);
+                    break;
+                case CostPartKind.ExileFromHand:
+                    foreach (var id in Decider.ChooseCards(this, player, Choice.ExileFromGraveyard, source, CostCandidates(part, source, player), n, n))
+                        MoveTo(State[id], Zone.Exile);
+                    break;
+                case CostPartKind.ReturnToHand:
+                    foreach (var id in Decider.ChooseCards(this, player, Choice.Sacrifice, source, CostCandidates(part, source, player), n, n))
+                        MoveTo(State[id], Zone.Hand);
                     break;
                 case CostPartKind.RemoveCounter:
                     source.Counters![part.Valid] -= n;

@@ -106,6 +106,7 @@ public static class ScryfallSync
             Loyalty = StrOrNull(c, "loyalty"),
             CommanderLegality = c.TryGetProperty("legalities", out var leg) ? Str(leg, "commander") : "not_legal",
             Faces = faces,
+            EdhrecRank = c.TryGetProperty("edhrec_rank", out var rank) && rank.ValueKind == JsonValueKind.Number ? rank.GetInt32() : null,
         };
     }
 

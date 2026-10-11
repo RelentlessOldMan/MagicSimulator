@@ -25,6 +25,9 @@ public sealed class EffectContext
         }
     }
 
+    /// <summary>"Targeted" in Forge: this ability's targets, or in a sub-ability without its own, the nearest parent's.</summary>
+    public List<TargetRef> OwnOrParentTargets => Targets.Count > 0 ? Targets : ParentTargets;
+
     public EffectContext For(AbilityDef sub) => new() { Game = Game, Item = Item, Ability = sub };
 }
 
@@ -99,10 +102,15 @@ public sealed class Filter
             "Other" or "StrictlyOther" => (c, pl, x) => c is null || c.Id != x.Item.SourceId,
             "token" => (c, pl, x) => c is not null && c.IsToken,
             "tapped" => (c, pl, x) => c is not null && c.Tapped,
+            "attacking" => (c, pl, x) => c is not null && x.S.Attackers.Contains(c.Id),
             "untapped" => (c, pl, x) => c is not null && !c.Tapped,
             "IsCommander" => (c, pl, x) => c is not null && c.IsCommander,
             "NamedCard" => (c, pl, x) => c is not null && x.Host.NamedCard is { } n && string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase),
             "IsRemembered" => (c, pl, x) => c is not null && (x.Host.Remembered?.Contains(c.Id) ?? false),
+            "IsImprinted" => (c, pl, x) => c is not null && (x.Host.Imprinted?.Contains(c.Id) ?? false),
+            "sharesNameWith Remembered" => (c, pl, x) => c is not null && x.Host.Remembered is { } rem
+                && rem.Any(id => id != c.Id && x.S[id].Name == c.Name),
+            "EquippedBy" or "EnchantedBy" or "AttachedBy" => (c, pl, x) => c is not null && x.Host.AttachedTo == c.Id,
             "TopLibrary" => (c, pl, x) => c is not null && c.Zone == Zone.Library && x.S.Players[c.Owner].Library.FirstOrDefault(-1) == c.Id,
             "Basic" => (c, pl, x) => c is not null && c.Types.Has(SuperType.Basic),
             "Legendary" => (c, pl, x) => c is not null && c.Types.Has(SuperType.Legendary),
@@ -224,7 +232,8 @@ public sealed class Amount
     private static Amount Parse(string text, CompileContext ctx, int depth)
     {
         text = text.Trim();
-        if (int.TryParse(text.StartsWith('+') ? text[1..] : text, out var n)) return new(text, _ => n);
+        if (text.StartsWith('+')) text = text[1..];   // "+X" in pump amounts
+        if (int.TryParse(text, out var n)) return new(text, _ => n);
         var negate = text.StartsWith('-');
         var name = negate ? text[1..] : text;
         if (depth > 4) { ctx.Need("Amount:Recursive"); return Const(0); }
@@ -232,7 +241,12 @@ public sealed class Amount
         if (ctx.Face.SVars.TryGetValue(name, out var body))
         {
             var inner = ParseExpression(body, ctx, depth);
-            return negate ? new(text, x => -inner.Eval(x)) : inner;
+            // StoreSVar$ can overwrite an SVar's value on the card at run time.
+            return new(text, x =>
+            {
+                var v = x.Host.StoredVars is { } stored && stored.TryGetValue(name, out var sv) ? sv : inner.Eval(x);
+                return negate ? -v : v;
+            });
         }
         if (name == "X") return new(text, x => negate ? -x.X : x.X);   // bare X with no SVar: the paid X
         return ParseExpression(text, ctx, depth);
@@ -274,6 +288,7 @@ public sealed class Amount
     {
         if (core.StartsWith("Number$", StringComparison.Ordinal) && int.TryParse(core[7..], out var num)) return Const(num);
         if (core.StartsWith("SVar$", StringComparison.Ordinal)) return Parse(core[5..], ctx, depth + 1);
+        if (DefinedCardsRx.Match(core) is { Success: true } dm) return DefinedCardsAmount(core, dm, ctx);
         if (!core.StartsWith("Count$", StringComparison.Ordinal))
         {
             ctx.Need("Amount:" + core);
@@ -284,6 +299,18 @@ public sealed class Amount
         var kind = space < 0 ? c : c[..space];
         var arg = space < 0 ? "" : c[(space + 1)..];
 
+        if (kind.StartsWith("Threshold.", StringComparison.Ordinal) && kind.Split('.') is [_, var a, var b]
+            && int.TryParse(a, out var ifYes) && int.TryParse(b, out var ifNo))
+            return new(core, x => x.S.Players[x.Controller].Graveyard.Count >= 7 ? ifYes : ifNo);
+        if (kind == "Compare" && arg.Split(' ') is [var left, var rest] && rest.Length > 2 && rest[2..].Split('.') is [var rhs, var yes, var no])
+        {
+            var l = Parse(left, ctx, depth + 1);
+            var r = Parse(rhs, ctx, depth + 1);
+            var y = Parse(yes, ctx, depth + 1);
+            var nAmt = Parse(no, ctx, depth + 1);
+            var op = rest[..2];
+            return new(core, x => Filter.Compare(l.Eval(x), op, r.Eval(x)) ? y.Eval(x) : nAmt.Eval(x));
+        }
         switch (kind)
         {
             case "xPaid": return new(core, x => x.X);
@@ -322,6 +349,36 @@ public sealed class Amount
         return Const(0);
     }
 
+    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|Remembered|Imprinted)\$(CardPower|CardToughness|CardManaCost|Amount|Valid)(?: (.+))?$", RegexOptions.Compiled);
+
+    /// <summary>"Targeted$CardPower", "Remembered$CardManaCost", "Imprinted$Valid Card.X": a property of defined cards (summed), or how many there are.</summary>
+    private static Amount DefinedCardsAmount(string core, Match m, CompileContext ctx)
+    {
+        var which = m.Groups[1].Value;
+        var prop = m.Groups[2].Value;
+        var filter = prop == "Valid" ? Filter.Parse(m.Groups[3].Value, ctx) : null;
+        if (prop != "Valid" && m.Groups[3].Success) ctx.Need("Amount:" + core);
+        List<Card> Cards(EffectContext x)
+        {
+            IEnumerable<int> ids = which switch
+            {
+                "Targeted" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value),
+                "TriggeredCard" => x.Item.TriggeredCardId is { } id ? new[] { id } : Array.Empty<int>(),
+                "Remembered" => x.Host.Remembered ?? new List<int>(),
+                _ => x.Host.Imprinted ?? new List<int>(),
+            };
+            return ids.Select(id => x.S[id]).ToList();
+        }
+        return prop switch
+        {
+            "CardPower" => new(core, x => Cards(x).Sum(c => c.LastKnownPower)),
+            "CardToughness" => new(core, x => Cards(x).Sum(c => c.LastKnownToughness)),
+            "CardManaCost" => new(core, x => Cards(x).Sum(c => c.CurrentFace.ManaCost.ManaValue)),
+            "Amount" => new(core, x => Cards(x).Count),
+            _ => new(core, x => Cards(x).Count(c => filter!.MatchesCard(c, x))),
+        };
+    }
+
     private static int Devotion(EffectContext x, ColorMask mask)
     {
         var total = 0;
@@ -343,11 +400,13 @@ public static class Defined
     private static readonly HashSet<string> PlayerRefs = new(StringComparer.Ordinal)
     {
         "You", "Player", "Opponent", "Targeted", "TargetedPlayer", "ParentTarget", "TargetedController", "Player.Opponent",
+        "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner",
     };
 
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
     {
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
+        "Enchanted", "Equipped", "Imprinted",
     };
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
@@ -368,9 +427,12 @@ public static class Defined
             "You" => new() { x.Controller },
             "Player" => players.Where(p => !p.Lost).Select(p => p.Index).ToList(),
             "Opponent" or "Player.Opponent" => players.Where(p => !p.Lost && p.Index != x.Controller).Select(p => p.Index).ToList(),
-            "Targeted" or "TargetedPlayer" => x.Targets.Where(t => t.Player is not null).Select(t => t.Player!.Value).ToList(),
+            "Targeted" or "TargetedPlayer" => x.OwnOrParentTargets.Where(t => t.Player is not null).Select(t => t.Player!.Value).ToList(),
             "ParentTarget" => x.ParentTargets.Where(t => t.Player is not null).Select(t => t.Player!.Value).ToList(),
-            "TargetedController" => x.Targets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Controller).ToList(),
+            "TargetedController" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Controller).ToList(),
+            "TriggeredCardController" => x.Item.TriggeredCardId is { } tc ? new() { x.S[tc].Controller } : new(),
+            "TargetedOwner" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Owner).Take(1).ToList(),
+            "TriggeredTarget" or "TriggeredPlayer" => x.Item.TriggeredPlayer is { } tp ? new() { tp } : new(),
             _ => new() { x.Controller },
         };
     }
@@ -380,11 +442,13 @@ public static class Defined
         return (text ?? fallback) switch
         {
             "Self" => new() { x.Item.SourceId },
-            "Targeted" => x.Targets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value).ToList(),
+            "Targeted" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value).ToList(),
             "ParentTarget" => x.ParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value).ToList(),
             "Remembered" => x.Host.Remembered?.ToList() ?? new(),
             "TriggeredCard" or "TriggeredCardLKICopy" or "TriggeredNewCardLKICopy" =>
                 x.Item.TriggeredCardId is { } id ? new() { id } : new(),
+            "Enchanted" or "Equipped" => x.Host.AttachedTo >= 0 ? new() { x.Host.AttachedTo } : new(),
+            "Imprinted" => x.Host.Imprinted?.ToList() ?? new(),
             _ => new(),
         };
     }

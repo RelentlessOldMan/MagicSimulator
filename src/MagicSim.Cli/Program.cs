@@ -92,7 +92,10 @@ public static class Program
 
         // The pool is every Commander-legal (or banned) card Forge has a script for.
         var pool = forge.Cards.Where(c => index.Find(c.FullName) is { CommanderLegality: "legal" or "banned" }).ToList();
-        var report = Coverage.Analyze(pool, Classify);
+        var top = o.Get("--top") is { } t ? int.TryParse(t, out var n) && n > 0 ? n : throw new UsageException("--top must be a positive integer") : 30;
+        var report = Coverage.Analyze(pool, Classify, top);
+        var popularPool = pool.Where(c => index.Find(c.FullName)?.EdhrecRank is <= PopularRank).ToList();
+        var popular = Coverage.Analyze(popularPool, Classify, top);
 
         object? deckPart = null;
         if (o.Get("--deck") is { } deckPath)
@@ -126,10 +129,25 @@ public static class Program
                     requirement = b.Requirement, cards_needing = b.CardsNeeding, cards_unlocked_alone = b.CardsUnlockedAlone,
                 }),
             },
+            popular = new
+            {
+                description = $"The {PopularRank} most-played Commander cards (EDHREC rank) with a Forge script",
+                cards = popular.Cards,
+                scripted = popular.Scripted,
+                hand_coded = popular.HandCoded,
+                supported_share = Math.Round(popular.Share, 4),
+                next_to_implement = popular.TopBlockers.Select(b => new
+                {
+                    requirement = b.Requirement, cards_needing = b.CardsNeeding, cards_unlocked_alone = b.CardsUnlockedAlone,
+                }),
+            },
             deck = deckPart,
         }, JsonOut));
         return Ok;
     }
+
+    /// <summary>"Popular" cards for the coverage report: EDHREC rank at or better than this.</summary>
+    private const int PopularRank = 5000;
 
     private static RunOptions RunOptionsFrom(Options o, bool single = false)
     {
@@ -225,7 +243,7 @@ public static class Program
                                                    resolve names and check the 100-card count
 
               sync-forge [--dir path]              download Forge card scripts (needs git)
-              cards [--deck x.txt] [--forge dir] [--cards path] [--json out.json]
+              cards [--deck x.txt] [--top N] [--forge dir] [--cards path] [--json out.json]
                                                    card support: whole-pool coverage, per-deck tiers
 
               run <deck.txt> [--games N] [--seed S] [--mull A|B|C|all] [--seat play|draw|both] [--max-turn T]

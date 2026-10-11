@@ -3,7 +3,7 @@ using MagicSim.Core.Forge;
 
 namespace MagicSim.Core.Engine;
 
-public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf }
+public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand }
 
 /// <summary>A non-mana cost component: "Sac&lt;1/CARDNAME&gt;", "Discard&lt;0/Hand&gt;", "PayLife&lt;2&gt;", …</summary>
 public sealed record CostPart(CostPartKind Kind, string Amount, string Valid, string Raw);
@@ -38,7 +38,21 @@ public sealed class AbilityDef
     public bool IsManaAbility { get; init; }
     /// <summary>Position in its chain (0 = the head) — index into StackItem.ChainTargets.</summary>
     public int ChainIndex { get; set; }
-    public string Description => P["SpellDescription"] ?? P["StackDescription"] ?? Api;
+    /// <summary>"UnlessCost$": the effect doesn't happen if the payer pays this.</summary>
+    public Cost? UnlessCost { get; set; }
+    /// <summary>Token definitions this ability creates (TokenScript$), compiled with the card.</summary>
+    public List<CardDef>? Tokens { get; set; }
+    /// <summary>For one combination of a modal ability: the chosen modes' text.</summary>
+    public string? ModeDescription { get; set; }
+    /// <summary>Chains an effect runs by name (FlipCoin's WinSubAbility$, Repeat's RepeatSubAbility$).</summary>
+    public Dictionary<string, AbilityDef>? SideChains { get; set; }
+    /// <summary>A spell cast for an alternative cost ("rather than pay this spell's mana cost").</summary>
+    public Cost? AltCost { get; set; }
+    /// <summary>The static granting <see cref="AltCost"/>; its conditions must hold to use it.</summary>
+    public StaticDef? AltCostOf { get; set; }
+
+    public AbilityDef CloneHead() => (AbilityDef)MemberwiseClone();
+    public string Description => ModeDescription ?? P["SpellDescription"] ?? P["StackDescription"] ?? Api;
 
     public IEnumerable<AbilityDef> Chain()
     {
@@ -53,6 +67,8 @@ public sealed class TriggerDef
     public required ForgeParams P { get; init; }
     public required string Mode { get; init; }
     public AbilityDef? Execute { get; init; }
+    /// <summary>For a modal ("choose one") trigger: every allowed combination of modes.</summary>
+    public IReadOnlyList<AbilityDef>? Modes { get; init; }
     public string? this[string key] => P[key];
 }
 
@@ -71,7 +87,7 @@ public sealed class FaceDef
     public required TypeLine Types { get; init; }
     public int? Power { get; init; }
     public int? Toughness { get; init; }
-    public ColorMask Colors { get; init; }
+    public ColorMask Colors { get; set; }
     public HashSet<string> KeywordNames { get; } = new(StringComparer.Ordinal);
     public List<string> RawKeywords { get; } = new();
     /// <summary>Spell abilities (instants/sorceries; usually one, more for "choose one" alt modes).</summary>
@@ -79,6 +95,16 @@ public sealed class FaceDef
     public List<AbilityDef> Activated { get; } = new();
     public List<TriggerDef> Triggers { get; } = new();
     public List<StaticDef> Statics { get; } = new();
+    /// <summary>An Aura's spell: targets what it will enchant (rule 303.4a).</summary>
+    public AbilityDef? AuraSpell { get; set; }
+    /// <summary>"As this enters" replacements (enters tapped, shocklands, checklands).</summary>
+    public List<AbilityDef> EtbReplacements { get; } = new();
+    /// <summary>"Doesn't untap during your untap step."</summary>
+    public bool DoesntUntap { get; set; }
+    /// <summary>"Enters with N counters": (counter type, amount expression).</summary>
+    public List<(string Kind, string Amount)> EtbCounters { get; } = new();
+    /// <summary>Flashback cost, if it has flashback.</summary>
+    public Cost? Flashback { get; set; }
     public Dictionary<string, string> SVars { get; init; } = new();
     public string Oracle { get; init; } = "";
 }
@@ -106,6 +132,8 @@ public sealed class CompileContext
 {
     public required FaceDef Face { get; init; }
     public required SortedSet<string> Missing { get; init; }
+    /// <summary>Compiles a token script by name (TokenScript$); null when no token library is available.</summary>
+    public Func<string, CardDef?>? Tokens { get; init; }
     public void Need(string requirement) => Missing.Add(requirement);
 }
 
@@ -122,13 +150,18 @@ public static partial class CardCompiler
         "PrecostDesc", "CostDesc", "IsCurse", "AILifeThreshold", "AIMaxTgtsCount", "AITgtBeforeCostEval", "AIPowerThreshold",
         "SorcerySpeed", "ActivationPhases", "InstantSpeed", "PlayerTurn", "AnyPlayer", "TargetType", "MayChooseTarget",
         "Planeswalker", "Ultimate", "AIHintRequired", "AIActivateLast", "ShowCurrentCard", "AICheckSVar", "AISVarCompare",
+        "ValidDescription", "ValidCardsDesc", "ValidTgtsDesc", "ChoiceTitle", "AIRespondsToOwnAbility", "TgtPromptInfo",
+        "AIPhyrexianPayment", "NoLooking",
     };
 
-    public static CardDef Compile(ForgeCard source)
+    /// <summary>Parameters any ability may have, handled by the engine rather than the effect.</summary>
+    private static readonly HashSet<string> GenericParams = new(StringComparer.Ordinal) { "UnlessCost", "UnlessPayer", "ETB", "ActivationZone", "OptionalDecider" };
+
+    public static CardDef Compile(ForgeCard source, Func<string, CardDef?>? tokens = null)
     {
         var def = new CardDef { Name = source.FullName, Source = source };
         foreach (var f in source.Faces)
-            def.Faces.Add(CompileFace(f, def.Missing));
+            def.Faces.Add(CompileFace(f, def.Missing, tokens));
         // Two-faced transforming cards play their front face; other multi-face layouts need casting support first.
         if (source.AlternateMode is { } mode && mode != "DoubleFaced")
             def.Missing.Add("Layout:" + mode);
@@ -151,7 +184,7 @@ public static partial class CardCompiler
         return def;
     }
 
-    private static FaceDef CompileFace(ForgeFace f, SortedSet<string> missing)
+    private static FaceDef CompileFace(ForgeFace f, SortedSet<string> missing, Func<string, CardDef?>? tokens)
     {
         var cost = ManaCost.Parse(f.ManaCost);
         if (cost is null) { missing.Add("ManaSymbol:" + f.ManaCost); cost = ManaCost.None; }
@@ -162,26 +195,27 @@ public static partial class CardCompiler
             Power = ParsePT(f.PT, 0), Toughness = ParsePT(f.PT, 1),
             Colors = ParseColors(f.Colors) ?? ColorsOf(cost),
         };
-        if (f.PT is not null && (face.Power is null || face.Toughness is null)) missing.Add("PT:*");
+        var starPT = f.PT is not null && (face.Power is null || face.Toughness is null);
         if (types.Is(CardType.Planeswalker)) missing.Add("Type:Planeswalker");
         if (types.Is(CardType.Battle)) missing.Add("Type:Battle");
 
-        var ctx = new CompileContext { Face = face, Missing = missing };
+        var ctx = new CompileContext { Face = face, Missing = missing, Tokens = tokens };
 
         foreach (var k in f.Keywords)
         {
             var name = ForgeRequirements.KeywordName(k);
             face.RawKeywords.Add(k);
             face.KeywordNames.Add(name);
-            if (!Keywords.Supported.Contains(name)) ctx.Need("Keyword:" + name);
+            if (!CompileKeyword(k, name, face, ctx) && !Keywords.Supported.Contains(name)) ctx.Need("Keyword:" + name);
         }
 
         foreach (var a in f.Abilities)
         {
             var ab = CompileAbility(a, ctx, a.AbilityKind == "SP" ? AbilityKind.Spell : AbilityKind.Activated, 0);
             if (ab is null) continue;
-            if (ab.Kind == AbilityKind.Spell) face.SpellAbilities.Add(ab);
-            else face.Activated.Add(ab);
+            foreach (var mode in ExpandModes(ab, ctx))
+                if (mode.Kind == AbilityKind.Spell) face.SpellAbilities.Add(mode);
+                else face.Activated.Add(mode);
         }
 
         // Basic land types grant "T: add one mana of that color" (rule 305.6).
@@ -203,7 +237,8 @@ public static partial class CardCompiler
                 if (f.SVars.TryGetValue(svar, out var body)) exec = CompileAbility(new ForgeParams(body), ctx, AbilityKind.TriggerEffect, 0);
                 else ctx.Need("SVarMissing:" + svar);
             }
-            var td = new TriggerDef { P = t, Mode = mode, Execute = exec };
+            var modes = exec is null ? null : ExpandModes(exec, ctx);
+            var td = new TriggerDef { P = t, Mode = mode, Execute = modes?.FirstOrDefault(), Modes = modes };
             Triggers.Validate(td, ctx);
             face.Triggers.Add(td);
         }
@@ -216,8 +251,167 @@ public static partial class CardCompiler
             face.Statics.Add(sd);
         }
 
-        foreach (var r in f.Replacements) ctx.Need("Replacement:" + (r["Event"] ?? "?"));
+        foreach (var st in face.Statics.Where(st => st.Mode == "AlternativeCost").ToList()) AddAlternativeCost(face, st, ctx);
+        foreach (var r in f.Replacements) CompileReplacement(r, face, ctx);
+        // "*" power/toughness needs a characteristic-defining ability to say what it is.
+        if (starPT && !face.Statics.Any(st => st.Mode == "Continuous" && st["CharacteristicDefining"] == "True")) ctx.Need("PT:*");
+        if (face.KeywordNames.Contains("Devoid")) face.Colors = 0;
         return face;
+    }
+
+    /// <summary>Keywords that stand for abilities (Equip, Cycling, …): adds those abilities. False if not one of these.</summary>
+    private static bool CompileKeyword(string raw, string name, FaceDef face, CompileContext ctx)
+    {
+        var parts = raw.Split(':');
+        string Part(int i) => i < parts.Length ? parts[i].Trim() : "";
+        switch (name)
+        {
+            case "Equip":
+                if (Part(4).Length > 0) { ctx.Need("Keyword:Equip+" + Part(4).Split('$')[0]); return true; }
+                var valid = Part(2).Length > 0 ? Part(2) : "Creature.YouCtrl";
+                AddGenerated(face, ctx, $"AB$ Attach | Cost$ {Part(1)} | ValidTgts$ {valid} | SorcerySpeed$ True | SpellDescription$ Equip {Part(1)}");
+                return true;
+            case "Enchant":
+                face.AuraSpell = new AbilityDef
+                {
+                    P = new ForgeParams($"SP$ PermanentSpell | ValidTgts$ {Part(1)}"), Api = "PermanentSpell", Kind = AbilityKind.Spell,
+                    TargetFilter = Filter.Parse(Part(1), ctx), TargetMin = 1, TargetMax = 1,
+                };
+                return true;
+            case "Cycling":
+                AddGenerated(face, ctx, $"AB$ Draw | Cost$ {Part(1)} Discard<1/CARDNAME> | ActivationZone$ Hand | Defined$ You | NumCards$ 1 | SpellDescription$ Cycling");
+                return true;
+            case "etbCounter":
+                if (Part(1).StartsWith("EACH", StringComparison.Ordinal) || Part(3).Length > 0 && Part(3) != "no Condition")
+                {
+                    ctx.Need("Keyword:etbCounter+condition");
+                    return true;
+                }
+                Amount.Parse(Part(2), ctx);
+                face.EtbCounters.Add((Part(1), Part(2)));
+                return true;
+            case "Flashback":
+                face.Flashback = ParseCost(Part(1), ctx);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>"You may [cost] rather than pay this spell's mana cost": each way to cast it gets an alternative-cost twin.</summary>
+    private static void AddAlternativeCost(FaceDef face, StaticDef st, CompileContext ctx)
+    {
+        if (!(st["ValidSA"] == "Spell.Self" || st["ValidSA"] == "Spell" && st["ValidCard"] == "Card.Self")) { ctx.Need("AlternativeCost.ValidSA:" + st["ValidSA"]); return; }
+        if (st["Cost"] is not { } costText) { ctx.Need("AlternativeCost:NoCost"); return; }
+        var cost = ParseCost(costText, ctx);
+        if (face.SpellAbilities.Count == 0)
+        {
+            if (face.AuraSpell is not null) { ctx.Need("AlternativeCost:Aura"); return; }
+            // A permanent: list its normal cast explicitly so the alternative can sit next to it.
+            face.SpellAbilities.Add(new AbilityDef { P = new ForgeParams("SP$ PermanentSpell"), Api = "PermanentSpell", Kind = AbilityKind.Spell });
+        }
+        foreach (var ab in face.SpellAbilities.Where(a => a.AltCostOf is null).ToList())
+        {
+            var alt = ab.CloneHead();
+            alt.AltCost = cost;
+            alt.AltCostOf = st;
+            alt.ModeDescription = (ab.ModeDescription ?? ab.Description) + " (alternative cost)";
+            face.SpellAbilities.Add(alt);
+        }
+    }
+
+    /// <summary>Compiles a chain an effect refers to by name (e.g. FlipCoin's WinSubAbility$). Null if the parameter is absent.</summary>
+    public static AbilityDef? CompileSideChain(AbilityDef ab, string key, CompileContext ctx)
+    {
+        if (ab[key] is not { } name) return null;
+        if (!ctx.Face.SVars.TryGetValue(name, out var body)) { ctx.Need("SVarMissing:" + name); return null; }
+        var chain = CompileAbility(new ForgeParams(body), ctx, AbilityKind.Sub, SideChainIndex);
+        if (chain is null) return null;
+        if (chain.Chain().Any(a => a.TargetFilter is not null)) ctx.Need("SideChain:Targets");
+        (ab.SideChains ??= new())[key] = chain;
+        return chain;
+    }
+
+    /// <summary>Side chains never choose their own targets; their links are numbered from here (see EffectContext.ParentTargets).</summary>
+    public const int SideChainIndex = 100;
+
+    private static void AddGenerated(FaceDef face, CompileContext ctx, string script)
+    {
+        if (CompileAbility(new ForgeParams(script), ctx, AbilityKind.Activated, 0) is { } ab) face.Activated.Add(ab);
+    }
+
+    private static void CompileReplacement(ForgeParams r, FaceDef face, CompileContext ctx)
+    {
+        var evt = r["Event"] ?? "?";
+        var keys = r.Values.Keys.Where(k => k is not ("Event" or "Description" or "ValidCard" or "ReplacementResult")).ToList();
+        if (r["ValidCard"] != "Card.Self") { ctx.Need("Replacement:" + evt); return; }
+        switch (evt)
+        {
+            // "Enters tapped", shocklands, checklands: an effect applied as the card enters.
+            case "Moved" when r["Destination"] == "Battlefield" && r["ReplaceWith"] is { } with
+                              && keys.All(k => k is "Destination" or "ReplaceWith"):
+                if (!face.SVars.TryGetValue(with, out var body)) { ctx.Need("SVarMissing:" + with); return; }
+                if (CompileAbility(new ForgeParams(body), ctx, AbilityKind.Sub, 0) is { } ab) face.EtbReplacements.Add(ab);
+                return;
+            // Mana Vault, Grim Monolith: "doesn't untap during your untap step".
+            case "Untap" when r["Layer"] == "CantHappen" && r["ValidStepTurnToController"] == "You"
+                              && keys.All(k => k is "Layer" or "ValidStepTurnToController"):
+                face.DoesntUntap = true;
+                return;
+            default:
+                ctx.Need("Replacement:" + evt);
+                return;
+        }
+    }
+
+    /// <summary>
+    /// A modal ability ("Charm": choose one/two/…) becomes one ability per allowed combination of
+    /// modes, so choosing modes is just choosing which ability to use. Anything else is returned as is.
+    /// </summary>
+    public static List<AbilityDef> ExpandModes(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab.Api != "Charm") return new() { ab };
+        var choices = (ab["Choices"] ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (!int.TryParse(ab["CharmNum"] ?? "1", out var max)) { ctx.Need("Charm:CharmNum"); return new() { ab }; }
+        if (!int.TryParse(ab["MinCharmNum"] ?? max.ToString(), out var min)) { ctx.Need("Charm:MinCharmNum"); return new() { ab }; }
+        min = Math.Max(1, min);
+        max = Math.Min(max, choices.Length);
+        foreach (var c in choices)
+            if (!ctx.Face.SVars.ContainsKey(c)) { ctx.Need("SVarMissing:" + c); return new() { ab }; }
+
+        var combos = new List<int[]>();
+        for (var k = min; k <= max; k++) Combinations(choices.Length, k, 0, new List<int>(), combos);
+        if (combos.Count > 40) { ctx.Need("Charm:TooManyModes"); return new() { ab }; }
+
+        var result = new List<AbilityDef>();
+        foreach (var combo in combos)
+        {
+            var head = new AbilityDef { P = ab.P, Api = "Charm", Kind = ab.Kind, Cost = ab.Cost, ChainIndex = ab.ChainIndex };
+            var tail = head;
+            foreach (var i in combo)
+            {
+                var mode = CompileAbility(new ForgeParams(ctx.Face.SVars[choices[i]]), ctx, AbilityKind.Sub, tail.ChainIndex + 1);
+                if (mode is null) continue;
+                tail.Sub = mode;
+                while (tail.Sub is not null) tail = tail.Sub;
+            }
+            if (ab["SubAbility"] is { } sub && ctx.Face.SVars.TryGetValue(sub, out var subBody))
+                tail.Sub = CompileAbility(new ForgeParams(subBody), ctx, AbilityKind.Sub, tail.ChainIndex + 1);
+            head.ModeDescription = string.Join(" + ", combo.Select(i => new ForgeParams(ctx.Face.SVars[choices[i]])["SpellDescription"] ?? choices[i]));
+            result.Add(head);
+        }
+        return result;
+    }
+
+    private static void Combinations(int n, int k, int start, List<int> current, List<int[]> output)
+    {
+        if (current.Count == k) { output.Add(current.ToArray()); return; }
+        for (var i = start; i < n; i++)
+        {
+            current.Add(i);
+            Combinations(n, k, i + 1, current, output);
+            current.RemoveAt(current.Count - 1);
+        }
     }
 
     public static AbilityDef? CompileAbility(ForgeParams p, CompileContext ctx, AbilityKind kind, int chainIndex)
@@ -231,7 +425,7 @@ public static partial class CardCompiler
         var ab = new AbilityDef
         {
             P = p, Api = api, Kind = kind, Cost = cost, ChainIndex = chainIndex,
-            IsManaAbility = api == "Mana" && kind == AbilityKind.Activated && p["ValidTgts"] is null,
+            IsManaAbility = api is "Mana" or "ManaReflected" && kind == AbilityKind.Activated && p["ValidTgts"] is null,
         };
 
         if (p["ValidTgts"] is { } vt)
@@ -241,10 +435,20 @@ public static partial class CardCompiler
             ab.TargetMax = p["TargetMax"] is { } mx ? Amount.ParseConst(mx, ctx) : 1;
         }
 
+        if (p["OptionalDecider"] is { } od && od is not ("You" or "TargetedController" or "Targeted" or "Opponent" or "TriggeredActivator"))
+            ctx.Need("OptionalDecider:" + od);
+        if (p["UnlessCost"] is { } unless)
+        {
+            ab.UnlessCost = ParseCost(unless, ctx);
+            if (p["UnlessPayer"] is { } payer && payer is not ("You" or "TargetedController" or "Targeted" or "Opponent" or "Player"
+                    or "TriggeredActivator" or "TriggeredCardController"))
+                ctx.Need("UnlessPayer:" + payer);
+        }
+
         if (handler is not null)
         {
             foreach (var key in p.Values.Keys)
-                if (!CosmeticParams.Contains(key) && !handler.Params.Contains(key))
+                if (!CosmeticParams.Contains(key) && !GenericParams.Contains(key) && !handler.Params.Contains(key))
                     ctx.Need($"Param:{api}.{key}");
             handler.Validate(ab, ctx);
             Conditions.Validate(ab, ctx);
@@ -259,12 +463,29 @@ public static partial class CardCompiler
         return ab;
     }
 
+    /// <summary>Splits a cost on spaces, keeping "Sac&lt;1/CARDNAME/this token&gt;" whole.</summary>
+    public static IEnumerable<string> SplitCost(string text)
+    {
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i <= text.Length; i++)
+        {
+            if (i < text.Length && text[i] == '<') depth++;
+            else if (i < text.Length && text[i] == '>') depth = Math.Max(0, depth - 1);
+            else if (i == text.Length || text[i] == ' ' && depth == 0)
+            {
+                if (i > start) yield return text[start..i];
+                start = i + 1;
+            }
+        }
+    }
+
     public static Cost ParseCost(string text, CompileContext ctx)
     {
         var manaTokens = new List<string>();
         bool tap = false, untap = false;
         var parts = new List<CostPart>();
-        foreach (var token in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var token in SplitCost(text))
         {
             if (token == "T") { tap = true; continue; }
             if (token == "Q") { untap = true; ctx.Need("Cost:Untap"); continue; }
@@ -283,10 +504,13 @@ public static partial class CardCompiler
                 "SubCounter" => CostPartKind.RemoveCounter,
                 "AddCounter" => CostPartKind.AddCounter,
                 "ExileFromHand" when valid == "CARDNAME" => CostPartKind.ExileSelf,
+                "ExileFromHand" => CostPartKind.ExileFromHand,
+                "Return" => CostPartKind.ReturnToHand,
                 _ => null,
             };
             if (kind is null) { ctx.Need("Cost:" + m.Groups[1].Value); continue; }
             if (kind is CostPartKind.Sacrifice or CostPartKind.Discard or CostPartKind.ExileFromGraveyard or CostPartKind.TapUntapped
+                    or CostPartKind.ExileFromHand or CostPartKind.ReturnToHand
                 && valid is not ("CARDNAME" or "Hand" or "Random" or "Card" or ""))
                 Filter.Parse(valid, ctx);
             parts.Add(new CostPart(kind.Value, amount, valid, token));

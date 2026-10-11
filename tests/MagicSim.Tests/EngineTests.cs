@@ -37,39 +37,10 @@ public class EngineTests
 
     private static CardDef Def(string name) => Pool.Resolve(name) ?? throw new ArgumentException(name);
 
-    /// <summary>A decider that follows a test's wishes and otherwise passes / picks the first option.</summary>
-    private sealed class TestDecider : ChoiceDecider
-    {
-        public Func<Game, Decision, int?>? Choose { get; set; }
-        protected override int Pick(Game g, Decision d)
-        {
-            if (Choose?.Invoke(g, d) is { } i) return i;
-            if (d.Kind == DecisionKind.Action) return 0;   // pass
-            if (d.Kind == DecisionKind.Keep) return 0;
-            if (d.Kind == DecisionKind.Name) return 0;     // a card not in the deck
-            return 0;
-        }
-    }
+    private static Game Setup(string[] hand, string[]? battlefield = null, string[]? library = null, TestDecider? decider = null) =>
+        TestGames.Setup(Pool, hand, battlefield, library, decider);
 
-    /// <summary>A game in main phase 1 of turn 1 with the given hand, battlefield and library (top first).</summary>
-    private static Game Setup(string[] hand, string[]? battlefield = null, string[]? library = null, TestDecider? decider = null)
-    {
-        var lib = (library ?? Array.Empty<string>()).Concat(hand).Concat(battlefield ?? Array.Empty<string>()).Select(Def).ToList();
-        var g = Game.NewGoldfish(lib, Array.Empty<CardDef>(), new GameSettings(), new Rng(1), decider ?? new TestDecider());
-        var s = g.State;
-        var me = s.Players[Game.Me];
-        // Rebuild zones deterministically instead of using the shuffle.
-        me.Library.Clear();
-        var next = 0;
-        foreach (var _ in library ?? Array.Empty<string>()) { me.Library.Add(next); s[next].Zone = Zone.Library; next++; }
-        foreach (var _ in hand) { me.Hand.Add(next); s[next].Zone = Zone.Hand; next++; }
-        foreach (var _ in battlefield ?? Array.Empty<string>()) { s.Battlefield.Add(next); s[next].Zone = Zone.Battlefield; next++; }
-        s.Turn = 1;
-        s.Step = Step.Main1;
-        return g;
-    }
-
-    private static int InHand(Game g, string name) => g.State.Players[Game.Me].Hand.First(id => g.State[id].Name == name);
+    private static int InHand(Game g, string name) => TestGames.InHand(g, name);
 
     [Fact]
     public void ManaPaymentHandlesGenericColoredHybridAndPhyrexian()

@@ -30,32 +30,65 @@ public sealed class Card
     public Dictionary<string, int>? Counters { get; set; }
     public HashSet<string>? TempKeywords { get; set; }
     public List<int>? Remembered { get; set; }
+    /// <summary>Cards imprinted on (exiled with) this card: Chrome Mox, Tainted Pact.</summary>
+    public List<int>? Imprinted { get; set; }
+    /// <summary>Values set by StoreSVar$, overriding the card's SVar of that name.</summary>
+    public Dictionary<string, int>? StoredVars { get; set; }
     public string? NamedCard { get; set; }
     public int AttachedTo { get; set; } = -1;
     /// <summary>The permanent entered or was cast this turn with X = this value.</summary>
     public int XPaid { get; set; }
+    /// <summary>A token created with set power/toughness (TokenPower$/TokenToughness$).</summary>
+    public int? TokenPower { get; init; }
+    public int? TokenToughness { get; init; }
+    /// <summary>Regeneration shields until end of turn (rule 701.15).</summary>
+    public int RegenShields { get; set; }
+
+    // Results of continuous effects (rule 613), recomputed by Game.ApplyStatics.
+    public int? SetPower { get; set; }
+    public int? SetToughness { get; set; }
+    public int StaticPower { get; set; }
+    public int StaticToughness { get; set; }
+    public HashSet<string>? StaticKeywords { get; set; }
 
     public FaceDef CurrentFace => Def.Faces[Face];
     public string Name => CurrentFace.Name;
     public TypeLine Types => CurrentFace.Types;
 
-    public int Power => (CurrentFace.Power ?? 0) + PowerBonus + CounterCount("P1P1") - CounterCount("M1M1");
-    public int Toughness => (CurrentFace.Toughness ?? 0) + ToughnessBonus + CounterCount("P1P1") - CounterCount("M1M1");
+    public int Power => (SetPower ?? TokenPower ?? CurrentFace.Power ?? 0) + StaticPower + PowerBonus + CounterCount("P1P1") - CounterCount("M1M1");
+    public int Toughness => (SetToughness ?? TokenToughness ?? CurrentFace.Toughness ?? 0) + StaticToughness + ToughnessBonus + CounterCount("P1P1") - CounterCount("M1M1");
+
+    /// <summary>Power/toughness as it last was on the battlefield (rule 608.2h), for cards that have left.</summary>
+    public int? LeftPower { get; set; }
+    public int? LeftToughness { get; set; }
+    public int LastKnownPower => Zone == Zone.Battlefield ? Power : LeftPower ?? Power;
+    public int LastKnownToughness => Zone == Zone.Battlefield ? Toughness : LeftToughness ?? Toughness;
 
     public int CounterCount(string kind) => Counters is not null && Counters.TryGetValue(kind, out var n) ? n : 0;
 
     public bool HasKeyword(string k) =>
-        CurrentFace.KeywordNames.Contains(k) || (TempKeywords?.Contains(k) ?? false);
+        CurrentFace.KeywordNames.Contains(k) || (TempKeywords?.Contains(k) ?? false) || (StaticKeywords?.Contains(k) ?? false);
+
+    public void ClearStaticEffects()
+    {
+        SetPower = SetToughness = null;
+        StaticPower = StaticToughness = 0;
+        StaticKeywords = null;
+    }
 
     public Card Clone() => new()
     {
         Id = Id, Def = Def, Owner = Owner, Controller = Controller, Zone = Zone, Face = Face, Tapped = Tapped,
-        ControlledSinceTurn = ControlledSinceTurn, IsToken = IsToken, IsCommander = IsCommander, CommandCasts = CommandCasts,
+        ControlledSinceTurn = ControlledSinceTurn, IsToken = IsToken, TokenPower = TokenPower, TokenToughness = TokenToughness, IsCommander = IsCommander, CommandCasts = CommandCasts,
         Damage = Damage, PowerBonus = PowerBonus, ToughnessBonus = ToughnessBonus,
         Counters = Counters is null ? null : new Dictionary<string, int>(Counters),
         TempKeywords = TempKeywords is null ? null : new HashSet<string>(TempKeywords),
         Remembered = Remembered is null ? null : new List<int>(Remembered),
-        NamedCard = NamedCard, AttachedTo = AttachedTo, XPaid = XPaid,
+        Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
+        StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
+        NamedCard = NamedCard, AttachedTo = AttachedTo, XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness,
+        SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
+        StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
     };
 
     public override string ToString() => $"{Name}#{Id}";
@@ -69,6 +102,10 @@ public sealed class Player
     public ManaPool Pool;
     public int LandsPlayedThisTurn { get; set; }
     public int LandDropsPerTurn { get; set; } = 1;
+    /// <summary>Extra land drops from continuous effects (Exploration, Azusa).</summary>
+    public int StaticLandDrops { get; set; }
+    /// <summary>Maximum hand size set by continuous effects (Reliquary Tower = int.MaxValue).</summary>
+    public int? StaticMaxHandSize { get; set; }
     public bool Lost { get; set; }
     public string? LossReason { get; set; }
     /// <summary>Goldfish opponents have no real cards: just a library size that milling reduces.</summary>
@@ -91,7 +128,7 @@ public sealed class Player
     public Player Clone() => new()
     {
         Index = Index, Life = Life, Poison = Poison, Pool = Pool, LandsPlayedThisTurn = LandsPlayedThisTurn,
-        LandDropsPerTurn = LandDropsPerTurn, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary,
+        LandDropsPerTurn = LandDropsPerTurn, StaticLandDrops = StaticLandDrops, StaticMaxHandSize = StaticMaxHandSize, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary,
         IsGoldfish = IsGoldfish, CommanderDamageTaken = new Dictionary<int, int>(CommanderDamageTaken),
         LifePaidTotal = LifePaidTotal, DrewFromEmpty = DrewFromEmpty, KnownTop = KnownTop,
         Library = new List<int>(Library), Hand = new List<int>(Hand), Graveyard = new List<int>(Graveyard),
@@ -119,14 +156,18 @@ public sealed class StackItem
     /// <summary>Targets per ability in the chain (index = AbilityDef.ChainIndex).</summary>
     public List<List<TargetRef>> ChainTargets { get; init; } = new();
     public int X { get; init; }
+    /// <summary>Cast with flashback: exiled instead of going anywhere else when it leaves the stack.</summary>
+    public bool ExileAfter { get; init; }
     /// <summary>For triggers: the card that caused it (TriggeredCard), if any.</summary>
     public int? TriggeredCardId { get; init; }
+    /// <summary>For triggers: the player involved (e.g. the player dealt damage), if any.</summary>
+    public int? TriggeredPlayer { get; init; }
     public string Description { get; init; } = "";
 
     public StackItem Clone() => new()
     {
         Id = Id, SourceId = SourceId, Ability = Ability, Controller = Controller, IsSpell = IsSpell,
-        ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, Description = Description,
+        ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, TriggeredPlayer = TriggeredPlayer, Description = Description, ExileAfter = ExileAfter,
     };
 }
 
@@ -135,7 +176,9 @@ public sealed class TurnInfo
 {
     public int SpellsCast { get; set; }
     public int MaxManaSeen { get; set; }
-    public TurnInfo Clone() => new() { SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen };
+    /// <summary>"At the beginning of the next end step" actions: (card id, "Exile" or "Sacrifice").</summary>
+    public List<(int CardId, string Action)> AtEndStep { get; set; } = new();
+    public TurnInfo Clone() => new() { SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep) };
 }
 
 /// <summary>Everything about a game in progress. <see cref="Clone"/> gives an independent copy for search.</summary>

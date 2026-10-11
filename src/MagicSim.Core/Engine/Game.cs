@@ -44,6 +44,8 @@ public sealed partial class Game
     /// </summary>
     public Action<Game>? OnCheckpoint { get; set; }
     private int _actionsThisTurn;
+    /// <summary>Whether continuous effects were in force at the last <see cref="Statics.Apply"/> (lets it skip work when there are none).</summary>
+    public bool StaticsApplied { get; set; }
 
     public Game(GameState state, GameSettings settings, IDecider decider)
     {
@@ -54,7 +56,7 @@ public sealed partial class Game
 
     public Game Clone(IDecider? decider = null)
     {
-        var g = new Game(State.Clone(), Settings, decider ?? Decider) { _actionsThisTurn = _actionsThisTurn, MulligansTaken = MulligansTaken };
+        var g = new Game(State.Clone(), Settings, decider ?? Decider) { _actionsThisTurn = _actionsThisTurn, MulligansTaken = MulligansTaken, StaticsApplied = StaticsApplied };
         g._pending.AddRange(_pending);
         return g;
     }
@@ -193,7 +195,7 @@ public sealed partial class Game
         {
             case Step.Untap:
                 foreach (var c in State.BattlefieldCards)
-                    if (c.Controller == Me) c.Tapped = false;
+                    if (c.Controller == Me && !c.CurrentFace.DoesntUntap) c.Tapped = false;
                 return;   // no priority in the untap step
             case Step.Upkeep: FirePhase("Upkeep"); break;
             case Step.Draw:
@@ -206,10 +208,26 @@ public sealed partial class Game
             case Step.CombatDamage: CombatDamage(); break;
             case Step.EndCombat: State.Attackers.Clear(); break;
             case Step.Main2: FirePhase("Main2"); break;
-            case Step.End: FirePhase("End of Turn"); break;
+            case Step.End:
+                AtBeginningOfEndStep();
+                FirePhase("End of Turn");
+                break;
             case Step.Cleanup: Cleanup(); return;   // no priority unless something triggers
         }
         if (!State.GameOver) PriorityLoop();
+    }
+
+    /// <summary>"At the beginning of the next end step" actions (tokens exiled or sacrificed at end of turn).</summary>
+    private void AtBeginningOfEndStep()
+    {
+        foreach (var (id, action) in State.ThisTurn.AtEndStep)
+        {
+            var c = State[id];
+            if (c.Zone != Zone.Battlefield) continue;
+            Note($"{action.ToLowerInvariant()} {c.Name} (end of turn)");
+            MoveTo(c, action == "Exile" ? Zone.Exile : Zone.Graveyard);
+        }
+        State.ThisTurn.AtEndStep.Clear();
     }
 
     private void SetStep(Step step)
@@ -220,6 +238,7 @@ public sealed partial class Game
 
     private void DeclareAttackers()
     {
+        Statics.Apply(this);
         var candidates = State.BattlefieldCards
             .Where(c => c.Controller == Me && c.Types.Is(CardType.Creature) && !c.Tapped && !IsSick(c) && !c.HasKeyword("Defender"))
             .Select(c => c.Id).ToList();
@@ -229,14 +248,16 @@ public sealed partial class Game
         foreach (var id in attackers)
         {
             var a = State[id];
-            if (!a.HasKeyword("Vigilance")) a.Tapped = true;
+            if (!a.HasKeyword("Vigilance")) Tap(a);
             Fire(new TriggerEvent(TriggerMode.Attacks, CardId: id));
         }
+        Fire(new TriggerEvent(TriggerMode.AttackersDeclared, Player: Me));
         Note("attack with " + string.Join(", ", attackers.Select(id => State[id].Name)));
     }
 
     private void CombatDamage()
     {
+        Statics.Apply(this);
         // Goldfish opponents never block: everything hits the opponent with the least life left.
         var defender = State.Players.Where(p => p.Index != Me && !p.Lost).OrderBy(p => p.Life).ThenBy(p => p.Index).FirstOrDefault();
         if (defender is null) return;
@@ -246,7 +267,7 @@ public sealed partial class Game
             if (a.Zone != Zone.Battlefield) continue;
             var dmg = Math.Max(0, a.Power) * (a.HasKeyword("Double Strike") ? 2 : 1);
             if (dmg == 0) continue;
-            DamagePlayer(defender.Index, dmg, a);
+            DamagePlayer(defender.Index, dmg, a, combat: true);
             if (a.IsCommander)
                 defender.CommanderDamageTaken[a.Id] = defender.CommanderDamageTaken.GetValueOrDefault(a.Id) + dmg;
         }
@@ -255,7 +276,7 @@ public sealed partial class Game
     private void Cleanup()
     {
         var me = State.Players[Me];
-        var excess = me.Hand.Count - Settings.MaxHandSize;
+        var excess = me.Hand.Count - (me.StaticMaxHandSize ?? Settings.MaxHandSize);
         if (excess > 0)
             foreach (var id in Decider.ChooseCards(this, Me, Choice.Discard, null, me.Hand.ToList(), excess, excess))
                 Discard(State[id]);
@@ -265,6 +286,7 @@ public sealed partial class Game
             c.PowerBonus = 0;
             c.ToughnessBonus = 0;
             c.TempKeywords = null;
+            c.RegenShields = 0;
         }
     }
 
@@ -341,7 +363,7 @@ public sealed partial class Game
 
             if (c.Zone == Zone.Hand && c.Types.Is(CardType.Land))
             {
-                if (sorcerySpeed && p.LandsPlayedThisTurn < p.LandDropsPerTurn) result.Add(new GameAction.PlayLand(id));
+                if (sorcerySpeed && p.LandsPlayedThisTurn < p.LandDropsPerTurn + p.StaticLandDrops) result.Add(new GameAction.PlayLand(id));
             }
             else if (!c.Types.Is(CardType.Land))
             {
@@ -365,6 +387,16 @@ public sealed partial class Game
                     var ab = c.CurrentFace.Activated[i];
                     if (ab["ActivationZone"] == "Hand" && !IsAutoManaAbility(ab) && CanActivate(c, ab, sorcerySpeed)) result.Add(new GameAction.Activate(id, i));
                 }
+        }
+
+        // Flashback: cast from the graveyard.
+        foreach (var id in p.Graveyard)
+        {
+            var c = State[id];
+            if (c.Def.IsBlank || c.CurrentFace.Flashback is null || !seenNames.Add("graveyard:" + c.Name)) continue;
+            if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed)) continue;
+            for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
+                if (CanCast(c, i)) result.Add(new GameAction.Cast(id, i));
         }
 
         var seenPermanents = new HashSet<(string, bool, bool)>();
@@ -406,18 +438,26 @@ public sealed partial class Game
         Note($"play {land.Name}");
         State.Record.Cast.Add(land.Name);
         MoveTo(land, Zone.Battlefield);
+        Fire(new TriggerEvent(TriggerMode.LandPlayed, CardId: land.Id, Player: land.Controller));
     }
 
     /// <summary>The spell's cost: its spell ability's Cost$ (which includes any mana) or the face's mana cost, plus commander tax.</summary>
     private Cost SpellCost(Card c, int spellIndex)
     {
         Cost cost;
-        if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].Cost is { } abCost && c.CurrentFace.SpellAbilities[spellIndex]["Cost"] is not null)
+        var spell = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : null;
+        if (c.Zone == Zone.Graveyard && c.CurrentFace.Flashback is { } flashback)
+            cost = flashback;
+        else if (spell?.AltCost is { } alt)
+            cost = alt;
+        else if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].Cost is { } abCost && c.CurrentFace.SpellAbilities[spellIndex]["Cost"] is not null)
             cost = abCost;
         else
             cost = new Cost { Mana = c.CurrentFace.ManaCost };
-        if (c.Zone == Zone.Command && c.CommandCasts > 0)
-            cost = new Cost { Mana = cost.Mana.WithExtraGeneric(2 * c.CommandCasts), Tap = cost.Tap, Parts = cost.Parts };
+        var extra = c.Zone == Zone.Command ? 2 * c.CommandCasts : 0;
+        extra -= Statics.CostReduction(this, c, c.Controller);
+        if (extra != 0)
+            cost = new Cost { Mana = cost.Mana.WithExtraGeneric(extra), Tap = cost.Tap, Untap = cost.Untap, Parts = cost.Parts };
         return cost;
     }
 
@@ -425,8 +465,11 @@ public sealed partial class Game
     {
         var cost = SpellCost(c, spellIndex);
         if (cost.Mana.NoCost) return false;
+        if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].AltCostOf is { } altStatic && !Presence.Hold(altStatic.P, ContextFor(c)))
+            return false;
         if (!CanPayCost(cost, c, c.Controller, 0, excludeSourceFromMana: true)) return false;
-        return spellIndex < 0 || HasLegalTargets(c, c.CurrentFace.SpellAbilities[spellIndex]);
+        var ability = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : c.CurrentFace.AuraSpell;
+        return ability is null || HasLegalTargets(c, ability);
     }
 
     public void CastSpell(Card c, int spellIndex)
@@ -434,7 +477,7 @@ public sealed partial class Game
         var player = c.Controller;
         var from = c.Zone;
         var cost = SpellCost(c, spellIndex);
-        var ability = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : PermanentSpell;
+        var ability = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : c.CurrentFace.AuraSpell ?? PermanentSpell;
 
         var x = 0;
         if (cost.Mana.XCount > 0)
@@ -446,7 +489,8 @@ public sealed partial class Game
         var item = new StackItem
         {
             Id = State.NextStackId++, SourceId = c.Id, Ability = ability, Controller = player, IsSpell = true, X = x,
-            ChainTargets = ChooseChainTargets(c, ability, player), Description = c.Name,
+            ChainTargets = ChooseChainTargets(c, ability, player), Description = c.Name + (from == Zone.Graveyard ? " (flashback)" : ""),
+            ExileAfter = from == Zone.Graveyard,
         };
         if (!PayCost(cost, c, player, x, excludeSourceFromMana: true))
             throw new InvalidOperationException($"could not pay for {c.Name} after checking it was castable");
@@ -559,19 +603,33 @@ public sealed partial class Game
         var source = State[item.SourceId];
         Note($"resolve {item.Description}");
 
-        if (item.IsSpell && item.Ability == PermanentSpell)
+        var afterwards = item.ExileAfter ? Zone.Exile : Zone.Graveyard;
+        Statics.Apply(this);
+        if (item.IsSpell && item.Ability.Api == "PermanentSpell")
         {
-            if (source.Zone == Zone.Stack) MoveTo(source, Zone.Battlefield);
+            if (source.Zone != Zone.Stack) return;
+            if (item.Ability.TargetFilter is not null)   // an Aura: attach to its target, or fizzle
+            {
+                var target = item.ChainTargets.FirstOrDefault()?.FirstOrDefault();
+                if (target?.CardId is not { } to || State[to].Zone != Zone.Battlefield)
+                {
+                    Note($"  {item.Description} fizzles (no legal targets)");
+                    MoveTo(source, afterwards);
+                    return;
+                }
+                source.AttachedTo = to;
+            }
+            MoveTo(source, Zone.Battlefield);
             return;
         }
         if (TargetsAllGone(item))
         {
             Note($"  {item.Description} fizzles (no legal targets)");
-            if (item.IsSpell && source.Zone == Zone.Stack) MoveTo(source, Zone.Graveyard);
+            if (item.IsSpell && source.Zone == Zone.Stack) MoveTo(source, afterwards);
             return;
         }
         RunChain(item);
-        if (item.IsSpell && source.Zone == Zone.Stack) MoveTo(source, Zone.Graveyard);
+        if (item.IsSpell && source.Zone == Zone.Stack) MoveTo(source, afterwards);
     }
 
     private bool TargetsAllGone(StackItem item)
@@ -581,15 +639,59 @@ public sealed partial class Game
         return all.All(t => t.Player is { } p ? State.Players[p].Lost : State[t.CardId!.Value].Zone is Zone.None);
     }
 
-    public void RunChain(StackItem item)
+    public void RunChain(StackItem item) => RunLinks(item, item.Ability);
+
+    /// <summary>Runs a chain an effect refers to by name (coin flip outcomes, repeated steps) for the same stack item.</summary>
+    public void RunSideChain(EffectContext x, AbilityDef head) => RunLinks(x.Item, head);
+
+    private void RunLinks(StackItem item, AbilityDef head)
     {
-        for (var ab = item.Ability; ab is not null && !State.GameOver; ab = ab.Sub)
+        for (var ab = head; ab is not null && !State.GameOver; ab = ab.Sub)
         {
             var ctx = new EffectContext { Game = this, Item = item, Ability = ab };
             if (!Conditions.Hold(ctx)) continue;
+            if (ab["OptionalDecider"] is not null && !DecidesYes(ctx)) continue;
+            if (ab.UnlessCost is { } unless && PaysUnlessCost(ctx, unless)) continue;
             var handler = Effects.Get(ab.Api) ?? throw new InvalidOperationException($"no handler for {ab.Api}");
             handler.Resolve(ctx);
         }
+    }
+
+    /// <summary>A context for a card's own expressions outside any stack item (statics, cost checks).</summary>
+    public EffectContext ContextFor(Card c) => new()
+    {
+        Game = this, Ability = PermanentSpell,
+        Item = new StackItem { SourceId = c.Id, Ability = PermanentSpell, Controller = c.Controller, X = c.XPaid },
+    };
+
+    /// <summary>"You may …" (OptionalDecider$): whoever decides is asked; goldfish opponents always decline.</summary>
+    private bool DecidesYes(EffectContext x)
+    {
+        var who = PlayerFor(x, x.Ability["OptionalDecider"]);
+        return who is { } p && !State.Players[p].IsGoldfish && Decider.ChooseYesNo(this, p, x.Host, x.Ability.Description + "?");
+    }
+
+    private int? PlayerFor(EffectContext x, string? spec) => spec switch
+    {
+        "You" => x.Controller,
+        null or "TargetedController" or "Targeted" => x.Targets.Select(t => t.Player ?? State[t.CardId!.Value].Controller).Cast<int?>().FirstOrDefault(),
+        "TriggeredActivator" => x.Item.TriggeredPlayer,
+        "TriggeredCardController" => x.Item.TriggeredCardId is { } tc ? State[tc].Controller : null,
+        _ => null,   // "Opponent"/"Player": only goldfish opponents would act, and they never do
+    };
+
+    /// <summary>
+    /// "… unless [payer] pays [cost]": true if the payer pays, so the effect doesn't happen.
+    /// Goldfish opponents never pay.
+    /// </summary>
+    private bool PaysUnlessCost(EffectContext x, Cost cost)
+    {
+        if (PlayerFor(x, x.Ability["UnlessPayer"]) is not { } p || State.Players[p].IsGoldfish) return false;
+        if (!CanPayCost(cost, x.Host, p, x.X, excludeSourceFromMana: false)) return false;
+        if (!Decider.ChooseYesNo(this, p, x.Host, $"pay {cost.Mana} to avoid {x.Ability.Description}?")) return false;
+        PayCost(cost, x.Host, p, x.X, excludeSourceFromMana: false);
+        Note($"  paid to avoid: {x.Ability.Description}");
+        return true;
     }
 
     // ---- state-based actions & game end -----------------------------------------------
@@ -597,6 +699,7 @@ public sealed partial class Game
     public void CheckStateBasedActions()
     {
         if (State.GameOver) return;
+        Statics.Apply(this);
         foreach (var p in State.Players)
         {
             if (p.Lost) continue;
@@ -607,8 +710,19 @@ public sealed partial class Game
             else if (p.IsGoldfish && p.AbstractLibrary <= 0) Lose(p, "decked (loses at their next draw)");
         }
         foreach (var c in State.BattlefieldCards.ToList())
-            if (c.Types.Is(CardType.Creature) && c.Toughness <= 0 || c.Types.Is(CardType.Creature) && c.Damage >= c.Toughness && c.Toughness > 0 && !c.HasKeyword("Indestructible"))
-                MoveTo(c, Zone.Graveyard);
+        {
+            if (c.Types.Is(CardType.Creature))
+            {
+                if (c.Toughness <= 0) MoveTo(c, Zone.Graveyard);
+                else if (c.Damage >= c.Toughness) Destroy(c, regenerate: true);
+            }
+            // Auras attached to nothing go to the graveyard; Equipment just falls off (rules 704.5m-n).
+            if (c.Zone != Zone.Battlefield) continue;
+            var host = c.AttachedTo >= 0 ? State[c.AttachedTo] : null;
+            var attachedOk = host is not null && host.Zone == Zone.Battlefield;
+            if (c.Types.HasSubtype("Aura") && !attachedOk) MoveTo(c, Zone.Graveyard);
+            else if (c.AttachedTo >= 0 && (!attachedOk || c.Types.HasSubtype("Equipment") && !host!.Types.Is(CardType.Creature))) c.AttachedTo = -1;
+        }
         // Legend rule (704.5j): keep the newest.
         var legends = State.BattlefieldCards.Where(c => c.Types.Has(SuperType.Legendary)).GroupBy(c => (c.Controller, c.Name)).Where(g => g.Count() > 1);
         foreach (var grp in legends.ToList())
@@ -642,6 +756,44 @@ public sealed partial class Game
     }
 
     public bool Won => State.GameOver && State.Winner == Me;
+
+    /// <summary>Destroys a permanent unless it's indestructible or regenerates. True if it was destroyed.</summary>
+    public bool Destroy(Card c, bool regenerate)
+    {
+        if (c.Zone != Zone.Battlefield || c.HasKeyword("Indestructible")) return false;
+        if (regenerate && c.RegenShields > 0)
+        {
+            c.RegenShields--;
+            c.Tapped = true;
+            c.Damage = 0;
+            State.Attackers.Remove(c.Id);
+            Note($"  {c.Name} regenerates");
+            return false;
+        }
+        MoveTo(c, Zone.Graveyard);
+        return true;
+    }
+
+    public static void AddCounters(Card c, string kind, int n)
+    {
+        if (n <= 0) return;
+        c.Counters ??= new();
+        c.Counters[kind] = c.CounterCount(kind) + n;
+    }
+
+    /// <summary>Creates a token on the battlefield under its owner's control.</summary>
+    public Card CreateToken(CardDef def, int owner, bool tapped, int? power = null, int? toughness = null)
+    {
+        var c = new Card
+        {
+            Id = State.Cards.Count, Def = def, Owner = owner, Controller = owner, Zone = Zone.None, IsToken = true,
+            TokenPower = power, TokenToughness = toughness,
+        };
+        State.Cards.Add(c);
+        Note($"  create {def.Name}" + (power is not null ? $" {c.Power}/{c.Toughness}" : ""));
+        MoveTo(c, Zone.Battlefield, tapped: tapped);
+        return c;
+    }
 
     /// <summary>The combined color identity of a player's commanders (for "Combo ColorIdentity" mana).</summary>
     public ColorMask CommanderIdentity(int player)

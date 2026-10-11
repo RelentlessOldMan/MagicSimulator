@@ -48,7 +48,7 @@ public static partial class ForgeRequirements
 
     public static void AddCost(string cost, ICollection<string> req)
     {
-        foreach (var token in cost.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var token in Engine.CardCompiler.SplitCost(cost))
         {
             var m = CostPartRx().Match(token);
             if (m.Success) req.Add("Cost:" + m.Groups[1].Value);
