@@ -33,7 +33,11 @@ public static class Coverage
     /// they alone block (implementing that one thing would make the card supported), then by
     /// how many cards need them at all — i.e. what to implement next.
     /// </summary>
-    public static CoverageReport Analyze(IEnumerable<ForgeCard> pool, EngineSupport support, int top = 30)
+    public static CoverageReport Analyze(IEnumerable<ForgeCard> pool, EngineSupport support, int top = 30) =>
+        Analyze(pool, card => (support.TierOf(card, out var missing), missing), top);
+
+    /// <summary>Coverage using any classifier, e.g. the engine's card compiler.</summary>
+    public static CoverageReport Analyze(IEnumerable<ForgeCard> pool, Func<ForgeCard, (SupportTier Tier, IReadOnlyCollection<string> Missing)> classify, int top = 30)
     {
         int cards = 0, scripted = 0, hand = 0;
         var needing = new Dictionary<string, int>();
@@ -41,7 +45,9 @@ public static class Coverage
         foreach (var card in pool)
         {
             cards++;
-            switch (support.TierOf(card, out var missing))
+            var (tier, missingSet) = classify(card);
+            var missing = missingSet.ToList();
+            switch (tier)
             {
                 case SupportTier.Scripted: scripted++; break;
                 case SupportTier.HandCoded: hand++; break;

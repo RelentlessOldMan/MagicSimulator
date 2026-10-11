@@ -1,0 +1,654 @@
+namespace MagicSim.Core.Engine;
+
+public sealed class GameSettings
+{
+    public int StartingLife { get; init; } = 40;
+    public int Opponents { get; init; } = 2;
+    public int OpponentLibrary { get; init; } = 99;
+    public bool OnThePlay { get; init; } = true;
+    public int MaxTurn { get; init; } = 10;
+    public int StartingHand { get; init; } = 7;
+    public bool FreeFirstMulligan { get; init; } = true;
+    public int MaxHandSize { get; init; } = 7;
+    /// <summary>Safety valve: a turn with more actions than this is cut short (loops).</summary>
+    public int MaxActionsPerTurn { get; init; } = 400;
+}
+
+/// <summary>
+/// The rules engine. One simulated player (index 0) plays against goldfish opponents that
+/// never act. Every choice goes through <see cref="Decider"/>. <see cref="Clone"/> copies the
+/// whole game for search.
+/// </summary>
+public sealed partial class Game
+{
+    public const int Me = 0;
+
+    public GameState State { get; private set; }
+    public GameSettings Settings { get; }
+    public IDecider Decider { get; set; }
+    /// <summary>Turn-by-turn log for `sim replay`; null when not wanted (search clones, bulk runs).</summary>
+    public List<string>? Log { get; set; }
+
+    private readonly List<PendingTrigger> _pending = new();
+
+    /// <summary>
+    /// True while carrying out the action just chosen in the priority loop (casting, paying,
+    /// resolving). Search only explores sub-decisions made in this window; it can reproduce them
+    /// by replaying from the snapshot taken at that ChooseAction.
+    /// </summary>
+    public bool InPriorityAction { get; private set; }
+
+    /// <summary>
+    /// Called when the player could stop doing things this turn (main phase, empty stack).
+    /// Search rollouts use it to score the best point they reached.
+    /// </summary>
+    public Action<Game>? OnCheckpoint { get; set; }
+    private int _actionsThisTurn;
+
+    public Game(GameState state, GameSettings settings, IDecider decider)
+    {
+        State = state;
+        Settings = settings;
+        Decider = decider;
+    }
+
+    public Game Clone(IDecider? decider = null)
+    {
+        var g = new Game(State.Clone(), Settings, decider ?? Decider) { _actionsThisTurn = _actionsThisTurn, MulligansTaken = MulligansTaken };
+        g._pending.AddRange(_pending);
+        return g;
+    }
+
+    public void Note(string text) => Log?.Add(State.Turn == 0 ? $"pregame: {text}" : $"T{State.Turn} {State.Step,-16} {text}");
+
+    // ---- setup ------------------------------------------------------------------------
+
+    /// <summary>A new goldfish game: shuffled library, commanders in the command zone, no hand yet.</summary>
+    public static Game NewGoldfish(IReadOnlyList<CardDef> library, IReadOnlyList<CardDef> commanders, GameSettings settings, Rng rng, IDecider decider)
+    {
+        var s = new GameState { Rng = rng, Turn = 0, Step = Step.Untap };
+        var players = new List<Player> { new() { Index = Me, Life = settings.StartingLife } };
+        for (var i = 1; i <= settings.Opponents; i++)
+            players.Add(new Player { Index = i, Life = settings.StartingLife, IsGoldfish = true, AbstractLibrary = settings.OpponentLibrary });
+        s.Players = players.ToArray();
+
+        foreach (var def in commanders)
+        {
+            var c = new Card { Id = s.Cards.Count, Def = def, Owner = Me, Controller = Me, Zone = Zone.Command, IsCommander = true };
+            s.Cards.Add(c);
+            s.Players[Me].Command.Add(c.Id);
+        }
+        foreach (var def in library)
+        {
+            var c = new Card { Id = s.Cards.Count, Def = def, Owner = Me, Controller = Me, Zone = Zone.Library };
+            s.Cards.Add(c);
+            s.Players[Me].Library.Add(c.Id);
+        }
+        s.Rng.Shuffle(s.Players[Me].Library);
+        return new Game(s, settings, decider);
+    }
+
+    // ---- the whole game ------------------------------------------------------------------
+
+    public int MulligansTaken { get; private set; }
+    public List<string> KeptHand { get; } = new();
+    public List<string> Bottomed { get; } = new();
+
+    /// <summary>London mulligan (rule 103.5), first one free in multiplayer (103.5c).</summary>
+    public void Mulligans()
+    {
+        var me = State.Players[Me];
+        while (true)
+        {
+            Draw(Me, Settings.StartingHand, record: false);
+            var mustKeep = Settings.StartingHand - BottomCount(MulligansTaken + 1) <= 0;
+            if (mustKeep || Decider.KeepHand(this, Me, MulligansTaken)) break;
+            MulligansTaken++;
+            Note($"mulligan #{MulligansTaken}");
+            foreach (var id in me.Hand.ToList()) MoveTo(State[id], Zone.Library, position: -1);
+            State.Rng.Shuffle(me.Library);
+        }
+        KeepCurrentHand();
+    }
+
+    /// <summary>Keeps the hand in hand: bottoms cards for the mulligans taken, records what was kept.</summary>
+    public void KeepCurrentHand()
+    {
+        var me = State.Players[Me];
+        var bottom = BottomCount(MulligansTaken);
+        if (bottom > 0)
+        {
+            var chosen = Decider.ChooseCards(this, Me, Choice.Bottom, null, me.Hand.ToList(), bottom, bottom);
+            foreach (var id in chosen)
+            {
+                Bottomed.Add(State[id].Name);
+                MoveTo(State[id], Zone.Library, position: -1);
+            }
+        }
+        foreach (var id in me.Hand)
+        {
+            KeptHand.Add(State[id].Name);
+            State.Record.Seen.Add(State[id].Name);
+        }
+        Note($"kept {me.Hand.Count}: {string.Join(", ", KeptHand)}" + (Bottomed.Count > 0 ? $" (bottomed {string.Join(", ", Bottomed)})" : ""));
+    }
+
+    private int BottomCount(int mulligans) => Math.Max(0, Settings.FreeFirstMulligan ? mulligans - 1 : mulligans);
+
+    /// <summary>Plays turns until someone wins or <see cref="GameSettings.MaxTurn"/> is reached.</summary>
+    public void PlayGame()
+    {
+        Mulligans();
+        while (!State.GameOver && State.Turn < Settings.MaxTurn)
+            RunTurn();
+    }
+
+    /// <summary>Steps of a turn in order. Each runs its start-of-step actions, then priority (except untap and cleanup).</summary>
+    private static readonly Step[] TurnSteps =
+    {
+        Step.Untap, Step.Upkeep, Step.Draw, Step.Main1, Step.BeginCombat, Step.DeclareAttackers, Step.CombatDamage,
+        Step.EndCombat, Step.Main2, Step.End, Step.Cleanup,
+    };
+
+    public void RunTurn()
+    {
+        State.Turn++;
+        State.ThisTurn = new TurnInfo();
+        State.Players[Me].LandsPlayedThisTurn = 0;
+        State.Attackers.Clear();
+        _actionsThisTurn = 0;
+        State.Step = Step.Untap;
+        Log?.Add($"--- turn {State.Turn} ---");
+        RunStepsFrom(0);
+    }
+
+    /// <summary>
+    /// Finishes the current turn from inside a priority loop: used by search on a cloned game
+    /// that was snapshotted mid-step.
+    /// </summary>
+    public void ResumeTurn()
+    {
+        PriorityLoop();
+        RunStepsFrom(Array.IndexOf(TurnSteps, State.Step) + 1);
+    }
+
+    private void RunStepsFrom(int index)
+    {
+        for (var i = index; i < TurnSteps.Length && !State.GameOver; i++)
+            ExecuteStep(TurnSteps[i]);
+        if (State.Step == Step.Cleanup || State.GameOver) EndTurnBookkeeping();
+    }
+
+    private void EndTurnBookkeeping()
+    {
+        if (State.Record.ManaByTurn.Count >= State.Turn) return;
+        State.Record.ManaByTurn.Add(State.ThisTurn.MaxManaSeen);
+        State.Record.StormMax = Math.Max(State.Record.StormMax, State.ThisTurn.SpellsCast);
+    }
+
+    private void ExecuteStep(Step step)
+    {
+        SetStep(step);
+        switch (step)
+        {
+            case Step.Untap:
+                foreach (var c in State.BattlefieldCards)
+                    if (c.Controller == Me) c.Tapped = false;
+                return;   // no priority in the untap step
+            case Step.Upkeep: FirePhase("Upkeep"); break;
+            case Step.Draw:
+                if (!(State.Turn == 1 && Settings.OnThePlay)) Draw(Me, 1);
+                FirePhase("Draw");
+                break;
+            case Step.Main1: FirePhase("Main1"); break;
+            case Step.BeginCombat: FirePhase("BeginCombat"); break;
+            case Step.DeclareAttackers: DeclareAttackers(); break;
+            case Step.CombatDamage: CombatDamage(); break;
+            case Step.EndCombat: State.Attackers.Clear(); break;
+            case Step.Main2: FirePhase("Main2"); break;
+            case Step.End: FirePhase("End of Turn"); break;
+            case Step.Cleanup: Cleanup(); return;   // no priority unless something triggers
+        }
+        if (!State.GameOver) PriorityLoop();
+    }
+
+    private void SetStep(Step step)
+    {
+        State.Step = step;
+        foreach (var p in State.Players) p.Pool.Clear();   // mana empties between steps (rule 500.4)
+    }
+
+    private void DeclareAttackers()
+    {
+        var candidates = State.BattlefieldCards
+            .Where(c => c.Controller == Me && c.Types.Is(CardType.Creature) && !c.Tapped && !IsSick(c) && !c.HasKeyword("Defender"))
+            .Select(c => c.Id).ToList();
+        var attackers = candidates.Count == 0 ? new List<int>() : Decider.ChooseAttackers(this, Me, candidates);
+        if (attackers.Count == 0) return;
+        State.Attackers.AddRange(attackers);
+        foreach (var id in attackers)
+        {
+            var a = State[id];
+            if (!a.HasKeyword("Vigilance")) a.Tapped = true;
+            Fire(new TriggerEvent(TriggerMode.Attacks, CardId: id));
+        }
+        Note("attack with " + string.Join(", ", attackers.Select(id => State[id].Name)));
+    }
+
+    private void CombatDamage()
+    {
+        // Goldfish opponents never block: everything hits the opponent with the least life left.
+        var defender = State.Players.Where(p => p.Index != Me && !p.Lost).OrderBy(p => p.Life).ThenBy(p => p.Index).FirstOrDefault();
+        if (defender is null) return;
+        foreach (var id in State.Attackers)
+        {
+            var a = State[id];
+            if (a.Zone != Zone.Battlefield) continue;
+            var dmg = Math.Max(0, a.Power) * (a.HasKeyword("Double Strike") ? 2 : 1);
+            if (dmg == 0) continue;
+            DamagePlayer(defender.Index, dmg, a);
+            if (a.IsCommander)
+                defender.CommanderDamageTaken[a.Id] = defender.CommanderDamageTaken.GetValueOrDefault(a.Id) + dmg;
+        }
+    }
+
+    private void Cleanup()
+    {
+        var me = State.Players[Me];
+        var excess = me.Hand.Count - Settings.MaxHandSize;
+        if (excess > 0)
+            foreach (var id in Decider.ChooseCards(this, Me, Choice.Discard, null, me.Hand.ToList(), excess, excess))
+                Discard(State[id]);
+        foreach (var c in State.BattlefieldCards)
+        {
+            c.Damage = 0;
+            c.PowerBonus = 0;
+            c.ToughnessBonus = 0;
+            c.TempKeywords = null;
+        }
+    }
+
+    // ---- priority ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Gives the simulated player priority until they pass with an empty stack. Goldfish
+    /// opponents always pass, so passing with a non-empty stack resolves its top item.
+    /// </summary>
+    public void PriorityLoop()
+    {
+        while (!State.GameOver)
+        {
+            CheckStateBasedActions();
+            if (State.GameOver) return;
+            if (_pending.Count > 0) { PutTriggersOnStack(); continue; }
+            TrackMana();
+            if (OnCheckpoint is not null && State.Stack.Count == 0 && State.Step is Step.Main1 or Step.Main2)
+                OnCheckpoint(this);
+
+            var legal = LegalActions(Me);
+            GameAction action = _actionsThisTurn >= Settings.MaxActionsPerTurn
+                ? GameAction.PassAction
+                : Decider.ChooseAction(this, Me, legal);
+            _actionsThisTurn++;
+            if (action is GameAction.Pass && State.Stack.Count == 0) return;
+            InPriorityAction = true;
+            try
+            {
+                if (action is GameAction.Pass) ResolveTop();
+                else Perform(action);
+            }
+            finally { InPriorityAction = false; }
+        }
+    }
+
+    public void Perform(GameAction action)
+    {
+        switch (action)
+        {
+            case GameAction.PlayLand pl: PlayLand(State[pl.CardId]); break;
+            case GameAction.Cast cast: CastSpell(State[cast.CardId], cast.SpellIndex); break;
+            case GameAction.Activate act: ActivateAbility(State[act.CardId], act.AbilityIndex); break;
+        }
+    }
+
+    private void TrackMana()
+    {
+        var available = State.Players[Me].Pool.Total + AutoSources(Me, -1).Where(s => State[s.CardId].Zone == Zone.Battlefield).Sum(s => s.Amount);
+        State.ThisTurn.MaxManaSeen = Math.Max(State.ThisTurn.MaxManaSeen, available);
+    }
+
+    public bool IsSick(Card c) =>
+        c.Types.Is(CardType.Creature) && c.ControlledSinceTurn >= State.Turn && !c.HasKeyword("Haste");
+
+    private bool IsMainPhaseEmptyStack(int player) =>
+        State.ActivePlayer == player && State.Stack.Count == 0 && State.Step is Step.Main1 or Step.Main2;
+
+    // ---- legal actions ----------------------------------------------------------------
+
+    public List<GameAction> LegalActions(int player)
+    {
+        var result = new List<GameAction> { GameAction.PassAction };
+        var p = State.Players[player];
+        var sorcerySpeed = IsMainPhaseEmptyStack(player);
+
+        // Identical cards in hand are interchangeable; offer each name once.
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in p.Hand.Concat(p.Command))
+        {
+            var c = State[id];
+            if (c.Zone == Zone.Hand && !seenNames.Add(c.Name)) continue;
+            if (c.Def.IsBlank) continue;
+
+            if (c.Zone == Zone.Hand && c.Types.Is(CardType.Land))
+            {
+                if (sorcerySpeed && p.LandsPlayedThisTurn < p.LandDropsPerTurn) result.Add(new GameAction.PlayLand(id));
+            }
+            else if (!c.Types.Is(CardType.Land))
+            {
+                var instantSpeed = c.Types.Is(CardType.Instant) || c.HasKeyword("Flash");
+                if (instantSpeed || sorcerySpeed)
+                {
+                    if (c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0)
+                    {
+                        if (CanCast(c, -1)) result.Add(new GameAction.Cast(id, -1));
+                    }
+                    else
+                        for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
+                            if (CanCast(c, i)) result.Add(new GameAction.Cast(id, i));
+                }
+            }
+
+            // Abilities usable from hand (e.g. "exile this from your hand: add {R}").
+            if (c.Zone == Zone.Hand)
+                for (var i = 0; i < c.CurrentFace.Activated.Count; i++)
+                {
+                    var ab = c.CurrentFace.Activated[i];
+                    if (ab["ActivationZone"] == "Hand" && !IsAutoManaAbility(ab) && CanActivate(c, ab, sorcerySpeed)) result.Add(new GameAction.Activate(id, i));
+                }
+        }
+
+        var seenPermanents = new HashSet<(string, bool, bool)>();
+        foreach (var c in State.BattlefieldCards)
+        {
+            if (c.Controller != player || c.Def.IsBlank) continue;
+            if (c.Counters is null && !seenPermanents.Add((c.Name, c.Tapped, IsSick(c)))) continue;
+            for (var i = 0; i < c.CurrentFace.Activated.Count; i++)
+            {
+                var ab = c.CurrentFace.Activated[i];
+                if (ab["ActivationZone"] is not null) continue;
+                if (IsAutoManaAbility(ab)) continue;   // used automatically when paying
+                if (CanActivate(c, ab, sorcerySpeed)) result.Add(new GameAction.Activate(c.Id, i));
+            }
+        }
+        return result;
+    }
+
+    private bool CanActivate(Card c, AbilityDef ab, bool sorcerySpeed)
+    {
+        if (ab["SorcerySpeed"] == "True" && !sorcerySpeed) return false;
+        if (!CanPayCost(ab.Cost, c, c.Controller, 0, excludeSourceFromMana: ab.Cost.Tap)) return false;
+        return HasLegalTargets(c, ab);
+    }
+
+    private bool HasLegalTargets(Card source, AbilityDef head)
+    {
+        foreach (var ab in head.Chain())
+            if (ab.TargetFilter is not null && ab.TargetMin > 0 && TargetCandidates(source, ab, source.Controller).Count < ab.TargetMin)
+                return false;
+        return true;
+    }
+
+    // ---- lands, casting, activating ---------------------------------------------------
+
+    public void PlayLand(Card land)
+    {
+        State.Players[land.Controller].LandsPlayedThisTurn++;
+        Note($"play {land.Name}");
+        State.Record.Cast.Add(land.Name);
+        MoveTo(land, Zone.Battlefield);
+    }
+
+    /// <summary>The spell's cost: its spell ability's Cost$ (which includes any mana) or the face's mana cost, plus commander tax.</summary>
+    private Cost SpellCost(Card c, int spellIndex)
+    {
+        Cost cost;
+        if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].Cost is { } abCost && c.CurrentFace.SpellAbilities[spellIndex]["Cost"] is not null)
+            cost = abCost;
+        else
+            cost = new Cost { Mana = c.CurrentFace.ManaCost };
+        if (c.Zone == Zone.Command && c.CommandCasts > 0)
+            cost = new Cost { Mana = cost.Mana.WithExtraGeneric(2 * c.CommandCasts), Tap = cost.Tap, Parts = cost.Parts };
+        return cost;
+    }
+
+    public bool CanCast(Card c, int spellIndex)
+    {
+        var cost = SpellCost(c, spellIndex);
+        if (cost.Mana.NoCost) return false;
+        if (!CanPayCost(cost, c, c.Controller, 0, excludeSourceFromMana: true)) return false;
+        return spellIndex < 0 || HasLegalTargets(c, c.CurrentFace.SpellAbilities[spellIndex]);
+    }
+
+    public void CastSpell(Card c, int spellIndex)
+    {
+        var player = c.Controller;
+        var from = c.Zone;
+        var cost = SpellCost(c, spellIndex);
+        var ability = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : PermanentSpell;
+
+        var x = 0;
+        if (cost.Mana.XCount > 0)
+            x = Decider.ChooseX(this, player, c, MaxAffordableX(cost, c, player));
+
+        // Move to the stack first (rule 601.2a), then choose targets and pay.
+        RemoveFromZone(c);
+        c.Zone = Zone.Stack;
+        var item = new StackItem
+        {
+            Id = State.NextStackId++, SourceId = c.Id, Ability = ability, Controller = player, IsSpell = true, X = x,
+            ChainTargets = ChooseChainTargets(c, ability, player), Description = c.Name,
+        };
+        if (!PayCost(cost, c, player, x, excludeSourceFromMana: true))
+            throw new InvalidOperationException($"could not pay for {c.Name} after checking it was castable");
+        if (from == Zone.Command) c.CommandCasts++;
+        c.XPaid = x;
+        State.Stack.Add(item);
+        State.ThisTurn.SpellsCast++;
+        State.Record.Cast.Add(c.Name);
+        Note($"cast {c.Name}" + (x > 0 ? $" (X={x})" : "") + TargetText(item) + $" — pool {State.Players[player].Pool}");
+
+        if (c.HasKeyword("Storm"))
+        {
+            var copies = State.ThisTurn.SpellsCast - 1;
+            for (var i = 0; i < copies; i++)
+                State.Stack.Add(new StackItem
+                {
+                    Id = State.NextStackId++, SourceId = c.Id, Ability = ability, Controller = player, IsSpell = false, X = x,
+                    ChainTargets = ChooseChainTargets(c, ability, player), Description = c.Name + " (storm copy)",
+                });
+            if (copies > 0) Note($"storm: {copies} cop{(copies == 1 ? "y" : "ies")}");
+        }
+        Fire(new TriggerEvent(TriggerMode.SpellCast, CardId: c.Id, Player: player));
+    }
+
+    public void ActivateAbility(Card c, int abilityIndex)
+    {
+        var ab = c.CurrentFace.Activated[abilityIndex];
+        var player = c.Controller;
+        var x = 0;
+        if (ab.Cost.Mana.XCount > 0) x = Decider.ChooseX(this, player, c, MaxAffordableX(ab.Cost, c, player));
+        var targets = ChooseChainTargets(c, ab, player);
+        if (!PayCost(ab.Cost, c, player, x, excludeSourceFromMana: ab.Cost.Tap))
+            throw new InvalidOperationException($"could not pay for {c.Name}'s ability after checking it was activatable");
+        var item = new StackItem
+        {
+            Id = State.NextStackId++, SourceId = c.Id, Ability = ab, Controller = player, X = x, ChainTargets = targets,
+            Description = $"{c.Name}: {ab.Description}",
+        };
+        Note($"activate {c.Name}: {ab.Description}" + TargetText(item));
+        if (ab.IsManaAbility)
+        {
+            RunChain(item);   // mana abilities don't use the stack (rule 605.3)
+            Note($"  pool {State.Players[player].Pool}");
+        }
+        else State.Stack.Add(item);
+    }
+
+    private static string TargetText(StackItem item)
+    {
+        var all = item.ChainTargets.SelectMany(t => t).ToList();
+        return all.Count == 0 ? "" : " → " + string.Join(", ", all);
+    }
+
+    /// <summary>A permanent spell's "ability": resolving puts the card onto the battlefield.</summary>
+    public static readonly AbilityDef PermanentSpell = new()
+    {
+        P = new Forge.ForgeParams("SP$ PermanentSpell"), Api = "PermanentSpell", Kind = AbilityKind.Spell,
+    };
+
+    // ---- targets ----------------------------------------------------------------------
+
+    public List<TargetRef> TargetCandidates(Card source, AbilityDef ab, int controller)
+    {
+        var list = new List<TargetRef>();
+        if (ab.TargetFilter is not { } f) return list;
+        var x = new EffectContext
+        {
+            Game = this, Ability = ab,
+            Item = new StackItem { SourceId = source.Id, Ability = ab, Controller = controller },
+        };
+        if (f.CanTargetPlayers)
+            foreach (var p in State.Players)
+                if (!p.Lost && f.MatchesPlayer(p.Index, x)) list.Add(TargetRef.OfPlayer(p.Index));
+        if (f.CanTargetCards)
+        {
+            var zone = ab["TgtZone"] switch
+            {
+                "Graveyard" => Zone.Graveyard,
+                "Stack" => Zone.Stack,
+                "Exile" => Zone.Exile,
+                "Hand" => Zone.Hand,
+                _ => ab["TargetType"] == "Spell" ? Zone.Stack : Zone.Battlefield,
+            };
+            foreach (var c in CardsIn(zone))
+                if (f.MatchesCard(c, x)) list.Add(TargetRef.OfCard(c.Id));
+        }
+        return list;
+    }
+
+    private List<List<TargetRef>> ChooseChainTargets(Card source, AbilityDef head, int controller)
+    {
+        var result = new List<List<TargetRef>>();
+        foreach (var ab in head.Chain())
+        {
+            if (ab.TargetFilter is null) { result.Add(new()); continue; }
+            var candidates = TargetCandidates(source, ab, controller);
+            var max = Math.Min(ab.TargetMax, candidates.Count);
+            var min = Math.Min(ab.TargetMin, max);
+            result.Add(max == 0 ? new() : Decider.ChooseTargets(this, controller, source, ab, candidates, min, max));
+        }
+        return result;
+    }
+
+    // ---- resolving --------------------------------------------------------------------
+
+    public void ResolveTop()
+    {
+        var item = State.Stack[^1];
+        State.Stack.RemoveAt(State.Stack.Count - 1);
+        var source = State[item.SourceId];
+        Note($"resolve {item.Description}");
+
+        if (item.IsSpell && item.Ability == PermanentSpell)
+        {
+            if (source.Zone == Zone.Stack) MoveTo(source, Zone.Battlefield);
+            return;
+        }
+        if (TargetsAllGone(item))
+        {
+            Note($"  {item.Description} fizzles (no legal targets)");
+            if (item.IsSpell && source.Zone == Zone.Stack) MoveTo(source, Zone.Graveyard);
+            return;
+        }
+        RunChain(item);
+        if (item.IsSpell && source.Zone == Zone.Stack) MoveTo(source, Zone.Graveyard);
+    }
+
+    private bool TargetsAllGone(StackItem item)
+    {
+        var all = item.ChainTargets.SelectMany(t => t).ToList();
+        if (all.Count == 0) return false;
+        return all.All(t => t.Player is { } p ? State.Players[p].Lost : State[t.CardId!.Value].Zone is Zone.None);
+    }
+
+    public void RunChain(StackItem item)
+    {
+        for (var ab = item.Ability; ab is not null && !State.GameOver; ab = ab.Sub)
+        {
+            var ctx = new EffectContext { Game = this, Item = item, Ability = ab };
+            if (!Conditions.Hold(ctx)) continue;
+            var handler = Effects.Get(ab.Api) ?? throw new InvalidOperationException($"no handler for {ab.Api}");
+            handler.Resolve(ctx);
+        }
+    }
+
+    // ---- state-based actions & game end -----------------------------------------------
+
+    public void CheckStateBasedActions()
+    {
+        if (State.GameOver) return;
+        foreach (var p in State.Players)
+        {
+            if (p.Lost) continue;
+            if (p.Life <= 0) Lose(p, "life");
+            else if (p.Poison >= 10) Lose(p, "poison");
+            else if (p.DrewFromEmpty) Lose(p, "drew from an empty library");
+            else if (p.CommanderDamageTaken.Values.Any(d => d >= 21)) Lose(p, "commander damage");
+            else if (p.IsGoldfish && p.AbstractLibrary <= 0) Lose(p, "decked (loses at their next draw)");
+        }
+        foreach (var c in State.BattlefieldCards.ToList())
+            if (c.Types.Is(CardType.Creature) && c.Toughness <= 0 || c.Types.Is(CardType.Creature) && c.Damage >= c.Toughness && c.Toughness > 0 && !c.HasKeyword("Indestructible"))
+                MoveTo(c, Zone.Graveyard);
+        // Legend rule (704.5j): keep the newest.
+        var legends = State.BattlefieldCards.Where(c => c.Types.Has(SuperType.Legendary)).GroupBy(c => (c.Controller, c.Name)).Where(g => g.Count() > 1);
+        foreach (var grp in legends.ToList())
+            foreach (var old in grp.OrderBy(c => c.ControlledSinceTurn).ThenBy(c => c.Id).SkipLast(1).ToList())
+                MoveTo(old, Zone.Graveyard);
+
+        if (!State.GameOver && State.Players.Where(p => p.Index != Me).All(p => p.Lost))
+            Win(Me, State.Record.LastHitBy ?? "opponents eliminated");
+    }
+
+    private void Lose(Player p, string reason)
+    {
+        p.Lost = true;
+        p.LossReason = reason;
+        Note($"player {p.Index} loses ({reason})");
+        if (p.Index == Me)
+        {
+            State.GameOver = true;
+            State.Winner = null;
+            State.WinReason = null;
+        }
+    }
+
+    public void Win(int player, string reason)
+    {
+        if (State.GameOver) return;
+        State.GameOver = true;
+        State.Winner = player;
+        State.WinReason = reason;
+        Note($"player {player} wins ({reason})");
+    }
+
+    public bool Won => State.GameOver && State.Winner == Me;
+
+    /// <summary>The combined color identity of a player's commanders (for "Combo ColorIdentity" mana).</summary>
+    public ColorMask CommanderIdentity(int player)
+    {
+        ColorMask m = 0;
+        foreach (var c in State.Cards)
+            if (c.IsCommander && c.Owner == player) m |= c.Def.ColorIdentity;
+        return m;
+    }
+}

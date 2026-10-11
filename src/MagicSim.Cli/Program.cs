@@ -3,6 +3,8 @@ using MagicSim.Core.Cards;
 using MagicSim.Core.Decks;
 using MagicSim.Core.Forge;
 using MagicSim.Core.Engine;
+using MagicSim.Core.Players;
+using MagicSim.Core.Sim;
 
 namespace MagicSim.Cli;
 
@@ -15,6 +17,7 @@ public static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        Console.OutputEncoding = new System.Text.UTF8Encoding(false);
         if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
             return Usage(args.Length == 0 ? UsageError : Ok);
 
@@ -27,6 +30,8 @@ public static class Program
                 "check" => Check(opts),
                 "sync-forge" => SyncForge(opts),
                 "cards" => Cards(opts),
+                "run" => Run(opts),
+                "replay" => Replay(opts),
                 _ => Fail(UsageError, $"unknown command: {args[0]}"),
             };
         }
@@ -78,11 +83,16 @@ public static class Program
         o.RequirePositional(0);
         var forge = ForgeLibrary.Load(o.Get("--forge"));
         var index = CardIndex.Load(o.Get("--cards"));
-        var support = Support.Current;
+        var cardPool = new CardPool(forge, index);
+        (SupportTier, IReadOnlyCollection<string>) Classify(ForgeCard fc)
+        {
+            var def = cardPool.Compile(fc.FullName)!;
+            return (def.Supported ? SupportTier.Scripted : SupportTier.Unsupported, def.Missing);
+        }
 
         // The pool is every Commander-legal (or banned) card Forge has a script for.
         var pool = forge.Cards.Where(c => index.Find(c.FullName) is { CommanderLegality: "legal" or "banned" }).ToList();
-        var report = Coverage.Analyze(pool, support);
+        var report = Coverage.Analyze(pool, Classify);
 
         object? deckPart = null;
         if (o.Get("--deck") is { } deckPath)
@@ -95,8 +105,8 @@ public static class Program
                 {
                     var fc = forge.Find(e.Name);
                     if (fc is null) return new { name = e.Name, tier = "unsupported", missing = new List<string> { "NoForgeScript" } };
-                    var tier = support.TierOf(fc, out var missing);
-                    return new { name = e.Name, tier = TierName(tier), missing };
+                    var (tier, missing) = Classify(fc);
+                    return new { name = e.Name, tier = TierName(tier), missing = missing.ToList() };
                 }).ToList(),
             };
         }
@@ -118,6 +128,71 @@ public static class Program
             },
             deck = deckPart,
         }, JsonOut));
+        return Ok;
+    }
+
+    private static RunOptions RunOptionsFrom(Options o, bool single = false)
+    {
+        int Int(string key, int fallback, int min = 1)
+        {
+            if (o.Get(key) is not { } v) return fallback;
+            if (!int.TryParse(v, out var n) || n < min) throw new UsageException($"{key} must be an integer >= {min}");
+            return n;
+        }
+        var mull = (o.Get("--mull") ?? (single ? "C" : "all")).ToUpperInvariant();
+        var mulls = mull == "ALL" ? new[] { MulliganPolicy.A, MulliganPolicy.B, MulliganPolicy.C }
+            : Enum.TryParse<MulliganPolicy>(mull, out var m) ? new[] { m } : throw new UsageException("--mull must be A, B, C or all");
+        var seat = o.Get("--seat") ?? (single ? "play" : "both");
+        var seats = seat switch
+        {
+            "both" when !single => new[] { "play", "draw" },
+            "play" or "draw" => new[] { seat },
+            _ => throw new UsageException(single ? "--seat must be play or draw" : "--seat must be play, draw or both"),
+        };
+        var seedText = o.Get("--seed") ?? "1";
+        if (!ulong.TryParse(seedText, out var seed)) throw new UsageException("--seed must be a non-negative integer");
+        return new RunOptions
+        {
+            Games = Int("--games", 10000), Seed = seed, MaxTurn = Int("--max-turn", 10), Mulligans = mulls, Seats = seats,
+            Rollouts = Int("--rollouts", 6), Threads = Int("--threads", Environment.ProcessorCount),
+        };
+    }
+
+    private static (Runner.PreparedDeck Deck, string Path) LoadDeck(Options o)
+    {
+        var path = o.RequirePositional(1)[0];
+        var deck = DeckReader.ReadFile(path);
+        var pool = new CardPool(ForgeLibrary.Load(o.Get("--forge")), CardIndex.Load(o.Get("--cards")));
+        return (Runner.Prepare(deck, pool), path);
+    }
+
+    private static int Run(Options o)
+    {
+        var opts = RunOptionsFrom(o);
+        var (deck, path) = LoadDeck(o);
+        var total = opts.Games * opts.Mulligans.Count * opts.Seats.Count;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var games = Runner.Run(deck, opts, progress: new Progress<int>(n =>
+            Console.Error.Write($"\r{n}/{total} games ({sw.Elapsed.TotalSeconds:F0}s)")));
+        Console.Error.WriteLine($"\r{total}/{total} games in {sw.Elapsed.TotalSeconds:F1}s");
+        if (o.Get("--per-game") is { } perGame)
+            File.WriteAllLines(perGame, games.Select(Report.GameLine), new System.Text.UTF8Encoding(false));
+        Emit(o, JsonSerializer.Serialize(Report.RunDocument(deck, path, opts, games), Report.Json));
+        return Ok;
+    }
+
+    private static int Replay(Options o)
+    {
+        var opts = RunOptionsFrom(o, single: true);
+        if (o.Get("--game") is not { } gameText || !int.TryParse(gameText, out var game) || game < 0)
+            throw new UsageException("replay needs --game <index>");
+        var (deck, _) = LoadDeck(o);
+        var log = new List<string>();
+        var r = Runner.PlayOne(deck, opts, game, opts.Mulligans[0], opts.Seats[0], log: log);
+        foreach (var line in log) Console.WriteLine(line);
+        Console.WriteLine();
+        Console.WriteLine(r.Won ? $"WON on turn {r.WinTurn} ({r.WinLine})" : $"no win by turn {opts.MaxTurn} ({r.FailReason})");
+        if (deck.Unsupported.Count > 0) Console.WriteLine($"unsupported (blank) cards in deck: {string.Join(", ", deck.Unsupported)}");
         return Ok;
     }
 
@@ -153,7 +228,11 @@ public static class Program
               cards [--deck x.txt] [--forge dir] [--cards path] [--json out.json]
                                                    card support: whole-pool coverage, per-deck tiers
 
-            Planned (see CONTRACT.md): run, compare, replay.
+              run <deck.txt> [--games N] [--seed S] [--mull A|B|C|all] [--seat play|draw|both] [--max-turn T]
+                  [--rollouts R] [--threads N] [--json out.json] [--per-game games.jsonl]
+              replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--max-turn T]
+
+            Planned (see CONTRACT.md): compare.
             Card index path: --cards, else %MAGICSIM_CARDS%, else %LOCALAPPDATA%\MagicSim\oracle-cards.jsonl.gz
             """);
         return code;
