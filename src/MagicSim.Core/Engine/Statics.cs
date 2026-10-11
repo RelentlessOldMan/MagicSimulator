@@ -101,7 +101,7 @@ public static class Statics
     private static readonly HashSet<string> ContinuousParams = new(StringComparer.Ordinal)
     {
         "Affected", "AffectedDefined", "AddPower", "AddToughness", "AddKeyword", "SetPower", "SetToughness",
-        "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize",
+        "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize", "MayPlay", "MayPlayWithoutManaCost",
     };
 
     private static readonly HashSet<string> ReduceCostParams = new(StringComparer.Ordinal)
@@ -153,8 +153,15 @@ public static class Statics
     {
         if (s["AffectedDefined"] is { } ad && ad is not ("Self" or "Enchanted" or "Equipped")) ctx.Need("AffectedDefined:" + ad);
         if (s["Affected"] is { } a) Filter.Parse(a, ctx);
-        if (s["AffectedZone"] is { } az && az != "Battlefield") ctx.Need("AffectedZone:" + az);
-        if (s["EffectZone"] is { } ez && ez is not ("Battlefield" or "All")) ctx.Need("EffectZone:" + ez);
+        if (s["MayPlay"] is { } mp)
+        {
+            // "You may play/cast [cards] from [zone]": impulse draw, Future Sight, Bolas's Citadel-style.
+            if (mp != "True") ctx.Need("MayPlay:" + mp);
+            if (s["AffectedZone"] is not ("Exile" or "Graveyard" or "Library" or "Command")) ctx.Need("MayPlay.AffectedZone:" + s["AffectedZone"]);
+            if (s.P.Values.Keys.Any(k => k is "AddPower" or "AddToughness" or "AddKeyword" or "SetPower" or "SetToughness")) ctx.Need("MayPlay+Modify");
+        }
+        else if (s["AffectedZone"] is { } az && az != "Battlefield") ctx.Need("AffectedZone:" + az);
+        if (s["EffectZone"] is { } ez && ez is not ("Battlefield" or "All" or "Command")) ctx.Need("EffectZone:" + ez);
         foreach (var key in new[] { "AddPower", "AddToughness", "SetPower", "SetToughness", "AdjustLandPlays" })
             if (s[key] is { } v && v != "Unlimited") Amount.Parse(v, ctx);
         if (s["SetMaxHandSize"] is { } mh && mh != "Unlimited") Amount.Parse(mh, ctx);
@@ -174,12 +181,9 @@ public static class Statics
     {
         var s = g.State;
         var active = new List<(Card Source, StaticDef Static, EffectContext X)>();
-        foreach (var c in s.BattlefieldCards)
-        {
-            if (c.Def.IsBlank) continue;
+        foreach (var c in Sources(g))
             foreach (var st in c.CurrentFace.Statics)
-                if (st.Mode == "Continuous") active.Add((c, st, ContextFor(g, c)));
-        }
+                if (st.Mode == "Continuous" && st["MayPlay"] is null) active.Add((c, st, ContextFor(g, c)));
         if (active.Count == 0 && !g.StaticsApplied) return;
         g.StaticsApplied = active.Count > 0;
 
@@ -220,6 +224,38 @@ public static class Statics
                 if (st["SetMaxHandSize"] is { } mh) p.StaticMaxHandSize = mh == "Unlimited" ? int.MaxValue : Effect.EvalAmount(x, mh);
             }
         }
+    }
+
+    /// <summary>Where static abilities work from: the battlefield, plus effects and emblems in command zones.</summary>
+    public static IEnumerable<Card> Sources(Game g)
+    {
+        foreach (var c in g.State.BattlefieldCards)
+            if (!c.Def.IsBlank && c.CurrentFace.Statics.Count > 0) yield return c;
+        foreach (var p in g.State.Players)
+            foreach (var id in p.Command)
+                if (g.State[id].IsEffect) yield return g.State[id];
+    }
+
+    /// <summary>Cards outside the hand that <paramref name="player"/> may play now, and whether without paying their mana cost.</summary>
+    public static Dictionary<int, bool> MayPlay(Game g, int player)
+    {
+        var result = new Dictionary<int, bool>();
+        foreach (var source in Sources(g))
+        {
+            if (source.Controller != player) continue;
+            foreach (var st in source.CurrentFace.Statics)
+            {
+                if (st.Mode != "Continuous" || st["MayPlay"] != "True") continue;
+                var x = ContextFor(g, source);
+                if (!Presence.Hold(st.P, x)) continue;
+                var zone = Enum.Parse<Zone>(st["AffectedZone"]!);
+                var filter = st["Affected"] is { } a ? Effect.FilterFor(source.CurrentFace, a) : null;
+                foreach (var c in g.CardsIn(zone))
+                    if (c.Owner == player && !c.IsEffect && (filter is null || filter.MatchesCard(c, x)))
+                        result[c.Id] = result.GetValueOrDefault(c.Id) || st["MayPlayWithoutManaCost"] == "True";
+            }
+        }
+        return result;
     }
 
     private static IEnumerable<Card> AffectedCards(Game g, Card source, StaticDef st, EffectContext x)

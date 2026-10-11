@@ -74,6 +74,14 @@ public class MechanicsTests
         "Name:Stone\nManaCost:2\nTypes:Artifact\nA:AB$ ManaReflected | Cost$ T | ColorOrType$ Color | Valid$ Land.OppCtrl | ReflectProperty$ Produce\n",
         "Name:Pool\nManaCost:no cost\nTypes:Land\nA:AB$ ManaReflected | Cost$ T | ColorOrType$ Type | Valid$ Land.YouCtrl | ReflectProperty$ Produce\n",
         "Name:Sprout\nManaCost:G\nTypes:Sorcery\nA:SP$ Draw | NumCards$ 1\n",
+        "Name:Impulse\nManaCost:0\nTypes:Sorcery\n" +
+        "A:SP$ Dig | Defined$ You | DigNum$ 1 | ChangeNum$ All | DestinationZone$ Exile | RememberChanged$ True | SubAbility$ DBEffect\n" +
+        "SVar:DBEffect:DB$ Effect | StaticAbilities$ STPlay | RememberObjects$ Remembered | ForgetOnMoved$ Exile | SubAbility$ DBCleanup\n" +
+        "SVar:STPlay:Mode$ Continuous | MayPlay$ True | Affected$ Card.IsRemembered | AffectedZone$ Exile\n" +
+        "SVar:DBCleanup:DB$ Cleanup | ClearRemembered$ True\n",
+        "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
+        "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
+        "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
     };
 
     private static readonly Dictionary<string, string> Tokens = new()
@@ -384,6 +392,30 @@ public class MechanicsTests
         var g = Setup(new[] { "Sprout", "Recall" }, battlefield: new[] { "Pool", "Bog" });
         Assert.False(g.CanCast(g.State[InHand(g, "Sprout")], 0));   // Bog only makes {B}
         Assert.True(g.CanCast(g.State[InHand(g, "Recall")], 0));    // Pool reflects {B}; Bog pays the other
+    }
+
+    [Fact]
+    public void ImpulseDrawLetsYouPlayTheExiledCardThisTurnOnly()
+    {
+        var g = Setup(new[] { "Impulse" }, library: new[] { "Plain", "Filler" });
+        g.CastSpell(g.State[InHand(g, "Impulse")], 0);
+        ResolveAll(g);
+        var plain = g.State.Cards.First(c => c.Name == "Plain");
+        Assert.Equal(Zone.Exile, plain.Zone);
+        Assert.Contains(g.LegalActions(Game.Me), a => a is GameAction.PlayLand pl && pl.CardId == plain.Id);
+        g.ExpireEffects("cleanup");
+        Assert.DoesNotContain(g.LegalActions(Game.Me), a => a is GameAction.PlayLand);
+    }
+
+    [Fact]
+    public void ChosenCreatureTypeGetsTheBonus()
+    {
+        var g = Setup(new[] { "Banner" }, battlefield: new[] { "Bear", "Sneak" });
+        g.CastSpell(g.State[InHand(g, "Banner")], -1);
+        ResolveAll(g);
+        Assert.Equal("Bear", OnBattlefield(g, "Banner").ChosenType);
+        Assert.Equal(3, OnBattlefield(g, "Bear").Power);
+        Assert.Equal(1, OnBattlefield(g, "Sneak").Power);
     }
 
     [Fact]

@@ -106,6 +106,66 @@ public sealed partial class Game
             RunChain(new StackItem { SourceId = c.Id, Ability = r, Controller = c.Controller, X = c.XPaid, Description = c.Name + " enters" });
     }
 
+    /// <summary>Creates an effect object (Forge "Effect") in its controller's command zone.</summary>
+    public Card CreateEffect(CardDef def, int controller, Card host, string? duration, string? exileOnMoved, string? forgetOnMoved)
+    {
+        var c = new Card
+        {
+            Id = State.Cards.Count, Def = def, Owner = controller, Controller = controller, Zone = Zone.Command, IsEffect = true,
+            EffectDuration = duration, EffectTurn = State.Turn, EffectHost = host.Id, ExileOnMoved = exileOnMoved, ForgetOnMoved = forgetOnMoved,
+        };
+        State.Cards.Add(c);
+        State.Players[controller].Command.Add(c.Id);
+        Note($"  effect: {def.Name}" + (duration is null ? " (this turn)" : $" ({duration})"));
+        return c;
+    }
+
+    public void EndEffect(Card effect)
+    {
+        if (effect.Zone != Zone.Command) return;
+        State.Players[effect.Controller].Command.Remove(effect.Id);
+        effect.Zone = Zone.None;
+    }
+
+    /// <summary>Ends effects whose time is up. <paramref name="moment"/> is "cleanup" (end of turn) or "untap" (start of a turn).</summary>
+    public void ExpireEffects(string moment)
+    {
+        foreach (var p in State.Players)
+            foreach (var id in p.Command.ToList())
+            {
+                var e = State[id];
+                if (!e.IsEffect) continue;
+                var ends = (moment, e.EffectDuration) switch
+                {
+                    ("cleanup", null or "EndOfTurn" or "UntilHostLeavesPlayOrEOT") => true,
+                    ("cleanup", "UntilTheEndOfYourNextTurn") => e.EffectTurn < State.Turn,
+                    ("untap", "UntilYourNextTurn") => e.EffectTurn < State.Turn,
+                    _ => false,
+                };
+                if (ends) EndEffect(e);
+            }
+    }
+
+    /// <summary>Effects tied to a card or to remembered cards end or forget when those move (state-based check).</summary>
+    private void CheckEffectLinks()
+    {
+        foreach (var p in State.Players)
+            foreach (var id in p.Command.ToList())
+            {
+                var e = State[id];
+                if (!e.IsEffect) continue;
+                if (e.EffectDuration is "UntilHostLeavesPlay" or "UntilHostLeavesPlayOrEOT" && State[e.EffectHost].Zone != Zone.Battlefield)
+                {
+                    EndEffect(e);
+                    continue;
+                }
+                if (e.ForgetOnMoved is { } fz && e.Remembered is { } rem)
+                    rem.RemoveAll(r => State[r].Zone.ToString() != fz);
+                if (e.ExileOnMoved is { } ez && e.Remembered is { } rem2 && rem2.Any(r => State[r].Zone.ToString() != ez))
+                    EndEffect(e);
+            }
+    }
+
     /// <summary>Taps a permanent, firing "whenever this becomes tapped" triggers.</summary>
     public void Tap(Card c)
     {
@@ -233,6 +293,7 @@ public sealed partial class Game
         // Sources: permanents on the battlefield, plus the moved card itself (it "looks back"
         // for leaves-the-battlefield and "when this is put into a graveyard" triggers).
         var sources = State.Battlefield.ToList();
+        foreach (var p in State.Players) sources.AddRange(p.Command);
         if (e.CardId is { } moved && !sources.Contains(moved)) sources.Add(moved);
         foreach (var id in sources)
         {

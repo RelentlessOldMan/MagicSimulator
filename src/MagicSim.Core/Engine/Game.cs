@@ -194,6 +194,7 @@ public sealed partial class Game
         switch (step)
         {
             case Step.Untap:
+                ExpireEffects("untap");
                 foreach (var c in State.BattlefieldCards)
                     if (c.Controller == Me && !c.CurrentFace.DoesntUntap) c.Tapped = false;
                 return;   // no priority in the untap step
@@ -288,6 +289,7 @@ public sealed partial class Game
             c.TempKeywords = null;
             c.RegenShields = 0;
         }
+        ExpireEffects("cleanup");
     }
 
     // ---- priority ---------------------------------------------------------------------
@@ -359,26 +361,8 @@ public sealed partial class Game
         {
             var c = State[id];
             if (c.Zone == Zone.Hand && !seenNames.Add(c.Name)) continue;
-            if (c.Def.IsBlank) continue;
-
-            if (c.Zone == Zone.Hand && c.Types.Is(CardType.Land))
-            {
-                if (sorcerySpeed && p.LandsPlayedThisTurn < p.LandDropsPerTurn + p.StaticLandDrops) result.Add(new GameAction.PlayLand(id));
-            }
-            else if (!c.Types.Is(CardType.Land))
-            {
-                var instantSpeed = c.Types.Is(CardType.Instant) || c.HasKeyword("Flash");
-                if (instantSpeed || sorcerySpeed)
-                {
-                    if (c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0)
-                    {
-                        if (CanCast(c, -1)) result.Add(new GameAction.Cast(id, -1));
-                    }
-                    else
-                        for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
-                            if (CanCast(c, i)) result.Add(new GameAction.Cast(id, i));
-                }
-            }
+            if (c.Def.IsBlank || c.IsEffect) continue;
+            AddPlayOrCast(result, c, p, sorcerySpeed);
 
             // Abilities usable from hand (e.g. "exile this from your hand: add {R}").
             if (c.Zone == Zone.Hand)
@@ -387,6 +371,14 @@ public sealed partial class Game
                     var ab = c.CurrentFace.Activated[i];
                     if (ab["ActivationZone"] == "Hand" && !IsAutoManaAbility(ab) && CanActivate(c, ab, sorcerySpeed)) result.Add(new GameAction.Activate(id, i));
                 }
+        }
+
+        // Cards an effect lets you play from exile, the graveyard or the top of your library.
+        foreach (var id in Statics.MayPlay(this, player).Keys)
+        {
+            var c = State[id];
+            if (c.Zone is Zone.Hand or Zone.Stack || c.Def.IsBlank || !seenNames.Add("mayplay:" + c.Name)) continue;
+            AddPlayOrCast(result, c, p, sorcerySpeed);
         }
 
         // Flashback: cast from the graveyard.
@@ -413,6 +405,25 @@ public sealed partial class Game
             }
         }
         return result;
+    }
+
+    /// <summary>Adds playing <paramref name="c"/> as a land, or casting it with each of its spell abilities, if allowed now.</summary>
+    private void AddPlayOrCast(List<GameAction> result, Card c, Player p, bool sorcerySpeed)
+    {
+        if (c.Types.Is(CardType.Land))
+        {
+            if (c.Zone != Zone.Command && sorcerySpeed && p.LandsPlayedThisTurn < p.LandDropsPerTurn + p.StaticLandDrops)
+                result.Add(new GameAction.PlayLand(c.Id));
+            return;
+        }
+        if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed)) return;
+        if (c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0)
+        {
+            if (CanCast(c, -1)) result.Add(new GameAction.Cast(c.Id, -1));
+        }
+        else
+            for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
+                if (CanCast(c, i)) result.Add(new GameAction.Cast(c.Id, i));
     }
 
     private bool CanActivate(Card c, AbilityDef ab, bool sorcerySpeed)
@@ -454,6 +465,9 @@ public sealed partial class Game
             cost = abCost;
         else
             cost = new Cost { Mana = c.CurrentFace.ManaCost };
+        // "You may cast it without paying its mana cost" from an effect.
+        if (c.Zone is Zone.Exile or Zone.Graveyard or Zone.Library && Statics.MayPlay(this, c.Controller).GetValueOrDefault(c.Id))
+            cost = new Cost { Mana = ManaCost.Zero, Tap = cost.Tap, Untap = cost.Untap, Parts = cost.Parts };
         var extra = c.Zone == Zone.Command ? 2 * c.CommandCasts : 0;
         extra -= Statics.CostReduction(this, c, c.Controller);
         if (extra != 0)
@@ -723,6 +737,7 @@ public sealed partial class Game
             if (c.Types.HasSubtype("Aura") && !attachedOk) MoveTo(c, Zone.Graveyard);
             else if (c.AttachedTo >= 0 && (!attachedOk || c.Types.HasSubtype("Equipment") && !host!.Types.Is(CardType.Creature))) c.AttachedTo = -1;
         }
+        CheckEffectLinks();
         // Legend rule (704.5j): keep the newest.
         var legends = State.BattlefieldCards.Where(c => c.Types.Has(SuperType.Legendary)).GroupBy(c => (c.Controller, c.Name)).Where(g => g.Count() > 1);
         foreach (var grp in legends.ToList())

@@ -21,6 +21,18 @@ public sealed class Card
     /// <summary>Turn this permanent came under its controller's control (summoning sickness).</summary>
     public int ControlledSinceTurn { get; set; }
     public bool IsToken { get; init; }
+    /// <summary>An effect or emblem object in the command zone (Forge "Effect"), not a card.</summary>
+    public bool IsEffect { get; init; }
+    /// <summary>For an effect: its Duration$, the turn it began, the card that made it, and what ends it.</summary>
+    public string? EffectDuration { get; init; }
+    public int EffectTurn { get; init; }
+    public int EffectHost { get; init; } = -1;
+    public string? ExileOnMoved { get; init; }
+    public string? ForgetOnMoved { get; init; }
+    /// <summary>"As this enters, choose a color / creature type / player."</summary>
+    public ManaColor? ChosenColor { get; set; }
+    public string? ChosenType { get; set; }
+    public int? ChosenPlayer { get; set; }
     public bool IsCommander { get; init; }
     /// <summary>Times cast from the command zone (commander tax).</summary>
     public int CommandCasts { get; set; }
@@ -79,7 +91,9 @@ public sealed class Card
     public Card Clone() => new()
     {
         Id = Id, Def = Def, Owner = Owner, Controller = Controller, Zone = Zone, Face = Face, Tapped = Tapped,
-        ControlledSinceTurn = ControlledSinceTurn, IsToken = IsToken, TokenPower = TokenPower, TokenToughness = TokenToughness, IsCommander = IsCommander, CommandCasts = CommandCasts,
+        ControlledSinceTurn = ControlledSinceTurn, IsToken = IsToken, IsEffect = IsEffect, EffectDuration = EffectDuration,
+        EffectTurn = EffectTurn, EffectHost = EffectHost, ExileOnMoved = ExileOnMoved, ForgetOnMoved = ForgetOnMoved,
+        ChosenColor = ChosenColor, ChosenType = ChosenType, ChosenPlayer = ChosenPlayer, TokenPower = TokenPower, TokenToughness = TokenToughness, IsCommander = IsCommander, CommandCasts = CommandCasts,
         Damage = Damage, PowerBonus = PowerBonus, ToughnessBonus = ToughnessBonus,
         Counters = Counters is null ? null : new Dictionary<string, int>(Counters),
         TempKeywords = TempKeywords is null ? null : new HashSet<string>(TempKeywords),

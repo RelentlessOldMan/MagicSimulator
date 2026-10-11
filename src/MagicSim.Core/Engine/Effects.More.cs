@@ -425,3 +425,117 @@ sealed class StoreSVarEffect : Effect
         (x.Host.StoredVars ??= new())[x.Ability["SVar"]!] = value;
     }
 }
+
+// ---- effects and choices ----------------------------------------------------------------
+
+/// <summary>
+/// Creates an effect object in the command zone carrying static abilities, triggers and
+/// replacements for a while (Duration$): "until end of turn, you may play that card",
+/// emblems, "the next time …". It remembers RememberObjects$ for its abilities to refer to.
+/// </summary>
+sealed class EffectEffect : Effect
+{
+    public override string Api => "Effect";
+    public override IReadOnlySet<string> Params { get; } = P(
+        "Name", "Image", "StaticAbilities", "Triggers", "ReplacementEffects", "SVars", "RememberObjects", "ImprintCards",
+        "Duration", "ExileOnMoved", "ForgetOnMoved", "EffectOwner", "Stackable");
+
+    private static readonly HashSet<string> Durations = new(StringComparer.Ordinal)
+    {
+        "Permanent", "EndOfTurn", "UntilYourNextTurn", "UntilTheEndOfYourNextTurn", "UntilHostLeavesPlay", "UntilHostLeavesPlayOrEOT",
+    };
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Duration"] is { } d && !Durations.Contains(d)) ctx.Need("Effect.Duration:" + d);
+        if (ab["EffectOwner"] is { } o && o != "You") ctx.Need("Effect.EffectOwner:" + o);
+        Defined.ValidateCards(ab["RememberObjects"], ctx);
+        Defined.ValidateCards(ab["ImprintCards"], ctx);
+        foreach (var key in new[] { "ExileOnMoved", "ForgetOnMoved" })
+            if (ab[key] is { } z && z is not ("Battlefield" or "Exile" or "Graveyard" or "Hand" or "Stack" or "Library")) ctx.Need($"Effect.{key}:{z}");
+
+        var script = new System.Text.StringBuilder();
+        script.Append($"Name:{ab["Name"] ?? ctx.Face.Name + "'s effect"}\nManaCost:no cost\nTypes:Effect\n");
+        foreach (var (key, prefix) in new[] { ("StaticAbilities", "S:"), ("Triggers", "T:"), ("ReplacementEffects", "R:") })
+            foreach (var name in (ab[key] ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!ctx.Face.SVars.TryGetValue(name, out var body)) { ctx.Need("SVarMissing:" + name); continue; }
+                script.Append(prefix).Append(body).Append('\n');
+            }
+        foreach (var (k, v) in ctx.Face.SVars) script.Append("SVar:").Append(k).Append(':').Append(v).Append('\n');
+        var def = CardCompiler.Compile(Forge.ForgeCard.Parse(script.ToString()), ctx.Tokens);
+        foreach (var m in def.Missing) ctx.Need(m);
+        ab.EffectDef = def;
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var ab = x.Ability;
+        var e = x.Game.CreateEffect(ab.EffectDef!, x.Controller, x.Host, ab["Duration"], ab["ExileOnMoved"], ab["ForgetOnMoved"]);
+        if (ab["RememberObjects"] is { } ro) e.Remembered = Defined.Cards(ro, x);
+        if (ab["ImprintCards"] is { } ic) e.Imprinted = Defined.Cards(ic, x);
+        e.ChosenColor = x.Host.ChosenColor;
+        e.ChosenType = x.Host.ChosenType;
+        e.ChosenPlayer = x.Host.ChosenPlayer;
+    }
+}
+
+sealed class ChooseColorEffect : Effect
+{
+    public override string Api => "ChooseColor";
+    public override IReadOnlySet<string> Params { get; } = P("Defined");
+    public override void Validate(AbilityDef ab, CompileContext ctx) { if (ab["Defined"] is { } d && d != "You") ctx.Need("ChooseColor.Defined:" + d); }
+
+    public override void Resolve(EffectContext x)
+    {
+        x.Host.ChosenColor = x.Game.Decider.ChooseColor(x.Game, x.Controller, x.Host, ColorMask.AllColors);
+        x.Game.Note($"  chose {x.Host.ChosenColor}");
+    }
+}
+
+/// <summary>Choose a creature type (offered: the types in your own deck, most common first) or a basic land type.</summary>
+sealed class ChooseTypeEffect : Effect
+{
+    public override string Api => "ChooseType";
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "Type");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Defined"] is { } d && d != "You") ctx.Need("ChooseType.Defined:" + d);
+        if (ab["Type"] is not ("Creature" or "Basic Land")) ctx.Need("ChooseType.Type:" + ab["Type"]);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        List<string> options;
+        if (x.Ability["Type"] == "Basic Land") options = TypeLine.BasicLandTypes.ToList();
+        else
+            options = x.S.Cards.Where(c => c.Owner == x.Controller && c.Types.Is(CardType.Creature) && !c.IsEffect)
+                .SelectMany(c => c.Types.Subtypes).GroupBy(t => t).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g => g.Key).Take(6).DefaultIfEmpty("Human").ToList();
+        x.Host.ChosenType = options[x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, options)];
+        x.Game.Note($"  chose {x.Host.ChosenType}");
+    }
+}
+
+/// <summary>Choose a player (usually an opponent). Goldfish opponents are interchangeable, so the choice barely matters.</summary>
+sealed class ChoosePlayerEffect : Effect
+{
+    public override string Api => "ChoosePlayer";
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "Choices");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Defined"] is { } d && d != "You") ctx.Need("ChoosePlayer.Defined:" + d);
+        Filter.Parse(ab["Choices"] ?? "Player", ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var filter = FilterFor(x.Host.CurrentFace, x.Ability["Choices"] ?? "Player");
+        var players = x.S.Players.Where(p => !p.Lost && filter.MatchesPlayer(p.Index, x)).Select(p => p.Index).ToList();
+        if (players.Count == 0) return;
+        var labels = players.Select(p => $"player {p}").ToList();
+        x.Host.ChosenPlayer = players[x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, labels)];
+    }
+}

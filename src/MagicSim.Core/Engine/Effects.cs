@@ -56,6 +56,7 @@ public static class Effects
         new ChangeZoneAllEffect(), new DestroyAllEffect(), new DamageAllEffect(), new PumpAllEffect(), new PutCounterAllEffect(),
         new CounterEffect(), new SurveilEffect(), new RearrangeTopOfLibraryEffect(), new RegenerateEffect(),
         new ManaReflectedEffect(), new FlipCoinEffect(), new RepeatEffect(), new StoreSVarEffect(),
+        new EffectEffect(), new ChooseColorEffect(), new ChooseTypeEffect(), new ChoosePlayerEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;

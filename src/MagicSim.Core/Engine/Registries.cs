@@ -60,7 +60,7 @@ public static class Triggers
         if (t["ValidTarget"] is { } vt) Filter.Parse(vt, ctx);
         if (t["AttackingPlayer"] is { } ap && ap != "You") ctx.Need("AttackingPlayer:" + ap);
         if (t["ValidPlayer"] is { } vp && vp is not ("You" or "Player" or "Opponent")) ctx.Need("TriggerValidPlayer:" + vp);
-        if (t["TriggerZones"] is { } tz && tz != "Battlefield") ctx.Need("TriggerZones:" + tz);
+        if (t["TriggerZones"] is { } tz && tz is not ("Battlefield" or "Command")) ctx.Need("TriggerZones:" + tz);
         if (t["Phase"] is { } ph && ph is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "BeginCombat"))
             ctx.Need("TriggerPhase:" + ph);
     }
@@ -73,8 +73,10 @@ public static class Triggers
             Item = new StackItem { SourceId = source.Id, Ability = t.Execute ?? Game.PermanentSpell, Controller = source.Controller },
         };
         // Triggers work from the battlefield, except the moved card's own "look back" triggers.
+        // Effects and emblems (and "eminence" commanders) trigger from the command zone.
         var sourceActive = source.Zone == Zone.Battlefield
-            || (e.Mode == TriggerMode.ChangesZone && e.CardId == source.Id && e.From == Zone.Battlefield);
+            || (e.Mode == TriggerMode.ChangesZone && e.CardId == source.Id && e.From == Zone.Battlefield)
+            || source.Zone == Zone.Command && (source.IsEffect || t["TriggerZones"] == "Command");
         if (!sourceActive) return false;
         if (!ModeMatches(g, t, source, e, x)) return false;
         return Presence.Hold(t.P, x);

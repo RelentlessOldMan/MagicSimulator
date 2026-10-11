@@ -107,6 +107,8 @@ public sealed class Filter
             "IsCommander" => (c, pl, x) => c is not null && c.IsCommander,
             "NamedCard" => (c, pl, x) => c is not null && x.Host.NamedCard is { } n && string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase),
             "IsRemembered" => (c, pl, x) => c is not null && (x.Host.Remembered?.Contains(c.Id) ?? false),
+            "ChosenColor" => (c, pl, x) => c is not null && x.Host.ChosenColor is { } cc && (c.CurrentFace.Colors & cc.Mask()) != 0,
+            "ChosenType" => (c, pl, x) => c is not null && x.Host.ChosenType is { } ct && c.Types.HasSubtype(ct),
             "IsImprinted" => (c, pl, x) => c is not null && (x.Host.Imprinted?.Contains(c.Id) ?? false),
             "sharesNameWith Remembered" => (c, pl, x) => c is not null && x.Host.Remembered is { } rem
                 && rem.Any(id => id != c.Id && x.S[id].Name == c.Name),
@@ -400,7 +402,7 @@ public static class Defined
     private static readonly HashSet<string> PlayerRefs = new(StringComparer.Ordinal)
     {
         "You", "Player", "Opponent", "Targeted", "TargetedPlayer", "ParentTarget", "TargetedController", "Player.Opponent",
-        "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner",
+        "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner", "ChosenPlayer",
     };
 
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
@@ -431,6 +433,7 @@ public static class Defined
             "ParentTarget" => x.ParentTargets.Where(t => t.Player is not null).Select(t => t.Player!.Value).ToList(),
             "TargetedController" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Controller).ToList(),
             "TriggeredCardController" => x.Item.TriggeredCardId is { } tc ? new() { x.S[tc].Controller } : new(),
+            "ChosenPlayer" => x.Host.ChosenPlayer is { } cp ? new() { cp } : new(),
             "TargetedOwner" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Owner).Take(1).ToList(),
             "TriggeredTarget" or "TriggeredPlayer" => x.Item.TriggeredPlayer is { } tp ? new() { tp } : new(),
             _ => new() { x.Controller },

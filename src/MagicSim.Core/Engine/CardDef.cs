@@ -40,6 +40,8 @@ public sealed class AbilityDef
     public int ChainIndex { get; set; }
     /// <summary>"UnlessCost$": the effect doesn't happen if the payer pays this.</summary>
     public Cost? UnlessCost { get; set; }
+    /// <summary>The effect object an "Effect" ability creates, compiled with the card.</summary>
+    public CardDef? EffectDef { get; set; }
     /// <summary>Token definitions this ability creates (TokenScript$), compiled with the card.</summary>
     public List<CardDef>? Tokens { get; set; }
     /// <summary>For one combination of a modal ability: the chosen modes' text.</summary>
@@ -292,6 +294,12 @@ public static partial class CardCompiler
                 return true;
             case "Flashback":
                 face.Flashback = ParseCost(Part(1), ctx);
+                return true;
+            case "ETBReplacement":
+                // "As this enters, choose …": K:ETBReplacement:Other:SVarName
+                if (Part(1) != "Other" || Part(3).Length > 0) { ctx.Need("Keyword:ETBReplacement:" + Part(1) + (Part(3).Length > 0 ? "+" + Part(3) : "")); return true; }
+                if (!face.SVars.TryGetValue(Part(2), out var etb)) { ctx.Need("SVarMissing:" + Part(2)); return true; }
+                if (CompileAbility(new ForgeParams(etb), ctx, AbilityKind.Sub, 0) is { } etbAb) face.EtbReplacements.Add(etbAb);
                 return true;
             default:
                 return false;
