@@ -1,0 +1,26 @@
+# Build output
+bin/
+obj/
+publish/
+
+# Generated data (card index lives in %LOCALAPPDATA%\MagicSim by default)
+data/
+out/
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+*.user
+.DS_Store
+Thumbs.db
+
+# Test output
+TestResults/
+**/TestResults/
+
+# Local MCP server config (machine-specific paths / personal channels)
+.mcp.json
+
+# Transient commit-message temp files
+commit-msg.tmp
