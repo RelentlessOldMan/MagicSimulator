@@ -4,7 +4,8 @@ This is the shared agreement between **MagicSimulator** (this repo), **MagicDeck
 
 Status: **draft v0.3** (2026-10-11).
 - v0.2 added review notes from MagicDecks and Cardinator.
-- v0.3 adds per-game output (`--per-game`) and states the in-game play goal.
+- v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
+- v0.4 adds per-game fields MagicDecks asked for, plus `sim replay`, and marks Cardinator's §1 support as planned.
 - Built: §1 deck format, §2 card index, and the `sync-cards` and `check` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
@@ -115,7 +116,10 @@ sim run <deck.txt> [--profile p.yaml] [--games N] [--seed S]
 sim compare <base.txt> --swap "Out=>In" [--swap ...] [same options as run]
 sim compare <a.txt> <b.txt> [<c.txt> ...]           [same options as run]
 sim cards [--deck x.txt] [--json out.json]
+sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--profile p.yaml]
 ```
+
+`replay` prints a readable turn-by-turn log of one game: the mulligans, each spell and ability, each trigger, what's on the stack and when it resolves, the mana pool, and how the game ended. The same (deck, seed, `--game`, mulligan, seat) gives the same game as row `game` in the `--per-game` output, so any interesting row can be replayed. This is for checking by hand that the engine plays correctly. Its text output isn't a stable format.
 
 **Defaults:** `--games 10000`, `--seed 1`, `--mull all`, `--seat both`, `--max-turn 10`.
 
@@ -194,8 +198,11 @@ sim cards [--deck x.txt] [--json out.json]
 
 ```json
 {"schema":"magicsim.game/1","variant":"base","game":17,"mulligan":"A","seat":"play",
- "kept":6,"won":true,"win_turn":2,"win_line":"consult_oracle",
+ "mulligans":1,"kept":6,"hand_kept":["Dark Ritual","…"],"bottomed":["Island"],
+ "won":true,"win_turn":2,"win_line":"consult_oracle","fail_reason":null,
  "life_end":{"you":36,"opponents":[40,40]},"turns_played":2,
+ "mana_by_turn":[5,9],"life_paid":4,"storm_max":6,
+ "notes":["Tainted Pact stopped: duplicate Island"],
  "seen":["Dark Ritual","Demonic Consultation","…"],
  "cast":["Dark Ritual","Demonic Consultation","Thassa's Oracle"],
  "win_cards":["Demonic Consultation","Thassa's Oracle"]}
@@ -208,6 +215,17 @@ sim cards [--deck x.txt] [--json out.json]
 - **`seen`:** every card that was in hand at any point, including the opening hand. It's a set, so each card appears once.
 - **`cast`:** every card that was cast or played, in order.
 - **`win_cards`:** the cards in the winning line. These are what the planned `in_win_line` stat counts.
+- **Hands:** `mulligans` is how many were taken, the first free one included. `hand_kept` is the hand that was kept, after bottoming, and `bottomed` is the cards put on the bottom.
+- **`fail_reason`:** for a game that wasn't won, the engine's best guess at why. It's null when the game was won. Values:
+  - `no_mana`: too little mana to cast the payoff pieces.
+  - `no_win_piece`: no win piece was reachable, whether in hand or by tutor.
+  - `pieces_but_short_mana`: the pieces were reachable, but there wasn't enough mana that turn.
+  - `unsupported_dead_cards`: unsupported cards took up the hand.
+  - `other`: none of the above.
+  Since it's a guess, use it to point you in a direction, not as proof.
+- **`mana_by_turn`:** the most mana available in each turn played, counting rituals and fast mana.
+- **`life_paid`:** life you spent on purpose, e.g. on Ad Nauseam, Necropotence, Doomsday or painlands. **`storm_max`:** the most spells cast in one turn.
+- **`notes`:** rules events worth checking, e.g. "Tainted Pact stopped: duplicate Island". It's free text: show it to people, don't parse it.
 - **Row order:** one row per (variant, mulligan, seat, game). Rows are sorted in that order, so files can be compared byte for byte.
 - **Size:** with the defaults, `run` writes 10,000 games × 3 mulligan settings × 2 seats = 60,000 rows. Use `--mull` and `--seat` to cut that down.
 
@@ -280,7 +298,7 @@ Cardinator.exe --moxfield <link | id> out.txt format=magicdecks
 - **Overwrites:** it replaces an existing `.txt` without asking. It only refuses to overwrite a Cardinator set file. Don't point it at a hand-edited deck file.
 - `format=magicdecks` writes the §1 format.
 - `format=magicdecks` is planned for Cardinator 1.6.32. Until then, use the `.json` output.
-- The other direction also works: Cardinator's list import accepts §1 files, treats the tagged cards as commanders, and ignores `#` comments.
+- **Planned for 1.6.32:** Cardinator's list import accepting §1 files, treating the tagged cards as commanders and ignoring `#` comments. Until then, Cardinator reads `*CMDR*` as part of the card name.
 
 ## 6. Card support
 
