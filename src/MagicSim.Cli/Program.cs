@@ -1,6 +1,8 @@
 using System.Text.Json;
 using MagicSim.Core.Cards;
 using MagicSim.Core.Decks;
+using MagicSim.Core.Forge;
+using MagicSim.Core.Engine;
 
 namespace MagicSim.Cli;
 
@@ -23,6 +25,8 @@ public static class Program
             {
                 "sync-cards" => await SyncCards(opts),
                 "check" => Check(opts),
+                "sync-forge" => SyncForge(opts),
+                "cards" => Cards(opts),
                 _ => Fail(UsageError, $"unknown command: {args[0]}"),
             };
         }
@@ -62,6 +66,68 @@ public static class Program
         return Ok;
     }
 
+    private static int SyncForge(Options o)
+    {
+        o.RequirePositional(0);
+        ForgeLibrary.Sync(o.Get("--dir") ?? ForgeLibrary.DefaultDir, Console.Error);
+        return Ok;
+    }
+
+    private static int Cards(Options o)
+    {
+        o.RequirePositional(0);
+        var forge = ForgeLibrary.Load(o.Get("--forge"));
+        var index = CardIndex.Load(o.Get("--cards"));
+        var support = Support.Current;
+
+        // The pool is every Commander-legal (or banned) card Forge has a script for.
+        var pool = forge.Cards.Where(c => index.Find(c.FullName) is { CommanderLegality: "legal" or "banned" }).ToList();
+        var report = Coverage.Analyze(pool, support);
+
+        object? deckPart = null;
+        if (o.Get("--deck") is { } deckPath)
+        {
+            var deck = DeckReader.ReadFile(deckPath);
+            deckPart = new
+            {
+                name = deck.Name,
+                cards = deck.Commanders.Concat(deck.Mainboard).Select(e =>
+                {
+                    var fc = forge.Find(e.Name);
+                    if (fc is null) return new { name = e.Name, tier = "unsupported", missing = new List<string> { "NoForgeScript" } };
+                    var tier = support.TierOf(fc, out var missing);
+                    return new { name = e.Name, tier = TierName(tier), missing };
+                }).ToList(),
+            };
+        }
+
+        Emit(o, JsonSerializer.Serialize(new
+        {
+            schema = "magicsim.cards/1",
+            pool = new
+            {
+                description = "Commander-legal cards with a Forge script",
+                cards = report.Cards,
+                scripted = report.Scripted,
+                hand_coded = report.HandCoded,
+                supported_share = Math.Round(report.Share, 4),
+                next_to_implement = report.TopBlockers.Select(b => new
+                {
+                    requirement = b.Requirement, cards_needing = b.CardsNeeding, cards_unlocked_alone = b.CardsUnlockedAlone,
+                }),
+            },
+            deck = deckPart,
+        }, JsonOut));
+        return Ok;
+    }
+
+    private static string TierName(SupportTier t) => t switch
+    {
+        SupportTier.Scripted => "scripted",
+        SupportTier.HandCoded => "hand_coded",
+        _ => "unsupported",
+    };
+
     private static void Emit(Options o, string json)
     {
         if (o.Get("--json") is { } path) File.WriteAllText(path, json + "\n");
@@ -83,7 +149,11 @@ public static class Program
               check <deck.txt> [--cards path] [--json out.json]
                                                    resolve names and check the 100-card count
 
-            Planned (see CONTRACT.md): run, compare, cards.
+              sync-forge [--dir path]              download Forge card scripts (needs git)
+              cards [--deck x.txt] [--forge dir] [--cards path] [--json out.json]
+                                                   card support: whole-pool coverage, per-deck tiers
+
+            Planned (see CONTRACT.md): run, compare, replay.
             Card index path: --cards, else %MAGICSIM_CARDS%, else %LOCALAPPDATA%\MagicSim\oracle-cards.jsonl.gz
             """);
         return code;

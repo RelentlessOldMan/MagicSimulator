@@ -7,7 +7,7 @@ Status: **draft v0.5** (2026-10-11).
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
 - v0.5: card behavior comes from Forge scripts (§6), and Cardinator 1.6.32 has shipped (§5).
-- Built: §1 deck format, §2 card index, and the `sync-cards` and `check` commands.
+- Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
 ---
@@ -96,6 +96,8 @@ A headless console program. In this repo, run it with `dotnet run --project src/
 ```
 sim sync-cards [--out path]
 sim check <deck.txt> [--cards path] [--json out.json]
+sim sync-forge [--dir path]
+sim cards [--deck x.txt] [--forge dir] [--cards path] [--json out.json]
 ```
 
 `check` returns:
@@ -116,7 +118,6 @@ sim run <deck.txt> [--profile p.yaml] [--games N] [--seed S]
         [--per-game games.jsonl]
 sim compare <base.txt> --swap "Out=>In" [--swap ...] [same options as run]
 sim compare <a.txt> <b.txt> [<c.txt> ...]           [same options as run]
-sim cards [--deck x.txt] [--json out.json]
 sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--profile p.yaml]
 ```
 
@@ -261,14 +262,23 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
 - **Swap rules:** a `--swap` is a usage error (exit 2) if its `Out` card isn't in the deck or its `In` card isn't in the card index.
 - **Not checked by compare:** bans and color identity. Callers check those first (MagicDecks uses `validate_deck.py`).
 
-#### `cards` output (`magicsim.cards/1`)
+#### `cards` output (`magicsim.cards/1`), built
 
 ```json
-{"schema": "magicsim.cards/1", "supported": ["Dark Ritual", "…"],
- "deck": {"name": "For-The-Lulz", "unsupported": ["…"]}}
+{"schema": "magicsim.cards/1",
+ "pool": {"description": "Commander-legal cards with a Forge script", "cards": 32161,
+          "scripted": 369, "hand_coded": 0, "supported_share": 0.0115,
+          "next_to_implement": [{"requirement": "Api:Pump", "cards_needing": 4262, "cards_unlocked_alone": 458}]},
+ "deck": {"name": "For-The-Lulz",
+          "cards": [{"name": "Dark Ritual", "tier": "unsupported", "missing": ["Api:Mana"]}]}}
 ```
 
-`deck` appears only when `--deck` is given.
+**Fields:**
+- **`pool`:** covers every Commander-legal (or banned) card that has a Forge script.
+- **`next_to_implement`:** the requirements that unblock the most cards. It's ranked first by how many cards that requirement *alone* is blocking, then by how many cards need it at all.
+- **`tier`:** one of `scripted`, `hand_coded` or `unsupported`.
+- **`missing`:** the requirement keys the engine doesn't support yet. `NoForgeScript` means Forge has no script for the card.
+- **`deck`:** appears only when `--deck` is given.
 
 ## 4. Deck profiles (planned)
 
