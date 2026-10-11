@@ -2,10 +2,11 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.3** (2026-10-11).
+Status: **draft v0.5** (2026-10-11).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
-- v0.4 adds per-game fields MagicDecks asked for, plus `sim replay`, and marks Cardinator's §1 support as planned.
+- v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
+- v0.5: card behavior comes from Forge scripts (§6), and Cardinator 1.6.32 has shipped (§5).
 - Built: §1 deck format, §2 card index, and the `sync-cards` and `check` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
@@ -296,19 +297,32 @@ Cardinator.exe --moxfield <link | id> out.txt format=magicdecks
 
 - **Exit codes:** 0 written, 1 the fetch failed, 2 usage error.
 - **Overwrites:** it replaces an existing `.txt` without asking. It only refuses to overwrite a Cardinator set file. Don't point it at a hand-edited deck file.
-- `format=magicdecks` writes the §1 format.
-- `format=magicdecks` is planned for Cardinator 1.6.32. Until then, use the `.json` output.
-- **Planned for 1.6.32:** Cardinator's list import accepting §1 files, treating the tagged cards as commanders and ignoring `#` comments. Until then, Cardinator reads `*CMDR*` as part of the card name.
+- `format=magicdecks` writes the §1 format. It shipped in Cardinator 1.6.32.
+- **The other direction also works (1.6.32):** Cardinator's list import accepts §1 files, treats the tagged cards as commanders, and ignores `#` comments.
 
 ## 6. Card support
 
-The simulator is **generic**: any deck, any player. The rules engine handles turns, mana, the stack, combat, mulligans and the search, the same way for every deck. Each card's behavior comes from one of three tiers:
+The simulator is **generic**: any deck from anyone. Card coverage is measured against the whole card pool, not against particular decks. The rules engine handles turns, mana, the stack, combat, mulligans and the search, the same way for every deck.
 
-1. **Templates.** Common rules text is recognized automatically: lands, mana rocks, rituals, "draw N", tutors, vanilla and keyword creatures, simple burn, and so on.
-2. **Hand-coded cards.** Anything a template can't express.
-3. **Unsupported.** Treated as blank and reported, as §3 describes.
+**Where card behavior comes from:** [Forge](https://github.com/Card-Forge/forge)'s card scripts. Forge is an open-source Magic engine that describes nearly every card in a structured script, e.g. `A:SP$ Mana | Produced$ B | Amount$ 3` for Dark Ritual.
+- **Download:** `sim sync-forge` fetches the scripts with a sparse git clone into `%LOCALAPPDATA%\MagicSim\forge`. It needs `git` on the PATH.
+- **License:** Forge is GPL-3.0, so its scripts are never copied into this repo or bundled with `sim`. They're downloaded to each machine, the same way the Scryfall data is.
+- **Our own engine:** the simulator implements Forge's effect types (`Mana`, `Draw`, `ChangeZone`, `Dig`, `DealDamage`, …) in C#. It doesn't use Forge's Java code.
 
-Coverage grows over time. `sim cards` reports which tier each card uses.
+**Each card is in one of three tiers:**
+1. **Scripted:** the card's Forge script uses only effect types the engine implements.
+2. **Hand-coded:** the engine has its own code for the card, for behavior that lives in Forge's Java code rather than its script.
+3. **Unsupported:** treated as blank and reported, as §3 describes.
+
+`sim cards` reports each card's tier and the share of the whole card pool that's supported.
+
+**How correctness is checked:**
+- **Exact math:** shuffling, mulligans and draws are tested against exact probabilities.
+- **Per-card scenario tests:** each card and effect type is tested from a set-up board.
+- **Forge comparison:** a local, unpublished tool sets up the same board in Forge's engine and compares the results.
+- **Stats sanity check:** for fair decks, turn-to-win numbers are compared with Forge's AI.
+- **Replay review:** `sim replay` logs, read by people.
+- **Disputes:** settled by the Comprehensive Rules and card rulings, not by Forge.
 
 ## 7. Later (not planned yet)
 
