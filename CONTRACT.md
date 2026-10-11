@@ -2,7 +2,9 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.2** (2026-10-11). v0.2 adds review notes from MagicDecks and Cardinator.
+Status: **draft v0.3** (2026-10-11).
+- v0.2 added review notes from MagicDecks and Cardinator.
+- v0.3 adds per-game output (`--per-game`) and states the in-game play goal.
 - Built: §1 deck format, §2 card index, and the `sync-cards` and `check` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
@@ -109,6 +111,7 @@ sim check <deck.txt> [--cards path] [--json out.json]
 ```
 sim run <deck.txt> [--profile p.yaml] [--games N] [--seed S]
         [--mull A|B|C|all] [--seat play|draw|both] [--max-turn T] [--json out.json]
+        [--per-game games.jsonl]
 sim compare <base.txt> --swap "Out=>In" [--swap ...] [same options as run]
 sim compare <a.txt> <b.txt> [<c.txt> ...]           [same options as run]
 sim cards [--deck x.txt] [--json out.json]
@@ -134,6 +137,12 @@ sim cards [--deck x.txt] [--json out.json]
   - **A (T1-or-bust):** keep only a hand that has a turn-1 win, or go down to a floor of 5. "Has a turn-1 win" means the search finds one using only the hand and public information. It never sees the library order.
   - **B (sensible):** keep with at least 2 usable mana plus a win piece or a tutor.
   - **C (keep 7):** always keep, as a baseline.
+
+**Who decides what's "better":** the simulator only plays games and reports what happened. The caller, such as MagicDecks' tuning loop, picks the goal (fastest win, most consistent by turn N, and so on) and the swaps. The simulator only judges a game in two ways:
+- **How it plays:** it plays each game to win as fast as possible. This is the only play goal for now.
+- **What counts as a win:** this follows the rules of Magic (opponents at 0 life, Thassa's Oracle, milling out, and so on). It isn't a goal anyone sets.
+
+**Mulligans:** the London mulligan above is the only mulligan rule. There's no house-rule handling.
 
 **No cheating:** the play search only knows what a real player would know. Draws and tutors are treated as random until they happen.
 
@@ -178,6 +187,29 @@ sim cards [--deck x.txt] [--json out.json]
   - `drawn`: the card was seen in hand.
   - `cast`: it was cast or played.
   - `in_win`: it was cast in a game that was won. Planned later: `in_win_line`, meaning the card was part of the actual winning line.
+
+#### Per-game output (`magicsim.game/1`)
+
+`--per-game <path>` writes one JSON object per game, as JSONL, alongside the summary. Callers can compute any measure they want from it. It works with `run` and `compare`.
+
+```json
+{"schema":"magicsim.game/1","variant":"base","game":17,"mulligan":"A","seat":"play",
+ "kept":6,"won":true,"win_turn":2,"win_line":"consult_oracle",
+ "life_end":{"you":36,"opponents":[40,40]},"turns_played":2,
+ "seen":["Dark Ritual","Demonic Consultation","…"],
+ "cast":["Dark Ritual","Demonic Consultation","Thassa's Oracle"],
+ "win_cards":["Demonic Consultation","Thassa's Oracle"]}
+```
+
+**Fields:**
+- **`game`:** the shuffle index. The same `game` number in different variants means the same shuffle, so rows can be paired across variants.
+- **`variant`:** `base` for a run or the compare base, otherwise the variant's label (e.g. `Mox Opal=>Gemstone Mine`).
+- **When a game isn't won:** `won` is false, `win_turn`, `win_line` and `win_cards` are null, and `turns_played` equals `max_turn`.
+- **`seen`:** every card that was in hand at any point, including the opening hand. It's a set, so each card appears once.
+- **`cast`:** every card that was cast or played, in order.
+- **`win_cards`:** the cards in the winning line. These are what the planned `in_win_line` stat counts.
+- **Row order:** one row per (variant, mulligan, seat, game). Rows are sorted in that order, so files can be compared byte for byte.
+- **Size:** with the defaults, `run` writes 10,000 games × 3 mulligan settings × 2 seats = 60,000 rows. Use `--mull` and `--seat` to cut that down.
 
 #### `compare` output (`magicsim.compare/1`)
 
@@ -259,3 +291,8 @@ The simulator is **generic**: any deck, any player. The rules engine handles tur
 3. **Unsupported.** Treated as blank and reported, as §3 describes.
 
 Coverage grows over time. `sim cards` reports which tier each card uses.
+
+## 7. Later (not planned yet)
+
+- **Live mode:** you enter your actual hand, draws and board, and the simulator recommends the best play, using the same search as `run`.
+- **Head-to-head:** two decks played against each other.
