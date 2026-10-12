@@ -107,6 +107,7 @@ public sealed class Filter
             "You" => (c, pl, x) => pl == x.Controller,
             "Self" or "StrictlySelf" => (c, pl, x) => c is not null && c.Id == x.Item.SourceId,
             "escaped" => (c, pl, x) => c is not null && c.Escaped,
+            _ when p.StartsWith("ChosenMode", StringComparison.Ordinal) && p.Length > 10 => (c, pl, x) => c is not null && c.ChosenMode == p[10..],
             "kicked" => (c, pl, x) => c is not null && (c.PaidOptional?.Any(o => o.StartsWith("Kicker", StringComparison.Ordinal)) ?? false),
             "Other" or "StrictlyOther" => (c, pl, x) => c is null || c.Id != x.Item.SourceId,
             "token" => (c, pl, x) => c is not null && c.IsToken,
@@ -382,6 +383,25 @@ public sealed class Amount
             case "StormCount": return new(core, x => Math.Max(0, x.S.ThisTurn.SpellsCast - 1));
             case "InYourLibrary": return new(core, x => x.S.Players[x.Controller].Library.Count);
             case "Converge": return new(core, x => x.Host.ColorsSpent);
+            // "You gain life equal to the damage dealt this way."
+            case "TotalDamageDoneByThisTurn": return new(core, x => x.S.ThisTurn.DamageDealtBy.GetValueOrDefault(x.Host.Id));
+        }
+        // "Count$ThisTurnEntered_Graveyard_from_Battlefield_Creature.YouCtrl": cards that moved there this turn (a creature died).
+        if (kind.StartsWith("ThisTurnEntered_", StringComparison.Ordinal))
+        {
+            var parts = kind[16..].Split('_');
+            if (parts.Length >= 2 && Enum.TryParse<Zone>(parts[0], out var into))
+            {
+                Zone? fromZone = null;
+                var tail = parts.Skip(1).ToList();
+                if (tail is ["from", var fz, ..] && Enum.TryParse<Zone>(fz, out var fromParsed)) { fromZone = fromParsed; tail = tail.Skip(2).ToList(); }
+                var filterText = string.Join('_', tail) + (arg.Length > 0 ? " " + arg : "");
+                if (filterText.Length > 0)
+                {
+                    var moved = Filter.Parse(filterText, ctx);
+                    return new(core, x => x.S.ThisTurn.Moves.Count(m => m.To == into && (fromZone is null || m.From == fromZone) && moved.MatchesCard(x.S[m.CardId], x)));
+                }
+            }
         }
         if (kind == "Devotion.Chosen")
             return new(core, x => x.Host.ChosenColor is { } chosen && chosen != ManaColor.C ? Devotion(x, chosen.Mask()) : 0);
@@ -425,13 +445,13 @@ public sealed class Amount
         return Const(0);
     }
 
-    private static readonly Regex PlayerCountRx = new(@"^PlayerCount(Players|Opponents)\$(Amount|Highest|Lowest)?(.*)$", RegexOptions.Compiled);
+    private static readonly Regex PlayerCountRx = new(@"^PlayerCount(Players|Opponents|RegisteredOpponents)\$(Amount|Highest|Lowest)?(.*)$", RegexOptions.Compiled);
     private static readonly Regex DefinedPlayerRx = new(@"^(TargetedPlayer|You|TriggeredTarget|TriggeredPlayer)\$(.+)$", RegexOptions.Compiled);
 
     /// <summary>"PlayerCountOpponents$Amount", "PlayerCountPlayers$HighestValidGraveyard Card.YouOwn": over a group of players, how many, the most, the least, or the total.</summary>
     private static Amount PlayerCountAmount(string core, Match m, CompileContext ctx)
     {
-        var opponents = m.Groups[1].Value == "Opponents";
+        var opponents = m.Groups[1].Value is "Opponents" or "RegisteredOpponents";
         IEnumerable<int> Players(EffectContext x) => x.S.Players.Where(p => !p.Lost && (!opponents || p.Index != x.Controller)).Select(p => p.Index);
         if (m.Groups[2].Value == "Amount")
         {
@@ -458,6 +478,7 @@ public sealed class Amount
             case "CardsInGraveyard": return (p, x) => x.S.Players[p].Graveyard.Count;
             case "LifeTotal": return (p, x) => x.S.Players[p].Life;
             case "PoisonCounters" or "Counters.Poison": return (p, x) => x.S.Players[p].Poison;
+            case "LifeLostThisTurn": return (p, x) => x.S.ThisTurn.LifeLost.GetValueOrDefault(p);
         }
         var space = text.IndexOf(' ');
         if (text.StartsWith("Valid", StringComparison.Ordinal) && space > 0)
@@ -536,6 +557,7 @@ public static class Defined
     {
         "You", "Player", "Opponent", "Targeted", "TargetedPlayer", "ParentTarget", "TargetedController", "Player.Opponent",
         "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner", "ChosenPlayer", "Remembered", "TriggeredActivator",
+        "TriggeredCardOwner", "TriggeredSourceController",
     };
 
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
@@ -570,6 +592,8 @@ public static class Defined
             "ParentTarget" => x.ParentTargets.Where(t => t.Player is not null).Select(t => t.Player!.Value).ToList(),
             "TargetedController" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Controller).ToList(),
             "TriggeredCardController" => x.Item.TriggeredCardId is { } tc ? new() { x.S[tc].Controller } : new(),
+            "TriggeredCardOwner" => x.Item.TriggeredCardId is { } tco ? new() { x.S[tco].Owner } : new(),
+            "TriggeredSourceController" => x.Item.TriggeredSourceId is { } ts ? new() { x.S[ts].Controller } : new(),
             "ChosenPlayer" => x.Host.ChosenPlayer is { } cp ? new() { cp } : new(),
             "Remembered" => x.Item.IteratedPlayer is { } ip ? new() { ip } : new(),
             "TargetedOwner" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Owner).Take(1).ToList(),

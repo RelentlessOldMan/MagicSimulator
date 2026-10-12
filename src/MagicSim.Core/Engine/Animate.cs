@@ -100,7 +100,6 @@ sealed class AnimateEffect : Effect
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         Defined.ValidateCards(ab["Defined"], ctx);
-        if (ab["Defined"] is null && ab.TargetFilter is null) ctx.Need("Animate:NoDefined");
         ValidateAmount(ab, "Power", ctx);
         ValidateAmount(ab, "Toughness", ctx);
         TypeChange.Validate(ab["Types"], ctx, "Animate.Types");
@@ -130,7 +129,7 @@ sealed class AnimateEffect : Effect
     }
 
     public override void Resolve(EffectContext x) =>
-        AnimateCards(x, Defined.Cards(x.Ability["Defined"], x, "Targeted").Select(id => x.S[id]).ToList());
+        AnimateCards(x, Defined.Cards(x.Ability["Defined"], x, x.Ability.TargetFilter is null ? "Self" : "Targeted").Select(id => x.S[id]).ToList());
 
     /// <summary>Applies this ability's "becomes …" effect to each of <paramref name="cards"/> on the battlefield.</summary>
     public static void AnimateCards(EffectContext x, List<Card> cards)

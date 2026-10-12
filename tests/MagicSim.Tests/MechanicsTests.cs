@@ -401,6 +401,27 @@ public class MechanicsTests
         "Name:Stage\nManaCost:no cost\nTypes:Land\nA:AB$ Clone | Cost$ T | ValidTgts$ Land | GainThisAbility$ True\n",
         "Name:Hall\nManaCost:no cost\nTypes:Legendary Land\nA:AB$ Mana | Cost$ T PayLife<3> | Produced$ C | AddsKeywords$ Haste | AddsKeywordsValid$ Spell.Creature\n",
         "Name:Sprinter\nManaCost:1\nTypes:Creature Elf\nPT:1/1\n",
+        "Name:Exquisite\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ LifeLost | ValidPlayer$ Opponent | TriggerZones$ Battlefield | Execute$ TrigGain\n" +
+        "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:TriggerCount$LifeAmount\n",
+        "Name:Bloodtally\nManaCost:0\nTypes:Sorcery\nA:SP$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:PlayerCountRegisteredOpponents$HighestLifeLostThisTurn\n",
+        "Name:Rot\nManaCost:0\nTypes:Sorcery\nA:SP$ DealDamage | ValidTgts$ Any | NumDmg$ 3 | SubAbility$ DBGain\n" +
+        "SVar:DBGain:DB$ GainLife | Defined$ You | LifeAmount$ Y\nSVar:Y:Count$TotalDamageDoneByThisTurn\n",
+        "Name:Moody\nManaCost:0\nTypes:Creature Shapeshifter\nPT:1/1\nK:ETBReplacement:Other:PickMode\n" +
+        "SVar:PickMode:DB$ GenericChoice | Choices$ Big,Small | Defined$ You | SetChosenMode$ True\n" +
+        "SVar:Big:DB$ Pump | SpellDescription$ Big\nSVar:Small:DB$ Pump | SpellDescription$ Small\n" +
+        "S:Mode$ Continuous | AffectedDefined$ Self | Affected$ Card.ChosenModeBig | AddPower$ 3\n",
+        "Name:Bonty\nManaCost:0\nTypes:Legendary Creature God\nPT:4/6\n" +
+        "S:Mode$ CantAttack,CantBlock | ValidCard$ Card.Self | CheckSVar$ X | SVarCompare$ EQ0\n" +
+        "SVar:X:Count$ThisTurnEntered_Graveyard_from_Battlefield_Creature.YouCtrl\n",
+        "Name:Oblit\nManaCost:0\nTypes:Creature Horror\nPT:5/5\n" +
+        "T:Mode$ DamageDone | ValidTarget$ Card.Self | Execute$ TrigSac | TriggerZones$ Battlefield\n" +
+        "SVar:TrigSac:DB$ Sacrifice | Amount$ X | SacValid$ Permanent | Defined$ TriggeredSourceController\nSVar:X:TriggerCount$DamageAmount\n",
+        "Name:Raiser\nManaCost:0\nTypes:Enchantment\nK:MayFlashSac\n" +
+        "T:Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.Self | IsPresent$ Card.StrictlySelf | Execute$ TrigRaise\n" +
+        "SVar:TrigRaise:DB$ ChangeZone | Origin$ Graveyard | Destination$ Battlefield | GainControl$ True | RememberChanged$ True | ValidTgts$ Creature | SubAbility$ Aurify\n" +
+        "SVar:Aurify:DB$ Animate | Types$ Aura | Keywords$ Enchant:Creature.IsRemembered:that creature | Duration$ Permanent | SubAbility$ DBAttach\n" +
+        "SVar:DBAttach:DB$ Attach | Defined$ Remembered\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -2429,5 +2450,94 @@ public class MechanicsTests
         ResolveAll(g);
         Assert.False(g.IsSick(OnBattlefield(g, "Sprinter")));
         Assert.Equal(37, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void WheneverAnOpponentLosesLife()
+    {
+        var g = Setup(new[] { "Quake" }, battlefield: new[] { "Exquisite", "Bog" });
+        g.CastSpell(g.State[InHand(g, "Quake")], 0);
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void LifeLostThisTurn()
+    {
+        var g = Setup(new[] { "Quake", "Bloodtally" }, battlefield: new[] { "Bog" });
+        g.CastSpell(g.State[InHand(g, "Quake")], 0);
+        ResolveAll(g);
+        g.CastSpell(g.State[InHand(g, "Bloodtally")], 0);
+        ResolveAll(g);
+        Assert.Equal(40, g.State.Players[Game.Me].Life);
+        Assert.Equal(2, g.State.ThisTurn.LifeLost[1]);
+    }
+
+    [Fact]
+    public void GainLifeEqualToDamageDealt()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Target ? dec.Options.ToList().FindIndex(o => o is TargetRef { Player: 1 }) : null };
+        var g = Setup(new[] { "Rot" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Rot")], 0);
+        ResolveAll(g);
+        Assert.Equal(37, g.State.Players[1].Life);
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void ChosenModeAsItEnters()
+    {
+        var g = Setup(new[] { "Moody" });
+        g.CastSpell(g.State[InHand(g, "Moody")], -1);
+        ResolveAll(g);
+        Assert.Equal(4, OnBattlefield(g, "Moody").Power);
+
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Option ? 1 : null };
+        g = Setup(new[] { "Moody" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Moody")], -1);
+        ResolveAll(g);
+        Assert.Equal(1, OnBattlefield(g, "Moody").Power);
+    }
+
+    [Fact]
+    public void CantAttackUnlessACreatureDied()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Bonty", "Bear" });
+        Assert.True(Statics.CantAttack(g, OnBattlefield(g, "Bonty")));
+        g.Destroy(OnBattlefield(g, "Bear"), regenerate: false);
+        Assert.False(Statics.CantAttack(g, OnBattlefield(g, "Bonty")));
+    }
+
+    [Fact]
+    public void SourcesControllerSacrifices()
+    {
+        var g = Setup(new[] { "Quake" }, battlefield: new[] { "Oblit", "Bog", "Sig", "Wood" });
+        g.CastSpell(g.State[InHand(g, "Quake")], 0);
+        ResolveAll(g);
+        Assert.Equal(2, g.State.BattlefieldCards.Count(c => c.Controller == Game.Me));
+    }
+
+    [Fact]
+    public void FlashButSacrificedIfNotAtSorcerySpeed()
+    {
+        var g = Setup(new[] { "Raiser", "Bear" });
+        var bear = g.State[InHand(g, "Bear")];
+        g.MoveTo(bear, Zone.Graveyard);
+        var raiser = g.State[InHand(g, "Raiser")];
+        g.CastSpell(raiser, -1);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, bear.Zone);
+        Assert.Equal(bear.Id, raiser.AttachedTo);
+        Assert.True(raiser.Types.HasSubtype("Aura"));
+        Assert.DoesNotContain(g.State.ThisTurn.AtEndStep, e => e.CardId == raiser.Id);
+
+        g = Setup(new[] { "Raiser", "Bear" });
+        g.MoveTo(g.State[InHand(g, "Bear")], Zone.Graveyard);
+        g.State.Step = Step.BeginCombat;
+        Assert.Contains(g.LegalActions(Game.Me), a => a is GameAction.Cast);
+        raiser = g.State[InHand(g, "Raiser")];
+        g.CastSpell(raiser, -1);
+        ResolveAll(g);
+        Assert.Contains(g.State.ThisTurn.AtEndStep, e => e.CardId == raiser.Id && e.Action == "Sacrifice");
     }
 }

@@ -79,6 +79,10 @@ public sealed class Card
     public bool Escaped { get; set; }
     /// <summary>How many colors of mana were spent to cast it (converge).</summary>
     public int ColorsSpent { get; set; }
+    /// <summary>The mode chosen as it entered ("choose Khans or Dragons").</summary>
+    public string? ChosenMode { get; set; }
+    /// <summary>Cast at a time it couldn't have been cast as a sorcery: sacrificed at end of turn (MayFlashSac).</summary>
+    public bool FlashSac { get; set; }
     /// <summary>Cards chosen by its ChooseCard effect ("ChosenCard").</summary>
     public List<int>? ChosenCards { get; set; }
     /// <summary>Its triggered abilities as it last was on the battlefield, including granted ones ("when this creature dies").</summary>
@@ -172,7 +176,7 @@ public sealed class Card
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
         NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
-        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, PaidOptional = PaidOptional, ExiledWith = ExiledWith, FaceDown = FaceDown, Escaped = Escaped, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
+        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, PaidOptional = PaidOptional, ExiledWith = ExiledWith, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
@@ -300,13 +304,19 @@ public sealed class TurnInfo
     public Dictionary<int, int> LifeGained { get; set; } = new();
     /// <summary>Cards each player drew this turn.</summary>
     public Dictionary<int, int> CardsDrawn { get; set; } = new();
+    /// <summary>Zone changes this turn ("a creature died this turn", "lands that entered this turn").</summary>
+    public List<(int CardId, Zone From, Zone To)> Moves { get; set; } = new();
+    /// <summary>Life each player lost this turn.</summary>
+    public Dictionary<int, int> LifeLost { get; set; } = new();
+    /// <summary>Damage each source dealt this turn.</summary>
+    public Dictionary<int, int> DamageDealtBy { get; set; } = new();
     /// <summary>Players who controlled a permanent that left the battlefield this turn (revolt).</summary>
     public HashSet<int> PermanentLeft { get; set; } = new();
     public TurnInfo Clone() => new()
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
         ExtraPhases = new(ExtraPhases), Combats = Combats,
-        CardsDrawn = new(CardsDrawn), PermanentLeft = new(PermanentLeft),
+        CardsDrawn = new(CardsDrawn), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
     };
 }
 

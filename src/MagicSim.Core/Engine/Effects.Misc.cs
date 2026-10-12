@@ -430,7 +430,7 @@ sealed class GenericChoiceEffect : Effect
 {
     public override string Api => "GenericChoice";
     // FallbackAbility$ is what the AI does when it can't choose; a chooser here always can.
-    public override IReadOnlySet<string> Params { get; } = P("Choices", "Defined", "ShowChoice", "AILogic", "FallbackAbility", "TempRemember");
+    public override IReadOnlySet<string> Params { get; } = P("Choices", "Defined", "ShowChoice", "AILogic", "FallbackAbility", "TempRemember", "SetChosenMode");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -457,6 +457,8 @@ sealed class GenericChoiceEffect : Effect
             // Goldfish opponents make no real choices: they take the first.
             var pick = options.Count == 1 || x.S.Players[p].IsGoldfish ? 0
                 : x.Game.Decider.ChooseOption(x.Game, p, x.Host, options.Select(o => o.Value.Description).ToList());
+            // "As this enters, choose Khans or Dragons": remembered as the card's chosen mode.
+            if (x.Ability["SetChosenMode"] == "True") x.Host.ChosenMode = options[pick].Key;
             x.Game.RunSideChain(x, options[pick].Value);
         }
         x.Item.IteratedPlayer = saved;

@@ -544,7 +544,7 @@ public sealed partial class Game
                 result.Add(new GameAction.PlayLand(c.Id, face));
             return;
         }
-        if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed || Statics.CastWithFlash(this, c, p.Index))) return;
+        if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || c.HasKeyword("MayFlashSac") || sorcerySpeed || Statics.CastWithFlash(this, c, p.Index))) return;
         if (c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0)
         {
             if (CanCast(c, -1)) result.Add(new GameAction.Cast(c.Id, -1, face));
@@ -700,6 +700,8 @@ public sealed partial class Game
         Note($"cast {c.Name}" + (ability.CastFaceDown ? " face down" : "") + (x > 0 ? $" (X={x})" : "") + TargetText(item) + $" — pool {State.Players[player].Pool}");
         c.FaceDown = ability.CastFaceDown;
         c.Escaped = escaped;
+        // "If you cast it any time a sorcery couldn't have been cast, sacrifice it at the end of the turn" (MayFlashSac).
+        c.FlashSac = c.HasKeyword("MayFlashSac") && !(State.ActivePlayer == player && State.Stack.Count == 1 && State.Step is Step.Main1 or Step.Main2);
 
         if (c.HasKeyword("Storm"))
         {
@@ -929,6 +931,8 @@ public sealed partial class Game
                 source.AttachedTo = to;
             }
             MoveTo(source, Zone.Battlefield);
+            if (source.FlashSac && source.Zone == Zone.Battlefield) State.ThisTurn.AtEndStep.Add((source.Id, "Sacrifice"));
+            source.FlashSac = false;
             if (item.Ability.Evoke && source.Zone == Zone.Battlefield)
                 _pending.Add(new PendingTrigger(source.Id, EvokeTrigger, new TriggerEvent(TriggerMode.Immediate, CardId: source.Id), source.Controller));
             return;

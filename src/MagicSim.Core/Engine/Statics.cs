@@ -145,7 +145,8 @@ public static class Statics
         // "Creatures can't attack you unless …" (Ghostly Prison), "can't attack you": goldfish opponents never attack.
         if (s.Mode is "CantAttackUnless" or "CantAttack" && s["Target"] is "You" or "You,Planeswalker.YouCtrl") return;
         HashSet<string> own;
-        switch (s.Mode)
+        // "Can't attack or block": blocking never comes up against goldfish opponents.
+        switch (s.Mode is "CantAttack,CantBlock" or "CantBlock,CantAttack" ? "CantAttack" : s.Mode)
         {
             case "AlternativeCost":   // the compiler adds the alternative-cost spell abilities
                 own = AlternativeCostParams;
@@ -556,7 +557,7 @@ public static class Statics
         foreach (var source in Sources(g))
             foreach (var st in source.Statics)
             {
-                if (st.Mode != "CantAttack" || st["Target"] is not null || !WorksFrom(source, st)) continue;
+                if (!st.Mode.Split(',').Contains("CantAttack") || st["Target"] is not null || !WorksFrom(source, st)) continue;
                 var x = ContextFor(g, source, st);
                 if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(creature, x)) && Presence.Hold(st.P, x)) return true;
             }

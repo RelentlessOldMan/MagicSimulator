@@ -14,7 +14,7 @@ public static class Keywords
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
         "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade", "Ninjutsu", "Persist", "Undying",
-        "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit",
+        "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit", "MayFlashSac",
         // An Aura's own enchant restriction (Animate Dead swapping its "enchant" ability).
         "Enchant",
     };
@@ -59,6 +59,7 @@ public static class Triggers
         ["Unattached"] = new(StringComparer.Ordinal) { "ValidAttachment", "ValidObject" },
         ["Exploited"] = new(StringComparer.Ordinal) { "ValidSource" },
         ["Always"] = new(StringComparer.Ordinal) { },
+        ["LifeLost"] = new(StringComparer.Ordinal) { "ValidPlayer" },
     };
 
     public static readonly HashSet<string> Supported = new(ModeParams.Keys.Concat(NeverInGoldfish), StringComparer.Ordinal);
@@ -146,6 +147,8 @@ public static class Triggers
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
             case "TurnFaceUp" when e.Mode == TriggerMode.TurnFaceUp:
                 return CardMatches(g, t, e.CardId, x, source);
+            case "LifeLost" when e.Mode == TriggerMode.LifeLost:
+                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
             case "Exploited" when e.Mode == TriggerMode.Exploited:
                 return (t["ValidSource"] is not { } exploiter || Effect.FilterFor(t.Face, exploiter).MatchesCard(g.State[e.TargetCardId!.Value], x))
                     && CardMatches(g, t, e.CardId, x, source);

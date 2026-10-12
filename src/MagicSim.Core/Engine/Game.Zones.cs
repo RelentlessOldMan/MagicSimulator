@@ -74,6 +74,7 @@ public sealed partial class Game
         if (c.IsToken && to != Zone.Battlefield)
         {
             c.Zone = Zone.None;   // tokens cease to exist outside the battlefield (rule 111.8)
+            State.ThisTurn.Moves.Add((c.Id, from, to));
             Fire(new TriggerEvent(TriggerMode.ChangesZone, CardId: c.Id, From: from, To: to));
             return;
         }
@@ -121,6 +122,7 @@ public sealed partial class Game
         if (to == Zone.Hand && c.Owner == Me) State.Record.Seen.Add(c.Name);
         if (from != Zone.None || c.IsToken)
         {
+            State.ThisTurn.Moves.Add((c.Id, from, to));
             Fire(new TriggerEvent(TriggerMode.ChangesZone, CardId: c.Id, From: from, To: to));
             _zoneBatch.Add((c.Id, from, to));
         }
@@ -444,7 +446,8 @@ public sealed partial class Game
             _damageBatch.Add((source.Id, player, null, amount, combat));
             return amount;
         }
-        State.Players[player].Life -= Replacements.Amount(this, "LifeReduced", amount, source, targetPlayer: player);
+        LifeLoss(player, Replacements.Amount(this, "LifeReduced", amount, source, targetPlayer: player));
+        if (source is not null) State.ThisTurn.DamageDealtBy[source.Id] = State.ThisTurn.DamageDealtBy.GetValueOrDefault(source.Id) + amount;
         // Toxic N: combat damage to a player also gives N poison counters (rule 702.164).
         if (combat && source is not null)
             foreach (var k in source.CurrentFace.RawKeywords)
@@ -467,6 +470,7 @@ public sealed partial class Game
         if (source is not null && (source.HasKeyword("Infect") || source.HasKeyword("Wither"))) PutCounters(target, "M1M1", amount);
         else target.Damage += amount;
         if (source is null) return;
+        State.ThisTurn.DamageDealtBy[source.Id] = State.ThisTurn.DamageDealtBy.GetValueOrDefault(source.Id) + amount;
         if (source.HasKeyword("Lifelink")) GainLife(source.Controller, amount);
         if (source.HasKeyword("Deathtouch") && target.Types.Is(CardType.Creature)) target.Damage = Math.Max(target.Damage, target.Toughness);
         Fire(new TriggerEvent(TriggerMode.DamageDone, CardId: source.Id, TargetCardId: target.Id, Amount: amount, Combat: combat));
@@ -477,7 +481,7 @@ public sealed partial class Game
     {
         if (amount <= 0) return;
         amount = Replacements.Amount(this, "LifeReduced", amount, source, targetPlayer: player);
-        State.Players[player].Life -= amount;
+        LifeLoss(player, amount);
         Note($"player {player} loses {amount} life (life {State.Players[player].Life})");
         if (source is not null && player != Me) RememberWinCard(source);
     }
@@ -498,8 +502,17 @@ public sealed partial class Game
     public void PayLife(int player, int amount)
     {
         if (amount <= 0) return;
-        State.Players[player].Life -= amount;
+        LifeLoss(player, amount);
         State.Players[player].LifePaidTotal += amount;
+    }
+
+    /// <summary>A player loses life (from damage, paying it, or losing it): counted for the turn and "whenever … loses life" triggers.</summary>
+    private void LifeLoss(int player, int amount)
+    {
+        if (amount <= 0) return;
+        State.Players[player].Life -= amount;
+        State.ThisTurn.LifeLost[player] = State.ThisTurn.LifeLost.GetValueOrDefault(player) + amount;
+        Fire(new TriggerEvent(TriggerMode.LifeLost, Player: player, Amount: amount));
     }
 
     /// <summary>The cards that dealt the final blows / performed the win, for win_cards.</summary>
@@ -512,7 +525,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);
