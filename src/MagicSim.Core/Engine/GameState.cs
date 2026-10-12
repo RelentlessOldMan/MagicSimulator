@@ -327,6 +327,10 @@ public sealed class TurnInfo
     public Dictionary<int, int> LifeGained { get; set; } = new();
     /// <summary>Cards each player drew this turn.</summary>
     public Dictionary<int, int> CardsDrawn { get; set; } = new();
+    /// <summary>The cards you drew this turn ("cards in your hand drawn this turn").</summary>
+    public HashSet<int> Drawn { get; set; } = new();
+    /// <summary>Spells cast this turn ("if an opponent has cast a blue or black spell this turn").</summary>
+    public List<int> Cast { get; set; } = new();
     /// <summary>Cards each player discarded this turn.</summary>
     public Dictionary<int, int> CardsDiscarded { get; set; } = new();
     /// <summary>Zone changes this turn ("a creature died this turn", "lands that entered this turn").</summary>
@@ -341,7 +345,7 @@ public sealed class TurnInfo
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
         ExtraPhases = new(ExtraPhases), Combats = Combats, AttackersDeclared = AttackersDeclared, DefendingPlayer = DefendingPlayer,
-        CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
+        Drawn = new(Drawn), Cast = new(Cast), CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
     };
 }
 

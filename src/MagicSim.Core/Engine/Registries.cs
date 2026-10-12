@@ -14,7 +14,7 @@ public static class Keywords
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
         "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade", "Ninjutsu", "Persist", "Undying",
-        "Flashback", "Unearth", "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit", "MayFlashSac", "Overload", "Entwine", "Ascend",
+        "Flashback", "Unearth", "Cumulative upkeep", "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit", "MayFlashSac", "Overload", "Entwine", "Ascend",
         // An Aura's own enchant restriction (Animate Dead swapping its "enchant" ability).
         "Enchant",
     };

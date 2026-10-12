@@ -391,6 +391,7 @@ public sealed partial class Game
             if (p.Library.Count == 0) { p.DrewFromEmpty = true; continue; }
             var c = State[p.Library[0]];
             MoveTo(c, Zone.Hand);
+            State.ThisTurn.Drawn.Add(c.Id);
             var nth = State.ThisTurn.CardsDrawn[player] = State.ThisTurn.CardsDrawn.GetValueOrDefault(player) + 1;
             if (record) Note($"draw {c.Name}");
             if (record) Fire(new TriggerEvent(TriggerMode.Drawn, CardId: c.Id, Player: player, Amount: nth));
@@ -899,6 +900,10 @@ public sealed partial class Game
                 case CostPartKind.PayLife:
                     lifeNeeded += AmountOf(part, x);
                     break;
+                // "Draw two cards" as a cost (Sylvan Library): not from a library too small to draw from.
+                case CostPartKind.Draw:
+                    if (p.Library.Count < AmountOf(part, x)) return false;
+                    break;
                 case CostPartKind.Sacrifice:
                     if (part.Valid == "CARDNAME") { if (source.Zone != Zone.Battlefield) return false; }
                     else if (CostCandidates(part, source, player).Count < AmountOf(part, x)) return false;
@@ -1000,6 +1005,9 @@ public sealed partial class Game
             {
                 case CostPartKind.PayLife:
                     PayLife(player, n);
+                    break;
+                case CostPartKind.Draw:
+                    Draw(player, n);
                     break;
                 case CostPartKind.Sacrifice:
                     if (part.Valid == "CARDNAME") { LastSacrificed.Add(source.Id); Sacrifice(source); }

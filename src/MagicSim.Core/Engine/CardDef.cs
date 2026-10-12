@@ -3,7 +3,7 @@ using MagicSim.Core.Forge;
 
 namespace MagicSim.Core.Engine;
 
-public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower, ExileSource }
+public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower, ExileSource, Draw }
 
 /// <summary>A non-mana cost component: "Sac&lt;1/CARDNAME&gt;", "Discard&lt;0/Hand&gt;", "PayLife&lt;2&gt;", …</summary>
 public sealed record CostPart(CostPartKind Kind, string Amount, string Valid, string Raw);
@@ -430,6 +430,14 @@ public static partial class CardCompiler
             }
             case "Flashback":
                 face.Flashback = ParseCost(Part(1), ctx);
+                return true;
+            case "Cumulative upkeep":
+                // "At the beginning of your upkeep, put an age counter on this permanent, then sacrifice it unless you pay
+                // its upkeep cost for each age counter on it."
+                face.SVars["__CumulativeAge"] = "DB$ PutCounter | Defined$ Self | CounterType$ AGE | CounterNum$ 1 | SubAbility$ __CumulativePay";
+                face.SVars["__CumulativePay"] = $"DB$ CumulativeUpkeep | UpkeepCost$ {Part(1)}";
+                face.Triggers.Add(CompileTrigger(new ForgeParams(
+                    "Mode$ Phase | Phase$ Upkeep | ValidPlayer$ You | TriggerZones$ Battlefield | Execute$ __CumulativeAge"), ctx));
                 return true;
             case "Unearth":
                 // "{cost}: Return this card from your graveyard to the battlefield. It gains haste. Exile it at the beginning
@@ -858,7 +866,7 @@ public static partial class CardCompiler
         {
             ab.UnlessCost = ParseCost(unless, ctx);
             if (p["UnlessPayer"] is { } payer && payer is not ("You" or "TargetedController" or "Targeted" or "Opponent" or "Player"
-                    or "TriggeredActivator" or "TriggeredCardController" or "Remembered"))
+                    or "TriggeredActivator" or "TriggeredPlayer" or "TriggeredCardController" or "Remembered"))
                 ctx.Need("UnlessPayer:" + payer);
         }
 
@@ -938,6 +946,7 @@ public static partial class CardCompiler
                 "Reveal" => CostPartKind.Reveal,
                 "Exile" when valid == "CARDNAME" || m.Groups[2].Value == "CARDNAME" => CostPartKind.ExileSource,
                 "Crew" => CostPartKind.TapPower,
+                "Draw" when valid == "You" => CostPartKind.Draw,
                 _ => null,
             };
             if (kind is null) { ctx.Need("Cost:" + m.Groups[1].Value); continue; }

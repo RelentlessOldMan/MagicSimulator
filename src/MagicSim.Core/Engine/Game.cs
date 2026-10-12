@@ -888,6 +888,7 @@ public sealed partial class Game
         c.XPaid = x;
         State.Stack.Add(item);
         State.ThisTurn.SpellsCast++;
+        State.ThisTurn.Cast.Add(c.Id);
         State.Record.Cast.Add(c.Name);
         Note($"cast {c.Name}" + (ability.CastFaceDown ? " face down" : "") + (x > 0 ? $" (X={x})" : "") + TargetText(item) + $" — pool {State.Players[player].Pool}");
         c.FaceDown = ability.CastFaceDown;
@@ -1259,7 +1260,7 @@ public sealed partial class Game
     {
         "You" => x.Controller,
         null or "TargetedController" or "Targeted" => x.Targets.Select(t => t.Player ?? State[t.CardId!.Value].Controller).Cast<int?>().FirstOrDefault(),
-        "TriggeredActivator" => x.Item.TriggeredPlayer,
+        "TriggeredActivator" or "TriggeredPlayer" => x.Item.TriggeredPlayer,
         "TriggeredCardController" => x.Item.TriggeredCardId is { } tc ? State[tc].Controller : null,
         "Remembered" => x.Item.IteratedPlayer,
         _ => null,   // "Opponent"/"Player": only goldfish opponents would act, and they never do

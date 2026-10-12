@@ -118,7 +118,7 @@ public static class Statics
         "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
         "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost", "MayPlayIgnoreType",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
-        "AddSVar",
+        "AddSVar", "GainsAbilitiesOf", "GainsAbilitiesOfZones",
         // Goaded creatures must attack someone else: only opponents' creatures get goaded, and they never attack.
         "Goad",
     };
@@ -215,7 +215,7 @@ public static class Statics
 
     private static void ValidateContinuous(StaticDef s, CompileContext ctx)
     {
-        if (s["AffectedDefined"] is { } ad && ad is not ("Self" or "Enchanted" or "Equipped")) ctx.Need("AffectedDefined:" + ad);
+        if (s["AffectedDefined"] is { } ad && ad is not ("Self" or "Enchanted" or "Equipped" or "AttachedBy Self")) ctx.Need("AffectedDefined:" + ad);
         if (s["Affected"] is { } a) Filter.Parse(a, ctx);
         if (s["MayPlay"] is { } mp)
         {
@@ -235,6 +235,9 @@ public static class Statics
         foreach (var key in new[] { "AddPower", "AddToughness", "SetPower", "SetToughness", "AdjustLandPlays" })
             if (s[key] is { } v && v != "Unlimited") Amount.Parse(v, ctx);
         if (s["SetMaxHandSize"] is { } mh && mh != "Unlimited") Amount.Parse(mh, ctx);
+        if (s["GainsAbilitiesOf"] is { } gao) Filter.Parse(gao, ctx);
+        if (s["GainsAbilitiesOfZones"] is { } gaz && !gaz.Split(',').All(z => z.Trim() is "Graveyard" or "Battlefield" or "Exile"))
+            ctx.Need("GainsAbilitiesOfZones:" + gaz);
         if (s["RaiseMaxHandSize"] is { } rmh) Amount.Parse(rmh, ctx);
         if (s["AddKeyword"] is { } kws)
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
@@ -393,6 +396,23 @@ public static class Statics
         for (var i = 0; i < holding.Count; i++)
             if (holding[i].Static.Grants is { } grants)
                 foreach (var card in Affected(i)) Grant(card, grants);
+        // "It has all activated abilities of all creature cards in all graveyards" (Necrotic Ooze).
+        for (var i = 0; i < holding.Count; i++)
+        {
+            var (_, st, x) = holding[i];
+            if (st["GainsAbilitiesOf"] is not { } of) continue;
+            var filter = Effect.FilterFor(x.SVarFace, of);
+            var zones = (st["GainsAbilitiesOfZones"] ?? "Battlefield").Split(',').Select(z => Enum.Parse<Zone>(z.Trim()));
+            var gained = zones.SelectMany(g.CardsIn).Where(c => !c.IsBlank && filter.MatchesCard(c, x))
+                .SelectMany(c => c.CurrentFace.Activated).Where(ab => ab["ActivationZone"] is null or "Battlefield").Distinct().ToList();
+            if (gained.Count == 0) continue;
+            foreach (var card in Affected(i))
+            {
+                var list = card.StaticActivated ??= new(card.CurrentFace.Activated);
+                foreach (var ab in gained)
+                    if (!list.Contains(ab)) list.Add(ab);
+            }
+        }
         // A land that gains a basic land type gains its mana ability (rule 305.7).
         foreach (var card in s.BattlefieldCards)
             if (card.StaticTypes is { } t && t.Is(CardType.Land))
@@ -529,7 +549,7 @@ public static class Statics
             case "Self":
                 cards = new[] { source };
                 break;
-            case "Enchanted" or "Equipped":
+            case "Enchanted" or "Equipped" or "AttachedBy Self":
                 cards = source.AttachedTo >= 0 && g.State[source.AttachedTo].Zone == Zone.Battlefield
                     ? new[] { g.State[source.AttachedTo] } : Array.Empty<Card>();
                 break;

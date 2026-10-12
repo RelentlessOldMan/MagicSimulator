@@ -58,7 +58,7 @@ public static class Effects
         new ManaReflectedEffect(), new FlipCoinEffect(), new RepeatEffect(), new StoreSVarEffect(),
         new EffectEffect(), new ChooseColorEffect(), new ChooseTypeEffect(), new ChoosePlayerEffect(),
         new CopyPermanentEffect(), new CloneEffect(), new AnimateEffect(), new ProliferateEffect(),
-        new DelayedTriggerEffect(), new RepeatEachEffect(), new TwoPilesEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
+        new DelayedTriggerEffect(), new RepeatEachEffect(), new TwoPilesEffect(), new CumulativeUpkeepEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
         new AnimateAllEffect(), new FightEffect(), new BranchEffect(), new MultiplyCounterEffect(), new SetStateEffect(),
         new UntapAllEffect(), new RemoveCounterEffect(), new ClassLevelUpEffect(), new ProtectionEffect(), new RollDiceEffect(),
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
@@ -201,6 +201,8 @@ sealed class ChangeZoneEffect : Effect
         "Origin", "Destination", "ChangeType", "ChangeNum", "Hidden", "Mandatory", "Tapped", "LibraryPosition", "Defined",
         "ChangeTypeDesc", "Shuffle", "Reveal", "SelectPrompt", "Reorder", "Optional", "NoReveal", "ShuffleNonMandatory",
         "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "OriginAlternative", "AIXMax", "WithCountersType", "WithCountersAmount", "RememberTargets", "Duration", "TargetsWithDefinedController", "RememberLKI",
+        // "Any number of creature cards with total mana value 6 or less."
+        "WithTotalCMC",
         // Brought back for a while: exiled or sacrificed at the next end step, exiled if it would leave.
         "AtEOT", "LeaveBattlefield",
         // Face down only hides it from opponents, which goldfish opponents don't care about.
@@ -214,6 +216,8 @@ sealed class ChangeZoneEffect : Effect
         foreach (var key in new[] { "Origin", "Destination", "OriginAlternative" })
             if (ab[key] is { } z && !z.Split(',').All(s => Zones.Contains(s.Trim()) || key == "Origin" && s.Trim() == "Sideboard"
                     || key == "Origin" && s.Trim() is "Stack" or "All" && (ab["Defined"] is not null || ab.TargetFilter is not null)
+                    // "Exile [this spell]": with nothing defined, the resolving spell itself.
+                    || key == "Origin" && z == "Stack" && ab["Defined"] is null && ab.TargetFilter is null
                     // "Exile this effect": an effect object ends itself (Words of Waste).
                     || key == "Origin" && s.Trim() == "Command" && ab["Defined"] == "Self"))
                 ctx.Need($"ChangeZone.{key}:{z}");
@@ -224,6 +228,7 @@ sealed class ChangeZoneEffect : Effect
         if (ab["LeaveBattlefield"] is { } lb && lb != "Exile") ctx.Need("ChangeZone.LeaveBattlefield:" + lb);
         if (ab["ChangeType"] is { } ct) Filter.Parse(ct, ctx);
         if (ab["ChangeNum"] is { } cn && cn != "All") Engine.Amount.Parse(cn, ctx);
+        if (ab["WithTotalCMC"] is { } total) Engine.Amount.Parse(total, ctx);
         Defined.ValidateCards(ab["Defined"], ctx);
         Defined.ValidatePlayers(ab["DefinedPlayer"], ctx);
     }
@@ -278,10 +283,11 @@ sealed class ChangeZoneEffect : Effect
         var position = ab["LibraryPosition"] is { } lp ? int.Parse(lp) : 0;
         var tapped = ab["Tapped"] == "True";
 
-        // Known cards (Defined$ or targets): just move them.
-        if (ab["Defined"] is not null || ab.TargetFilter is not null)
+        // Known cards (Defined$ or targets): just move them. From the stack with neither, the spell itself.
+        var self = ab["Origin"] == "Stack" && ab["Defined"] is null && ab.TargetFilter is null;
+        if (ab["Defined"] is not null || ab.TargetFilter is not null || self)
         {
-            var ids = ab["Defined"] is { } d ? Defined.Cards(d, x) : Defined.Cards("Targeted", x);
+            var ids = self ? Defined.Cards("Self", x) : ab["Defined"] is { } d ? Defined.Cards(d, x) : Defined.Cards("Targeted", x);
             if (ab["RememberTargets"] == "True") (x.Host.Remembered ??= new()).AddRange(Defined.Cards("Targeted", x));
             foreach (var id in ids)
             {
@@ -317,7 +323,23 @@ sealed class ChangeZoneEffect : Effect
         var max = Math.Min(num, candidates.Count);
         var min = mandatory ? max : 0;
         var kind = origins.Contains(Zone.Library) ? Choice.Tutor : Choice.Generic;
-        var chosen = max == 0 ? new List<int>() : x.Game.Decider.ChooseCards(x.Game, searcher, kind, x.Host, candidates, min, max);
+        List<int> chosen;
+        if (ab["WithTotalCMC"] is { } total)
+        {
+            // One at a time, each within what's left of the total.
+            chosen = new();
+            var left = Amount(x, total, 0);
+            while (chosen.Count < max)
+            {
+                var fits = candidates.Where(id => !chosen.Contains(id) && x.S[id].CurrentFace.ManaCost.ManaValue <= left).ToList();
+                if (fits.Count == 0) break;
+                var pick = x.Game.Decider.ChooseCards(x.Game, searcher, kind, x.Host, fits, 0, 1);
+                if (pick.Count == 0) break;
+                chosen.Add(pick[0]);
+                left -= x.S[pick[0]].CurrentFace.ManaCost.ManaValue;
+            }
+        }
+        else chosen = max == 0 ? new List<int>() : x.Game.Decider.ChooseCards(x.Game, searcher, kind, x.Host, candidates, min, max);
         if (kind == Choice.Tutor) x.Game.Note($"  search: {(chosen.Count == 0 ? "nothing" : string.Join(", ", chosen.Select(id => x.S[id].Name)))}");
         var shuffle = origins.Contains(Zone.Library) && ab["Shuffle"] != "False" && ab["NoShuffle"] != "True";
         // "Shuffle and put that card on top" (Vampiric Tutor): the shuffle comes before the card goes back.
@@ -815,6 +837,34 @@ sealed class DestroyEffect : CardsEffect
     public override void Resolve(EffectContext x)
     {
         foreach (var c in Cards(x)) x.Game.Destroy(c, regenerate: x.Ability["NoRegen"] != "True");
+    }
+}
+
+/// <summary>The second half of cumulative upkeep (rule 702.24): pay the cost once per age counter, or sacrifice it.</summary>
+sealed class CumulativeUpkeepEffect : Effect
+{
+    public override string Api => "CumulativeUpkeep";
+    public override IReadOnlySet<string> Params { get; } = P("UpkeepCost");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        var cost = CardCompiler.ParseCost(ab["UpkeepCost"] ?? "", ctx);
+        // Paying "sacrifice a land" twice is two different lands; only costs that simply add up are supported.
+        if (cost.Tap || cost.Parts.Any(p => p.Kind != CostPartKind.PayLife)) ctx.Need("CumulativeUpkeep:" + ab["UpkeepCost"]);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var host = x.Host;
+        if (host.Zone != Zone.Battlefield) return;
+        var once = CardCompiler.ParseCost(x.Ability["UpkeepCost"]!, new CompileContext { Face = x.SVarFace, Missing = new() });
+        var total = Cost.Free;
+        for (var i = 0; i < host.CounterCount("AGE"); i++) total = total.Plus(once);
+        if (x.Game.CanPayCost(total, host, x.Controller, 0, excludeSourceFromMana: false)
+            && x.Game.Decider.ChooseYesNo(x.Game, x.Controller, host, $"pay cumulative upkeep {total.Mana} for {host.Name}?")
+            && x.Game.PayCost(total, host, x.Controller, 0, excludeSourceFromMana: false))
+            return;
+        x.Game.Sacrifice(host);
     }
 }
 

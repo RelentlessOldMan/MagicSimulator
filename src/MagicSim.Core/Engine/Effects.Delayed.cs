@@ -45,7 +45,9 @@ sealed class RepeatEachEffect : Effect
     public override string Api => "RepeatEach";
     public override IReadOnlySet<string> Params { get; } = P(
         "RepeatSubAbility", "RepeatPlayers", "RepeatCards", "DefinedCards", "Zone", "StartingWith", "ClearRememberedBeforeLoop",
-        "UseImprinted", "ChangeZoneTable", "DamageMap");
+        "UseImprinted", "ChangeZoneTable", "DamageMap",
+        // The order only matters when it puts cards on top of the library; they go in the order chosen.
+        "ChooseOrder");
 
     private static readonly HashSet<string> Zones = new(StringComparer.Ordinal) { "Battlefield", "Graveyard", "Exile", "Hand", "Library" };
 

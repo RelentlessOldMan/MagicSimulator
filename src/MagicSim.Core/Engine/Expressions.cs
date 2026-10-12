@@ -107,6 +107,8 @@ public sealed class Filter
             "ActivePlayerCtrl" => (c, pl, x) => c is not null ? c.Controller == x.S.ActivePlayer : pl == x.S.ActivePlayer,
             "ChosenCtrl" => (c, pl, x) => c is not null ? c.Controller == x.Host.ChosenPlayer : pl is not null && pl == x.Host.ChosenPlayer,
             "Chosen" => (c, pl, x) => c is null && pl is not null && pl == x.Host.ChosenPlayer,
+            "DrawnThisTurn" => (c, pl, x) => c is not null && x.S.ThisTurn.Drawn.Contains(c.Id),
+            "ChosenCard" => (c, pl, x) => c is not null && (x.Host.ChosenCards?.Contains(c.Id) ?? false),
             // The controller of the creature this Aura enchants (Dance of the Dead's upkeep).
             "EnchantedController" => (c, pl, x) => c is null && pl is not null && x.Host.AttachedTo >= 0 && pl == x.S[x.Host.AttachedTo].Controller,
             "YouDontCtrl" => (c, pl, x) => c is not null && c.Controller != x.Controller,
@@ -439,6 +441,12 @@ public sealed class Amount
             // "You gain life equal to the damage dealt this way."
             case "TotalDamageDoneByThisTurn": return new(core, x => x.S.ThisTurn.DamageDealtBy.GetValueOrDefault(x.Host.Id));
         }
+        // "Count$ThisTurnCast_Card.OppCtrl+Blue,Card.OppCtrl+Black": spells cast this turn that fit.
+        if (kind.StartsWith("ThisTurnCast_", StringComparison.Ordinal))
+        {
+            var cast = Filter.Parse(kind[13..], ctx);
+            return new(core, x => x.S.ThisTurn.Cast.Count(id => cast.MatchesCard(x.S[id], x)));
+        }
         // "Count$ThisTurnEntered_Graveyard_from_Battlefield_Creature.YouCtrl": cards that moved there this turn (a creature died).
         if (kind.StartsWith("ThisTurnEntered_", StringComparison.Ordinal))
         {
@@ -634,6 +642,13 @@ public static class Defined
 
     public static void ValidateCards(string? text, CompileContext ctx)
     {
+        // "You & Valid Permanent.YouCtrl": each part; players among them aren't cards, so they add none.
+        if (text is not null && text.Contains(" & ", StringComparison.Ordinal))
+        {
+            foreach (var part in text.Split(" & "))
+                if (!PlayerRefs.Contains(part)) ValidateCards(part, ctx);
+            return;
+        }
         // "Valid Creature.YouCtrl": every permanent matching the filter.
         if (text is not null && text.StartsWith("Valid ", StringComparison.Ordinal)) { Filter.Parse(text[6..], ctx); return; }
         if (text is not null && !CardRefs.Contains(text)) ctx.Need("DefinedCard:" + text);
@@ -665,6 +680,8 @@ public static class Defined
 
     public static List<int> Cards(string? text, EffectContext x, string fallback = "Self")
     {
+        if (text is not null && text.Contains(" & ", StringComparison.Ordinal))
+            return text.Split(" & ").Where(part => !PlayerRefs.Contains(part)).SelectMany(part => Cards(part, x)).Distinct().ToList();
         if (text is not null && text.StartsWith("Valid ", StringComparison.Ordinal))
         {
             var filter = Effect.FilterFor(x.SVarFace, text[6..]);
