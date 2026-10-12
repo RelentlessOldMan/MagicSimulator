@@ -434,6 +434,18 @@ public sealed partial class Game
             AddPlayOrCast(result, c, p, sorcerySpeed);
         }
 
+        // Abilities activated from the graveyard ("Exile this card from your graveyard: …").
+        foreach (var id in p.Graveyard)
+        {
+            var c = State[id];
+            if (c.IsBlank || !seenNames.Add("graveyard-ability:" + c.Name)) continue;
+            for (var i = 0; i < c.Activated.Count; i++)
+            {
+                var ab = c.Activated[i];
+                if (ab["ActivationZone"] == "Graveyard" && CanActivate(c, ab, sorcerySpeed)) result.Add(new GameAction.Activate(id, i));
+            }
+        }
+
         // Flashback: cast from the graveyard.
         foreach (var id in p.Graveyard)
         {

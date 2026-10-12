@@ -62,6 +62,7 @@ public static class Effects
         new AnimateAllEffect(), new FightEffect(), new BranchEffect(), new MultiplyCounterEffect(), new SetStateEffect(),
         new UntapAllEffect(), new RemoveCounterEffect(), new ClassLevelUpEffect(), new ProtectionEffect(), new RollDiceEffect(),
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
+        new PoisonEffect(), new ExploreEffect(), new CascadeEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -302,7 +303,7 @@ sealed class DigEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "DigNum", "ChangeNum", "DestinationZone", "DestinationZone2", "LibraryPosition", "LibraryPosition2", "RestRandomOrder",
         "ChangeValid", "Optional", "AnyNumber", "Reveal", "Defined", "NoMove", "SkipReorder", "ForceRevealToController",
-        "RememberChanged", "Imprint");
+        "RememberChanged", "Imprint", "NoReveal");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -385,7 +386,7 @@ sealed class DigUntilEffect : Effect
 sealed class MillEffect : Effect
 {
     public override string Api => "Mill";
-    public override IReadOnlySet<string> Params { get; } = P("NumCards", "Defined");
+    public override IReadOnlySet<string> Params { get; } = P("NumCards", "Defined", "RememberMilled");
     public override void Validate(AbilityDef ab, CompileContext ctx) { ValidateAmount(ab, "NumCards", ctx); Defined.ValidatePlayers(ab["Defined"], ctx); }
 
     public override void Resolve(EffectContext x)
@@ -393,7 +394,8 @@ sealed class MillEffect : Effect
         var n = Amount(x, x.Ability["NumCards"], 1);
         foreach (var p in DrawEffect.Players(x))
         {
-            x.Game.Mill(p, n);
+            var milled = x.Game.Mill(p, n);
+            if (x.Ability["RememberMilled"] == "True") (x.Host.Remembered ??= new()).AddRange(milled);
             if (p != x.Controller) x.Game.RememberWinCard(x.Host);
         }
     }
@@ -601,8 +603,8 @@ sealed class PumpEffect : CardsEffect
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         base.Validate(ab, ctx);
-        ValidateAmount(ab, "NumAtt", ctx);
-        ValidateAmount(ab, "NumDef", ctx);
+        if (ab["NumAtt"] != "Double") ValidateAmount(ab, "NumAtt", ctx);
+        if (ab["NumDef"] != "Double") ValidateAmount(ab, "NumDef", ctx);
         ValidateKeywords(ab["KW"], ctx);
         Defined.ValidateCards(ab["RememberObjects"], ctx);
     }
@@ -625,12 +627,15 @@ sealed class PumpEffect : CardsEffect
 
     public override void Resolve(EffectContext x)
     {
-        var att = Amount(x, x.Ability["NumAtt"], 0);
-        var def = Amount(x, x.Ability["NumDef"], 0);
+        // "Double": gets +X/+0 where X is its power ("double its power").
+        var doubleAtt = x.Ability["NumAtt"] == "Double";
+        var doubleDef = x.Ability["NumDef"] == "Double";
+        var att = doubleAtt ? 0 : Amount(x, x.Ability["NumAtt"], 0);
+        var def = doubleDef ? 0 : Amount(x, x.Ability["NumDef"], 0);
         // "Pump" with only RememberObjects$ is Forge's way to remember cards on the source.
         if (x.Ability["RememberObjects"] is { } ro) (x.Host.Remembered ??= new()).AddRange(Defined.Cards(ro, x));
         if (x.Ability["Defined"] is null && x.Ability.TargetFilter is null && x.Ability["RememberObjects"] is not null) return;
-        foreach (var c in Cards(x)) Apply(c, att, def, x.Ability["KW"]);
+        foreach (var c in Cards(x)) Apply(c, doubleAtt ? Math.Max(0, c.Power) : att, doubleDef ? Math.Max(0, c.Toughness) : def, x.Ability["KW"]);
     }
 }
 

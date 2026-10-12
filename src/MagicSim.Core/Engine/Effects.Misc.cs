@@ -176,6 +176,7 @@ sealed class ClassLevelUpEffect : Effect
     {
         x.Host.ClassLevel = int.Parse(x.Ability["ClassLevel"]!);
         x.Game.StaticsApplied = true;
+        x.Game.Fire(new TriggerEvent(TriggerMode.ClassLevelGained, CardId: x.Host.Id, Amount: x.Host.ClassLevel));
         x.Game.Note($"  {x.Host.Name} is now level {x.Host.ClassLevel}");
     }
 }
@@ -251,5 +252,80 @@ sealed class AmassEffect : Effect
                    ?? x.Game.CreateToken(x.Ability.Tokens![0], x.Controller, tapped: false);
         x.Game.PutCounters(army, "P1P1", Amount(x, x.Ability["Num"], 1));
         if (x.Ability["RememberAmass"] == "True") (x.Host.Remembered ??= new()).Add(army.Id);
+    }
+}
+
+/// <summary>"[Players] get N poison counters."</summary>
+sealed class PoisonEffect : Effect
+{
+    public override string Api => "Poison";
+    public override IReadOnlySet<string> Params { get; } = P("Num", "Defined");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        ValidateAmount(ab, "Num", ctx);
+        Defined.ValidatePlayers(ab["Defined"], ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var n = Amount(x, x.Ability["Num"], 1);
+        foreach (var p in DrawEffect.Players(x)) x.S.Players[p].Poison += n;
+    }
+}
+
+/// <summary>Explore (rule 701.44): reveal the top card; a land goes to hand, otherwise a +1/+1 counter and you may mill it.</summary>
+sealed class ExploreEffect : CardsEffect
+{
+    public override string Api => "Explore";
+    public override IReadOnlySet<string> Params { get; } = P("Defined");
+
+    public override void Resolve(EffectContext x)
+    {
+        foreach (var c in Cards(x).DefaultIfEmpty(x.Host).ToList())
+        {
+            var lib = x.S.Players[c.Controller].Library;
+            if (lib.Count == 0) { if (c.Zone == Zone.Battlefield) x.Game.PutCounters(c, "P1P1", 1); continue; }
+            var top = x.S[lib[0]];
+            x.S.Players[c.Controller].KnownTop = Math.Max(1, x.S.Players[c.Controller].KnownTop);
+            if (top.Types.Is(CardType.Land)) { x.Game.MoveTo(top, Zone.Hand); continue; }
+            if (c.Zone == Zone.Battlefield) x.Game.PutCounters(c, "P1P1", 1);
+            if (x.Game.Decider.ChooseYesNo(x.Game, c.Controller, x.Host, $"put {top.Name} into your graveyard?")) x.Game.MoveTo(top, Zone.Graveyard);
+        }
+    }
+}
+
+/// <summary>
+/// Cascade (rule 702.85): exile cards from the top until a nonland card with lesser mana value; you may
+/// cast it without paying its mana cost; the rest go to the bottom in a random order.
+/// </summary>
+sealed class CascadeEffect : Effect
+{
+    public override string Api => "Cascade";
+    public override IReadOnlySet<string> Params { get; } = P();
+
+    public override void Resolve(EffectContext x)
+    {
+        var lib = x.S.Players[x.Controller].Library;
+        var mv = x.Host.CurrentFace.ManaCost.ManaValue;
+        var exiled = new List<Card>();
+        Card? hit = null;
+        while (lib.Count > 0)
+        {
+            var c = x.S[lib[0]];
+            x.Game.MoveTo(c, Zone.Exile);
+            exiled.Add(c);
+            if (!c.Types.Is(CardType.Land) && c.CurrentFace.ManaCost.ManaValue < mv) { hit = c; break; }
+        }
+        x.Game.Note($"  cascade exiles {exiled.Count} card(s)" + (hit is null ? "" : $", hitting {hit.Name}"));
+        if (hit is not null && x.Game.CanCastFromEffect(hit, free: true)
+            && x.Game.Decider.ChooseYesNo(x.Game, x.Controller, hit, $"cast {hit.Name} without paying its mana cost?"))
+        {
+            x.Game.CastFromEffect(hit, free: true, exileAfter: false);
+            exiled.Remove(hit);
+        }
+        x.S.Rng.Shuffle(exiled);
+        foreach (var c in exiled)
+            if (c.Zone == Zone.Exile) x.Game.MoveTo(c, Zone.Library, position: -1);
     }
 }

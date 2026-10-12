@@ -357,11 +357,18 @@ public sealed partial class Game
         Fire(new TriggerEvent(TriggerMode.Discarded, CardId: c.Id, Player: c.Owner));
     }
 
-    public void Mill(int player, int n)
+    /// <summary>Mills <paramref name="n"/> cards; returns the cards milled.</summary>
+    public List<int> Mill(int player, int n)
     {
         var p = State.Players[player];
-        if (p.IsGoldfish) { p.AbstractLibrary = Math.Max(0, p.AbstractLibrary - n); return; }
-        for (var i = 0; i < n && p.Library.Count > 0; i++) MoveTo(State[p.Library[0]], Zone.Graveyard);
+        var milled = new List<int>();
+        if (p.IsGoldfish) { p.AbstractLibrary = Math.Max(0, p.AbstractLibrary - n); return milled; }
+        for (var i = 0; i < n && p.Library.Count > 0; i++)
+        {
+            milled.Add(p.Library[0]);
+            MoveTo(State[p.Library[0]], Zone.Graveyard);
+        }
+        return milled;
     }
 
     public void Shuffle(int player)
@@ -465,7 +472,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);
@@ -788,6 +795,9 @@ public sealed partial class Game
                 case CostPartKind.Reveal:
                     if (CostCandidates(part, source, player).Count < AmountOf(part)) return false;
                     break;
+                case CostPartKind.ExileSource:
+                    if (source.Zone is not (Zone.Battlefield or Zone.Graveyard or Zone.Hand)) return false;
+                    break;
                 case CostPartKind.TapPower:
                     if (CostCandidates(part, source, player).Sum(id => Math.Max(0, State[id].Power)) < AmountOf(part)) return false;
                     break;
@@ -908,6 +918,9 @@ public sealed partial class Game
                     break;
                 case CostPartKind.Reveal:
                     break;   // revealing changes nothing in a goldfish game
+                case CostPartKind.ExileSource:
+                    MoveTo(source, Zone.Exile);
+                    break;
                 case CostPartKind.TapPower:
                     // Crew with the fewest, weakest creatures that reach the power needed.
                     var power = 0;

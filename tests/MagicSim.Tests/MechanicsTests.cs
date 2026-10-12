@@ -215,6 +215,12 @@ public class MechanicsTests
         "Name:Raider\nManaCost:0\nTypes:Creature Human\nPT:2/2\nK:Haste\nK:Mobilize:2\n",
         "Name:Anger\nManaCost:3\nTypes:Creature Incarnation\nPT:2/2\nS:Mode$ Continuous | Affected$ Creature.YouCtrl | AddKeyword$ Haste | EffectZone$ Graveyard\n",
         "Name:Humble\nManaCost:0\nTypes:Enchantment\nS:Mode$ Continuous | Affected$ Artifact.Creature | RemoveType$ Creature\n",
+        "Name:Bloom\nManaCost:3\nTypes:Sorcery\nK:Cascade\nA:SP$ Draw | NumCards$ 1 | Defined$ You\n",
+        "Name:Scout\nManaCost:0\nTypes:Creature Scout\nPT:1/1\n" +
+        "T:Mode$ ChangesZone | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ TrigExplore\nSVar:TrigExplore:DB$ Explore\n",
+        "Name:Venom\nManaCost:0\nTypes:Sorcery\nA:SP$ Poison | Defined$ Player.Opponent | Num$ 3\n",
+        "Name:Doubler\nManaCost:0\nTypes:Instant\nA:SP$ Pump | ValidTgts$ Creature | NumAtt$ Double\n",
+        "Name:Ghost\nManaCost:9\nTypes:Creature Spirit\nPT:1/1\nA:AB$ GainLife | Cost$ 0 Exile<1/CARDNAME> | ActivationZone$ Graveyard | Defined$ You | LifeAmount$ 2\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -1348,6 +1354,59 @@ public class MechanicsTests
         g.CheckStateBasedActions();
         Assert.False(OnBattlefield(g, "Frog").Types.Is(CardType.Creature));
         Assert.True(OnBattlefield(g, "Frog").Types.Is(CardType.Artifact));
+    }
+
+    [Fact]
+    public void CascadeCastsTheFirstCheaperNonland()
+    {
+        var g = Setup(new[] { "Bloom" }, battlefield: new[] { "Bog", "Bog", "Bog" }, library: new[] { "Bog", "Filler", "Toll", "Bear" });
+        g.CastSpell(g.State[InHand(g, "Bloom")], 0);
+        ResolveAll(g);
+        Assert.All(g.State.Players.Where(p => p.Index != Game.Me), p => Assert.Equal(38, p.Life));
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Toll").Zone);
+        Assert.Empty(g.State.Players[Game.Me].Exile);
+        Assert.Equal(2, g.State.Players[Game.Me].Library.Count);   // Bear drawn; the misses went to the bottom
+    }
+
+    [Fact]
+    public void ExploreFindsALand()
+    {
+        var g = Setup(new[] { "Scout" }, library: new[] { "Bog" });
+        g.CastSpell(g.State[InHand(g, "Scout")], -1);
+        ResolveAll(g);
+        Assert.Equal("Bog", g.State[g.State.Players[Game.Me].Hand.Single()].Name);
+        Assert.Equal(0, OnBattlefield(g, "Scout").CounterCount("P1P1"));
+    }
+
+    [Fact]
+    public void PoisonCounters()
+    {
+        var g = Setup(new[] { "Venom" });
+        g.CastSpell(g.State[InHand(g, "Venom")], 0);
+        ResolveAll(g);
+        Assert.All(g.State.Players.Where(p => p.Index != Game.Me), p => Assert.Equal(3, p.Poison));
+    }
+
+    [Fact]
+    public void DoubleItsPower()
+    {
+        var g = Setup(new[] { "Doubler" }, battlefield: new[] { "Bear" });
+        g.CastSpell(g.State[InHand(g, "Doubler")], 0);
+        ResolveAll(g);
+        Assert.Equal(4, OnBattlefield(g, "Bear").Power);
+    }
+
+    [Fact]
+    public void AbilityActivatedFromTheGraveyardByExilingIt()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Ghost" });
+        var ghost = OnBattlefield(g, "Ghost");
+        g.MoveTo(ghost, Zone.Graveyard);
+        var act = g.LegalActions(Game.Me).OfType<GameAction.Activate>().Single(a => a.CardId == ghost.Id);
+        g.Perform(act);
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+        Assert.Equal(Zone.Exile, ghost.Zone);
     }
 
     [Fact]

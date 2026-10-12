@@ -13,7 +13,7 @@ public static class Keywords
         // Deck-building only.
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
-        "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize",
+        "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade",
     };
 }
 
@@ -42,6 +42,7 @@ public static class Triggers
         ["ChangesZoneAll"] = new(StringComparer.Ordinal) { "ValidCards", "Origin", "Destination" },
         ["DamageDoneOnce"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["TapsForMana"] = new(StringComparer.Ordinal) { "Activator" },
+        ["ClassLevelGained"] = new(StringComparer.Ordinal) { "ClassLevel" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer", "ValidAttackers" },
         ["Drawn"] = new(StringComparer.Ordinal) { "Number" },
@@ -68,7 +69,8 @@ public static class Triggers
         if (t["Number"] is { } num && !int.TryParse(num, out _)) ctx.Need("TriggerNumber:" + num);
         if (t["ActivatorThisTurnCast"] is { } atc && (atc.Length < 3 || !int.TryParse(atc[2..], out _))) ctx.Need("ActivatorThisTurnCast:" + atc);
         if (t["ValidSource"] is { } vsr && t.Mode == "CounterAddedOnce" && vsr != "You") ctx.Need("CounterAddedOnce.ValidSource:" + vsr);
-        if (t["TriggerZones"] is { } tz && tz is not ("Battlefield" or "Command")) ctx.Need("TriggerZones:" + tz);
+        if (t["TriggerZones"] is { } tz && tz is not ("Battlefield" or "Command") && !(tz == "Stack" && t.Mode == "SpellCast"))
+            ctx.Need("TriggerZones:" + tz);
         if (t["Phase"] is { } ph && ph is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "End Of Turn" or "BeginCombat" or "EndCombat"))
             ctx.Need("TriggerPhase:" + ph);
     }
@@ -85,7 +87,9 @@ public static class Triggers
         // Effects and emblems (and "eminence" commanders) trigger from the command zone.
         var sourceActive = source.Zone == Zone.Battlefield
             || (e.Mode == TriggerMode.ChangesZone && e.CardId == source.Id && e.From == Zone.Battlefield)
-            || source.Zone == Zone.Command && (source.IsEffect || t["TriggerZones"] == "Command");
+            || source.Zone == Zone.Command && (source.IsEffect || t["TriggerZones"] == "Command")
+            // "When you cast this spell" (cascade, casualty, …) triggers from the stack.
+            || source.Zone == Zone.Stack && t["TriggerZones"] == "Stack";
         if (!sourceActive) return false;
         if (!ModeMatches(g, t, source, e, x)) return false;
         return Presence.Hold(t.P, x);
@@ -121,6 +125,8 @@ public static class Triggers
                 // "Whenever you cast your second spell each turn": this is that spell.
                 if (!Filter.Compare(g.State.ThisTurn.SpellsCast, nth[..2], int.Parse(nth[2..]))) return false;
                 return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
+            case "ClassLevelGained" when e.Mode == TriggerMode.ClassLevelGained:
+                return (t["ClassLevel"] is not { } lvl || lvl == e.Amount.ToString()) && CardMatches(g, t, e.CardId, x, source);
             case "TapsForMana" when e.Mode == TriggerMode.TapsForMana:
                 return PlayerMatches(t["Activator"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
             case "CounterAddedOnce" when e.Mode == TriggerMode.CounterAddedOnce:

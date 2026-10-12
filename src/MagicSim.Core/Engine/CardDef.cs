@@ -3,7 +3,7 @@ using MagicSim.Core.Forge;
 
 namespace MagicSim.Core.Engine;
 
-public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower }
+public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower, ExileSource }
 
 /// <summary>A non-mana cost component: "Sac&lt;1/CARDNAME&gt;", "Discard&lt;0/Hand&gt;", "PayLife&lt;2&gt;", …</summary>
 public sealed record CostPart(CostPartKind Kind, string Amount, string Valid, string Raw);
@@ -420,6 +420,10 @@ public static partial class CardCompiler
                 face.SVars["__MobilizeX"] = "Count$CardPower";
                 face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ Attacks | ValidCard$ Card.Self | TriggerZones$ Battlefield | Execute$ __Mobilize"), ctx));
                 return true;
+            case "Cascade":
+                face.SVars["__Cascade"] = "DB$ Cascade";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ SpellCast | ValidCard$ Card.Self | TriggerZones$ Stack | Execute$ __Cascade"), ctx));
+                return true;
             case "Annihilator":
                 return true;   // the defending goldfish opponent has no permanents to sacrifice
             case "TypeCycling":
@@ -701,6 +705,7 @@ public static partial class CardCompiler
                 "ExileFromHand" => CostPartKind.ExileFromHand,
                 "Return" => CostPartKind.ReturnToHand,
                 "Reveal" => CostPartKind.Reveal,
+                "Exile" when valid == "CARDNAME" || m.Groups[2].Value == "CARDNAME" => CostPartKind.ExileSource,
                 "Crew" => CostPartKind.TapPower,
                 _ => null,
             };
