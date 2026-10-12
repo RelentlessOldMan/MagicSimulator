@@ -307,8 +307,13 @@ public static class Statics
                 // Effects on cards in other zones (may play, escape) are looked up where they matter.
                 if (st["MayPlay"] is null && st["MayLookAt"] is null && st["AffectedZone"] is null or "Battlefield") active.Add((c, st, ContextFor(g, c, st)));
             }
-        var animated = s.BattlefieldCards.Where(c => c.Animations is not null).ToList();
-        var leveled = s.BattlefieldCards.Where(c => c.ClassLevel > 1).ToList();
+        var animated = new List<Card>();
+        var leveled = new List<Card>();
+        foreach (var c in s.BattlefieldCards)
+        {
+            if (c.Animations is not null) animated.Add(c);
+            if (c.ClassLevel > 1) leveled.Add(c);
+        }
         if (active.Count == 0 && animated.Count == 0 && leveled.Count == 0 && !g.StaticsApplied) return;
         g.StaticsApplied = active.Count > 0 || animated.Count > 0 || leveled.Count > 0;
 
@@ -475,7 +480,7 @@ public static class Statics
     {
         foreach (var p in g.State.Players)
             foreach (var id in p.Graveyard)
-                if (g.State[id] is { IsBlank: false } gc && gc.CurrentFace.Statics.Any(st => st["EffectZone"] == "Graveyard")) yield return gc;
+                if (g.State[id] is { IsBlank: false } gc && gc.CurrentFace.HasGraveyardStatic) yield return gc;
         foreach (var c in g.State.BattlefieldCards)
             if (!c.IsBlank && (c.CurrentFace.Statics.Count > 0 || c.Animations is not null || c.ClassLevel > 1)) yield return c;
         foreach (var p in g.State.Players)

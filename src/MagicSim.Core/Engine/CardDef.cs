@@ -139,6 +139,10 @@ public sealed class FaceDef
     public List<AbilityDef> Activated { get; } = new();
     public List<TriggerDef> Triggers { get; } = new();
     public List<StaticDef> Statics { get; } = new();
+
+    /// <summary>Whether any static ability works from the graveyard (EffectZone$ Graveyard). Read only once compiled.</summary>
+    public bool HasGraveyardStatic => _graveyardStatic ??= Statics.Any(st => st["EffectZone"] == "Graveyard");
+    private bool? _graveyardStatic;
     /// <summary>An Aura's spell: targets what it will enchant (rule 303.4a).</summary>
     public AbilityDef? AuraSpell { get; set; }
     /// <summary>"As this enters" replacements (enters tapped, shocklands, checklands).</summary>
