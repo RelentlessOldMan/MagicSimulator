@@ -214,6 +214,8 @@ sealed class ChangeZoneEffect : Effect
         "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "OriginAlternative", "AIXMax", "WithCountersType", "WithCountersAmount", "RememberTargets", "Duration", "TargetsWithDefinedController", "RememberLKI",
         // "Any number of creature cards with total mana value 6 or less."
         "WithTotalCMC",
+        // Who chooses from another player's hand: you; a goldfish opponent's hand is unknown, so nothing is found.
+        "Chooser",
         // Brought back for a while: exiled or sacrificed at the next end step, exiled if it would leave.
         "AtEOT", "LeaveBattlefield",
         // Face down only hides it from opponents, which goldfish opponents don't care about.
@@ -243,6 +245,7 @@ sealed class ChangeZoneEffect : Effect
         else if (ab["ChangeType"] is { } ct) Filter.Parse(ct, ctx);
         if (ab["ChangeNum"] is { } cn && cn != "All") Engine.Amount.Parse(cn, ctx);
         if (ab["WithTotalCMC"] is { } total) Engine.Amount.Parse(total, ctx);
+        if (ab["Chooser"] is { } chooser && chooser != "You") ctx.Need("ChangeZone.Chooser:" + chooser);
         Defined.ValidateCards(ab["Defined"], ctx);
         Defined.ValidatePlayers(ab["DefinedPlayer"], ctx);
     }

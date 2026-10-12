@@ -60,6 +60,10 @@ public sealed class AbilityDef
     public int ChainIndex { get; set; }
     /// <summary>A mana ability's "when that mana is spent to cast …" trigger (TriggersWhenSpent$, Path of Ancestry).</summary>
     public TriggerDef? WhenSpent { get; set; }
+    /// <summary>"UnlessCost$ UpkeepX" naming an amount: {N} generic, worked out when it resolves (Draco).</summary>
+    public string? UnlessCostAmount { get; set; }
+    /// <summary>"Prowl" or "Spectacle": this alternative cost is allowed only if that happened this turn.</summary>
+    public string? AltCondition { get; set; }
     /// <summary>"UnlessCost$": the effect doesn't happen if the payer pays this.</summary>
     public Cost? UnlessCost { get; set; }
     /// <summary>The effect object an "Effect" ability creates, compiled with the card.</summary>
@@ -167,6 +171,8 @@ public sealed class FaceDef
     public List<ReplacementDef> Replacements { get; } = new();
     /// <summary>Evoke cost: added as an alternative-cost cast once the spell abilities are known.</summary>
     public Cost? EvokeCost { get; set; }
+    /// <summary>Conditional alternative costs: ("Prowl", cost), ("Spectacle", cost).</summary>
+    public List<(string Name, Cost Cost)> ConditionalCosts { get; set; } = new();
     /// <summary>"If this is in your opening hand, you may …" (Leylines).</summary>
     public AbilityDef? OpeningHand { get; set; }
     /// <summary>A Class's levels 2+: what each level gives (rule 716).</summary>
@@ -348,6 +354,23 @@ public static partial class CardCompiler
                 alt.ModeDescription = "Evoke";
                 face.SpellAbilities.Add(alt);
             }
+        foreach (var (condition, altCost) in face.ConditionalCosts)
+        {
+            if (face.SpellAbilities.Count == 0)
+            {
+                if (face.AuraSpell is not null) { ctx.Need(condition + ":Aura"); continue; }
+                face.SpellAbilities.Add(new AbilityDef { P = new ForgeParams("SP$ PermanentSpell"), Api = "PermanentSpell", Kind = AbilityKind.Spell });
+            }
+            foreach (var ab in face.SpellAbilities.Where(a => a.AltCost is null && a.AltCondition is null).ToList())
+            {
+                var alt = ab.CloneHead();
+                alt.AltCost = altCost;
+                alt.AltCondition = condition;
+                alt.OptionalCosts = new[] { condition };
+                alt.ModeDescription = condition;
+                face.SpellAbilities.Add(alt);
+            }
+        }
         foreach (var (names, extra) in face.OptionalCosts) AddOptionalCost(face, names, extra, ctx);
         if (face.Morph is { } morph) AddMorph(face, morph.Cost, morph.Mega, ctx);
         foreach (var r in f.Replacements) CompileReplacement(r, face, ctx);
@@ -536,6 +559,11 @@ public static partial class CardCompiler
                 if (!int.TryParse(Part(1), out _)) { ctx.Need("Keyword:Suspend+" + Part(1)); return true; }
                 AddGenerated(face, ctx, $"AB$ Suspend | Cost$ {Part(2)} | ActivationZone$ Hand | TimeCounters$ {Part(1)}"
                     + (face.Types.Is(CardType.Instant) || face.KeywordNames.Contains("Flash") ? "" : " | SorcerySpeed$ True") + " | SpellDescription$ Suspend");
+                return true;
+            case "Prowl" or "Spectacle":
+                // Prowl: if a creature that shares a creature type with it dealt combat damage to a player this turn.
+                // Spectacle: if an opponent lost life this turn.
+                face.ConditionalCosts.Add((name, ParseCost(Part(1), ctx)));
                 return true;
             case "Evoke":
             {
@@ -864,7 +892,15 @@ public static partial class CardCompiler
         if (p["UnlessResolveSubs"] is { } urs && urs != "WhenPaid") ctx.Need("UnlessResolveSubs:" + urs);
         // "This ability costs {1} less to activate for each …"
         if (p["ReduceCost"] is { } reduce) Amount.Parse(reduce, ctx);
-        if (p["UnlessCost"] is { } unless)
+        if (p["UnlessCost"] is { } unlessAmount && ctx.Face.SVars.TryGetValue(unlessAmount, out var amountBody) && !unlessAmount.Contains(' ')
+            && amountBody.Contains('$'))
+        {
+            Amount.Parse(amountBody, ctx);
+            ab.UnlessCostAmount = amountBody;
+            ab.UnlessCost = Cost.Free;
+            if (p["UnlessPayer"] is { } amountPayer && amountPayer != "You") ctx.Need("UnlessPayer:" + amountPayer);
+        }
+        else if (p["UnlessCost"] is { } unless)
         {
             ab.UnlessCost = ParseCost(unless, ctx);
             if (p["UnlessPayer"] is { } payer && payer is not ("You" or "TargetedController" or "Targeted" or "Opponent" or "Player"

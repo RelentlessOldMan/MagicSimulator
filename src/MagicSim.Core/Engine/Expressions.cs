@@ -108,6 +108,7 @@ public sealed class Filter
             "ChosenCtrl" => (c, pl, x) => c is not null ? c.Controller == x.Host.ChosenPlayer : pl is not null && pl == x.Host.ChosenPlayer,
             "Chosen" => (c, pl, x) => c is null && pl is not null && pl == x.Host.ChosenPlayer,
             "DrawnThisTurn" => (c, pl, x) => c is not null && x.S.ThisTurn.Drawn.Contains(c.Id),
+            "prowled" => (c, pl, x) => c is not null && (c.PaidOptional?.Contains("Prowl") ?? false),
             // "If you cast it" (from your hand): the permanent came from a spell. Only you cast spells here.
             "wasCast" or "wasCastByYou" => (c, pl, x) => c is not null && c.CastFrom is not null && c.Controller == x.Controller,
             "wasCastFromHand" or "wasCastFromYourHandByYou" => (c, pl, x) => c is not null && c.CastFrom == Zone.Hand && c.Controller == x.Controller,
@@ -154,6 +155,11 @@ public sealed class Filter
             "ExiledWithSourceLKI" => (c, pl, x) => c is not null && c.ExiledWith == x.Item.SourceId,
             _ => null,
         };
+        // "Creature.ControlledBy TriggeredTarget": what the player this triggered on ("that player") controls or owns.
+        if (test is null && TriggeredPlayerProp(p) is { } byWhom)
+            test = byWhom == "ControlledBy"
+                ? (c, pl, x) => c is not null && x.Item.TriggeredPlayer is { } tp && c.Controller == tp
+                : (c, pl, x) => c is not null && x.Item.TriggeredPlayer is { } tp && c.Owner == tp;
         // "namedRite of Flame": cards with that name.
         if (test is null && p.StartsWith("named", StringComparison.Ordinal) && p.Length > 5)
         {
@@ -222,10 +228,15 @@ public sealed class Filter
             "OppCtrl" or "OppOwn" => (o, x) => o != x.Controller,
             "ActivePlayerCtrl" => (o, x) => o == x.S.ActivePlayer,
             "ChosenCtrl" => (o, x) => o == x.Host.ChosenPlayer,
+            _ when TriggeredPlayerProp(p) is not null => (o, x) => o == x.Item.TriggeredPlayer,
             _ => null,
         };
         return new Prop(neg, test, owner);
     }
+
+    /// <summary>"ControlledBy TriggeredTarget", "OwnedBy Spawner>TriggeredTarget": "ControlledBy" or "OwnedBy", else null.</summary>
+    private static string? TriggeredPlayerProp(string p) =>
+        p.Split(' ') is [var by and ("ControlledBy" or "OwnedBy"), "TriggeredTarget" or "TriggeredPlayer" or "Spawner>TriggeredTarget"] ? by : null;
 
     private static bool SharesCreatureType(TypeLine a, TypeLine b) =>
         a.AllCreatureTypes && (b.AllCreatureTypes || b.Subtypes.Any(TypeLine.IsCreatureType))
@@ -438,6 +449,10 @@ public sealed class Amount
             case "CardToughness": return new(core, x => x.Host.LastKnownToughness);
             case "LifeYouGainedThisTurn": return new(core, x => x.S.ThisTurn.LifeGained.GetValueOrDefault(x.Controller));
             case "CardsInYourHand": return new(core, x => x.S.Players[x.Controller].Hand.Count);
+            // "Domain": basic land types among lands you control.
+            case "Domain": return new(core, x => TypeLine.BasicLandTypes.Count(t => x.S.BattlefieldCards.Any(c => c.Controller == x.Controller && c.Types.Is(CardType.Land) && c.Types.HasSubtype(t))));
+            // "The damage dealt to your opponents this turn."
+            case "BloodthirstAmount": return new(core, x => x.S.ThisTurn.DamageTaken.Where(kv => kv.Key != x.Controller).Sum(kv => kv.Value));
             case "YourLifeTotal": return new(core, x => x.S.Players[x.Controller].Life);
             case "YourStartingLife": return new(core, x => x.Game.Settings.StartingLife);
             case "RememberedSize": return new(core, x => (x.Host.Remembered?.Count ?? 0) + x.Host.RememberedUnknown);
@@ -576,7 +591,7 @@ public sealed class Amount
         return null;
     }
 
-    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|TriggeredSpellAbility|Remembered|RememberedLKI|Imprinted|Sacrificed)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+)(?: (.+))?$", RegexOptions.Compiled);
+    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|TriggeredSpellAbility|TriggeredSource|Remembered|RememberedLKI|Imprinted|Sacrificed)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+)(?: (.+))?$", RegexOptions.Compiled);
 
     /// <summary>"Targeted$CardPower", "Remembered$CardManaCost", "Imprinted$Valid Card.X": a property of defined cards (summed), or how many there are.</summary>
     private static Amount DefinedCardsAmount(string core, Match m, CompileContext ctx)
@@ -591,6 +606,7 @@ public sealed class Amount
             {
                 "Targeted" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value),
                 "TriggeredCard" or "TriggeredSpellAbility" => x.Item.TriggeredCardId is { } id ? new[] { id } : Array.Empty<int>(),
+                "TriggeredSource" => x.Item.TriggeredSourceId is { } sid ? new[] { sid } : Array.Empty<int>(),
                 "Remembered" or "RememberedLKI" => x.Host.Remembered ?? new List<int>(),
                 "Sacrificed" => x.Item.Sacrificed ?? new List<int>(),
                 _ => x.Host.Imprinted ?? new List<int>(),
@@ -630,7 +646,7 @@ public static class Defined
     {
         "You", "Player", "Opponent", "Targeted", "TargetedPlayer", "ParentTarget", "TargetedController", "Player.Opponent",
         "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner", "ChosenPlayer", "Remembered", "TriggeredActivator",
-        "TriggeredCardOwner", "TriggeredSourceController", "TriggeredDefendingPlayer",
+        "TriggeredCardOwner", "TriggeredSourceController", "TriggeredDefendingPlayer", "Spawner>TriggeredTarget",
     };
 
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
@@ -684,7 +700,7 @@ public static class Defined
             "ChosenPlayer" => x.Host.ChosenPlayer is { } cp ? new() { cp } : new(),
             "Remembered" => x.Item.IteratedPlayer is { } ip ? new() { ip } : new(),
             "TargetedOwner" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Owner).Take(1).ToList(),
-            "TriggeredTarget" or "TriggeredPlayer" or "TriggeredActivator" or "TriggeredDefendingPlayer" => x.Item.TriggeredPlayer is { } tp ? new() { tp } : new(),
+            "TriggeredTarget" or "TriggeredPlayer" or "TriggeredActivator" or "TriggeredDefendingPlayer" or "Spawner>TriggeredTarget" => x.Item.TriggeredPlayer is { } tp ? new() { tp } : new(),
             var f when f.StartsWith("Player.", StringComparison.Ordinal) =>
                 players.Where(p => !p.Lost && Effect.FilterFor(x.SVarFace, f).MatchesPlayer(p.Index, x)).Select(p => p.Index).ToList(),
             _ => new() { x.Controller },

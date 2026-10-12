@@ -872,6 +872,8 @@ public sealed partial class Game
         if (cost.Mana.NoCost) return false;
         if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].AltCostOf is { } altStatic && !Presence.Hold(altStatic.P, ContextFor(c)))
             return false;
+        if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].AltCondition is { } condition && !AltConditionHolds(c, condition))
+            return false;
         if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex] is { CharmNumExpr: { } charmNum } modal
             && modal.CharmCount > Effect.EvalAmount(ContextFor(c), charmNum))
             return false;
@@ -879,6 +881,16 @@ public sealed partial class Game
         var ability = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : c.CurrentFace.AuraSpell;
         return ability is null || HasLegalTargets(c, ability);
     }
+
+    /// <summary>Prowl: a creature sharing a creature type with it dealt combat damage to a player this turn. Spectacle: an opponent lost life.</summary>
+    private bool AltConditionHolds(Card c, string condition) => condition switch
+    {
+        "Prowl" => State.ThisTurn.CombatDamageTypes.Contains("*") && c.Types.Subtypes.Any(TypeLine.IsCreatureType)
+                   || c.Types.AllCreatureTypes && State.ThisTurn.CombatDamageTypes.Count > 0
+                   || c.Types.Subtypes.Any(t => TypeLine.IsCreatureType(t) && State.ThisTurn.CombatDamageTypes.Contains(t)),
+        "Spectacle" => State.ThisTurn.LifeLost.Any(kv => kv.Key != c.Controller && kv.Value > 0),
+        _ => false,
+    };
 
     public void CastSpell(Card c, int spellIndex)
     {
@@ -1061,14 +1073,18 @@ public sealed partial class Game
 
     // ---- targets ----------------------------------------------------------------------
 
-    public List<TargetRef> TargetCandidates(Card source, AbilityDef ab, int controller)
+    public List<TargetRef> TargetCandidates(Card source, AbilityDef ab, int controller, StackItem? trigger = null)
     {
         var list = new List<TargetRef>();
         if (ab.TargetFilter is not { } f) return list;
         var x = new EffectContext
         {
             Game = this, Ability = ab,
-            Item = new StackItem { SourceId = source.Id, Ability = ab, Controller = controller },
+            Item = new StackItem
+            {
+                SourceId = source.Id, Ability = ab, Controller = controller, TriggeredPlayer = trigger?.TriggeredPlayer,
+                TriggeredCardId = trigger?.TriggeredCardId, TriggeredSourceId = trigger?.TriggeredSourceId,
+            },
         };
         if (f.CanTargetPlayers)
             foreach (var p in State.Players)
@@ -1109,13 +1125,17 @@ public sealed partial class Game
         return (ab.TargetMinExpr is { } mn ? Eval(mn) : ab.TargetMin, ab.TargetMaxExpr is { } mx ? Eval(mx) : ab.TargetMax);
     }
 
-    private List<List<TargetRef>> ChooseChainTargets(Card source, AbilityDef head, int controller, int x = 0)
+    /// <summary>
+    /// Targets for each link of a chain. A trigger's targets can depend on what it triggered on ("target creature that
+    /// player controls"): <paramref name="trigger"/> is that stack item, before it's put on the stack.
+    /// </summary>
+    private List<List<TargetRef>> ChooseChainTargets(Card source, AbilityDef head, int controller, int x = 0, StackItem? trigger = null)
     {
         var result = new List<List<TargetRef>>();
         foreach (var ab in head.Chain())
         {
             if (ab.TargetFilter is null) { result.Add(new()); continue; }
-            var candidates = TargetCandidates(source, ab, controller);
+            var candidates = TargetCandidates(source, ab, controller, trigger);
             var (tmin, tmax) = TargetBounds(source, ab, controller, x);
             var max = Math.Min(tmax, candidates.Count);
             var min = Math.Min(tmin, max);
@@ -1255,6 +1275,8 @@ public sealed partial class Game
             var handler = Effects.Get(ab.Api) ?? throw new InvalidOperationException($"no handler for {ab.Api}");
             if (ab.UnlessCost is { } unless)
             {
+                if (ab.UnlessCostAmount is { } amount)
+                    unless = new Cost { Mana = ManaCost.Zero.WithExtraGeneric(Math.Max(0, Effect.EvalAmount(ctx, amount))) };
                 var paid = PaysUnlessCost(ctx, unless);
                 // UnlessResolveSubs$ WhenPaid: paying skips this effect and goes on; not paying does it and stops.
                 if (ab["UnlessResolveSubs"] == "WhenPaid")

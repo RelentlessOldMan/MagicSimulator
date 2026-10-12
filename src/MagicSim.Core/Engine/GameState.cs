@@ -274,7 +274,7 @@ public sealed class StackItem
     /// <summary>True if the source card itself is on the stack (a cast spell).</summary>
     public bool IsSpell { get; init; }
     /// <summary>Targets per ability in the chain (index = AbilityDef.ChainIndex).</summary>
-    public List<List<TargetRef>> ChainTargets { get; init; } = new();
+    public List<List<TargetRef>> ChainTargets { get; set; } = new();
     public int X { get; init; }
     /// <summary>Cast with flashback: exiled instead of going anywhere else when it leaves the stack.</summary>
     public bool ExileAfter { get; init; }
@@ -330,6 +330,10 @@ public sealed class TurnInfo
     public Dictionary<int, int> LifeGained { get; set; } = new();
     /// <summary>Cards each player drew this turn.</summary>
     public Dictionary<int, int> CardsDrawn { get; set; } = new();
+    /// <summary>Damage each player took this turn.</summary>
+    public Dictionary<int, int> DamageTaken { get; set; } = new();
+    /// <summary>Creature types of creatures that dealt combat damage to a player this turn ("*" for every type).</summary>
+    public HashSet<string> CombatDamageTypes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>The cards you drew this turn ("cards in your hand drawn this turn").</summary>
     public HashSet<int> Drawn { get; set; } = new();
     /// <summary>Spells cast this turn ("if an opponent has cast a blue or black spell this turn").</summary>
@@ -348,7 +352,7 @@ public sealed class TurnInfo
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
         ExtraPhases = new(ExtraPhases), Combats = Combats, AttackersDeclared = AttackersDeclared, DefendingPlayer = DefendingPlayer,
-        Drawn = new(Drawn), Cast = new(Cast), CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
+        Drawn = new(Drawn), Cast = new(Cast), DamageTaken = new(DamageTaken), CombatDamageTypes = new(CombatDamageTypes, StringComparer.OrdinalIgnoreCase), CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
     };
 }
 

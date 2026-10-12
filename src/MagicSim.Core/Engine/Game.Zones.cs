@@ -347,8 +347,9 @@ public sealed partial class Game
 
     /// <summary>Taps a permanent, firing "whenever this becomes tapped" triggers.</summary>
     /// <summary>Puts a reflexive or other immediate trigger ("when you do, …") into the queue.</summary>
-    public void AddImmediateTrigger(Card host, TriggerDef trigger, int controller, List<int>? remembered) =>
-        _pending.Add(new PendingTrigger(host.Id, trigger, new TriggerEvent(TriggerMode.Immediate, CardId: host.Id), controller, remembered));
+    /// <summary>A reflexive trigger ("when you do, …"); it keeps the player its spawner triggered on (Spawner>TriggeredTarget).</summary>
+    public void AddImmediateTrigger(Card host, TriggerDef trigger, int controller, List<int>? remembered, int? triggeredPlayer = null) =>
+        _pending.Add(new PendingTrigger(host.Id, trigger, new TriggerEvent(TriggerMode.Immediate, CardId: host.Id, Player: triggeredPlayer), controller, remembered));
 
     /// <summary>Sacrifices a permanent: it goes to its owner's graveyard and "whenever you sacrifice" triggers fire.</summary>
     public void Sacrifice(Card c)
@@ -470,11 +471,13 @@ public sealed partial class Game
             State.Players[player].Poison += amount;
             Note($"{source.Name} gives player {player} {amount} poison (total {State.Players[player].Poison})");
             if (source.HasKeyword("Lifelink")) GainLife(source.Controller, amount);
+            NoteDamageTo(player, amount, source, combat);
             Fire(new TriggerEvent(TriggerMode.DamageDone, CardId: source.Id, Player: player, Amount: amount, Combat: combat));
             _damageBatch.Add((source.Id, player, null, amount, combat));
             return amount;
         }
         LifeLoss(player, Replacements.Amount(this, "LifeReduced", amount, source, targetPlayer: player));
+        NoteDamageTo(player, amount, source, combat);
         if (source is not null) State.ThisTurn.DamageDealtBy[source.Id] = State.ThisTurn.DamageDealtBy.GetValueOrDefault(source.Id) + amount;
         // Toxic N: combat damage to a player also gives N poison counters (rule 702.164).
         if (combat && source is not null)
@@ -487,6 +490,16 @@ public sealed partial class Game
         Fire(new TriggerEvent(TriggerMode.DamageDone, CardId: source.Id, Player: player, Amount: amount, Combat: combat));
         _damageBatch.Add((source.Id, player, null, amount, combat));
         return amount;
+    }
+
+    /// <summary>Damage a player took this turn (bloodthirst), and the creature types that dealt you combat damage to a player (prowl).</summary>
+    private void NoteDamageTo(int player, int amount, Card? source, bool combat)
+    {
+        State.ThisTurn.DamageTaken[player] = State.ThisTurn.DamageTaken.GetValueOrDefault(player) + amount;
+        if (!combat || source is null || source.Controller == player) return;
+        if (source.Types.AllCreatureTypes) State.ThisTurn.CombatDamageTypes.Add("*");
+        foreach (var t in source.Types.Subtypes)
+            if (TypeLine.IsCreatureType(t)) State.ThisTurn.CombatDamageTypes.Add(t);
     }
 
     public void DamageCard(Card target, int amount, Card? source, bool combat = false)
@@ -617,12 +630,13 @@ public sealed partial class Game
                 Id = State.NextStackId++, SourceId = pt.SourceId, Ability = exec, Controller = pt.Controller,
                 TriggeredCardId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.TargetCardId : pt.Event.CardId,
                 Sacrificed = pt.Event.Mode == TriggerMode.Sacrificed && pt.Event.CardId is { } sac ? new() { sac } : null,
-                TriggeredPlayer = pt.Event.Player, ChainTargets = ChooseChainTargets(src, exec, pt.Controller), DelayRemembered = pt.DelayRemembered,
+                TriggeredPlayer = pt.Event.Player, DelayRemembered = pt.DelayRemembered,
                 TriggerAmount = pt.Event.Amount,
                 TriggeredSourceId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.CardId : null,
                 TriggeredObjectId = pt.Event.Mode == TriggerMode.Unattached ? pt.Event.TargetCardId : null,
                 Description = $"{src.Name} trigger",
             };
+            item.ChainTargets = ChooseChainTargets(src, exec, pt.Controller, trigger: item);
             // "Static" triggers (bookkeeping such as forgetting an imprinted card) happen at once, without the stack.
             if (pt.Trigger["Static"] == "True") { RunChain(item); continue; }
             State.Stack.Add(item);

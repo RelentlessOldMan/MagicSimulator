@@ -182,7 +182,7 @@ sealed class ImmediateTriggerEffect : Effect
             if (!x.Game.PayCost(ab.Cost, x.Host, x.Controller, 0, excludeSourceFromMana: false)) return;
         }
         var remembered = ab["RememberObjects"] is { } ro ? Defined.Cards(ro, x) : null;
-        x.Game.AddImmediateTrigger(x.Host, ab.Delayed!, x.Controller, remembered);
+        x.Game.AddImmediateTrigger(x.Host, ab.Delayed!, x.Controller, remembered, x.Item.TriggeredPlayer);
     }
 }
 
