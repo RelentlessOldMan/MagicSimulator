@@ -54,6 +54,7 @@ public static class Triggers
         ["Cycled"] = new(StringComparer.Ordinal) { },
         ["SpellCastOrCopy"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer" },
         ["SpellCopy"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer" },
+        ["AbilityCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ValidSA" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer", "ValidAttackers" },
         ["Drawn"] = new(StringComparer.Ordinal) { "Number", "FirstCardInDrawStep" },
@@ -85,7 +86,11 @@ public static class Triggers
         if (t["ValidObject"] is { } vo) Filter.Parse(vo, ctx);
         // "Whenever a spell or ability you control counters a spell": whose spell or ability countered it.
         if (t["ValidCause"] is { } cause && cause is not ("SpellAbility.YouCtrl" or "SpellAbility.OppCtrl")) ctx.Need("Countered.ValidCause:" + cause);
-        if (t["ValidSA"] is { } sa) Filter.Parse(sa, ctx);
+        if (t["ValidSA"] is { } sa)
+        {
+            if (t.Mode == "AbilityCast") ValidateActivated(sa, ctx);
+            else Filter.Parse(sa, ctx);
+        }
         // A granted "when this creature dies" trigger is controlled by that creature's controller.
         if (t["TriggerController"] is { } tc && tc != "TriggeredCardController") ctx.Need("TriggerController:" + tc);
         if (t["AttackingPlayer"] is { } ap && ap != "You") ctx.Need("AttackingPlayer:" + ap);
@@ -105,6 +110,31 @@ public static class Triggers
         if (t["Phase"] is { } ph && ph.Split(',').Any(one => one.Trim() is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "End Of Turn" or "BeginCombat" or "EndCombat")))
             ctx.Need("TriggerPhase:" + ph);
     }
+
+    /// <summary>Properties of an activated ability a trigger can check ("SpellAbility.!ManaAbility", "Activated.Loyalty").</summary>
+    private static readonly Dictionary<string, Func<AbilityDef, bool>> ActivatedProps = new(StringComparer.Ordinal)
+    {
+        ["ManaAbility"] = a => a.IsManaAbility || a.Api == "Mana",
+        ["hasTapCost"] = a => a.Cost.Tap,
+        ["Loyalty"] = a => a["Planeswalker"] == "True",
+        ["Ninjutsu"] = a => a.Api == "Ninjutsu",
+    };
+
+    private static void ValidateActivated(string valid, CompileContext ctx)
+    {
+        foreach (var term in valid.Split(','))
+        {
+            var parts = term.Trim().Split('.', 2);
+            if (parts[0] is not ("SpellAbility" or "Activated")) { ctx.Need("ValidSA:" + term); continue; }
+            if (parts.Length > 1)
+                foreach (var p in parts[1].Split('+'))
+                    if (!ActivatedProps.ContainsKey(p.TrimStart('!'))) ctx.Need("ValidSA:" + p);
+        }
+    }
+
+    private static bool ActivatedMatches(string valid, AbilityDef ab) =>
+        valid.Split(',').Any(term => term.Trim().Split('.', 2) is var parts
+            && (parts.Length == 1 || parts[1].Split('+').All(p => ActivatedProps[p.TrimStart('!')](ab) != p.StartsWith('!'))));
 
     public static bool Matches(Game g, TriggerDef t, Card source, TriggerEvent e)
     {
@@ -186,6 +216,10 @@ public static class Triggers
             case "Cycled" when e.Mode == TriggerMode.Cycled:
                 return CardMatches(g, t, e.CardId, x, source);
             case "SpellCastOrCopy" when e.Mode is TriggerMode.SpellCast or TriggerMode.SpellCopied:
+            case "AbilityCast" when e.Mode == TriggerMode.AbilityCast:
+                return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller, x, t.Face)
+                       && (t["ValidSA"] is not { } vsa || ActivatedMatches(vsa, e.Activated!.Ability))
+                       && CardMatches(g, t, e.CardId, x, source);
             case "SpellCopy" when e.Mode == TriggerMode.SpellCopied:
                 return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller, x, t.Face) && CardMatches(g, t, e.CardId, x, source);
             case "ClassLevelGained" when e.Mode == TriggerMode.ClassLevelGained:

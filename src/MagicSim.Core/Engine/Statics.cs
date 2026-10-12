@@ -278,7 +278,13 @@ public static class Statics
         if (s["GainsAbilitiesOfZones"] is { } gaz && !gaz.Split(',').All(z => z.Trim() is "Graveyard" or "Battlefield" or "Exile"))
             ctx.Need("GainsAbilitiesOfZones:" + gaz);
         if (s["RaiseMaxHandSize"] is { } rmh) Amount.Parse(rmh, ctx);
-        if (s["AddKeyword"] is { } kws)
+        if (s["AddKeyword"] is { } adjust && adjust.StartsWith("UntapAdjust:", StringComparison.Ordinal))
+        {
+            var parts = adjust.Split(':');
+            if (parts.Length != 3 || !int.TryParse(parts[2], out _) || s["Affected"] is not ("Player" or "Player.Opponent" or "You")) ctx.Need("Keyword:" + adjust);
+            else Filter.Parse(parts[1], ctx);
+        }
+        else if (s["AddKeyword"] is { } kws)
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
                 if (!Keywords.Supported.Contains(ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + ForgeRequirements.KeywordName(k));
         TypeChange.Validate(s["AddType"], ctx, "AddType");
@@ -367,7 +373,7 @@ public static class Statics
                 if (c.Zone != Zone.Battlefield) c.StaticColors = null;
             g.OffFieldColors = false;
         }
-        foreach (var p in s.Players) { p.StaticLandDrops = 0; p.StaticMaxHandSize = null; p.StaticMaxHandSizeRaise = 0; }
+        foreach (var p in s.Players) { p.StaticLandDrops = 0; p.StaticMaxHandSize = null; p.StaticMaxHandSizeRaise = 0; p.StaticUntapLimits = null; }
 
         var holding = active.Where(a => Presence.Hold(a.Static.P, a.X)).ToList();
         // What an effect applies to is fixed when it first applies (rule 613.6): an effect that makes
@@ -489,6 +495,12 @@ public static class Statics
             var (source, st, x) = holding[i];
             var addPower = st["AddPower"] is { } ap ? Effect.EvalAmount(x, ap) : 0;
             var addToughness = st["AddToughness"] is { } at ? Effect.EvalAmount(x, at) : 0;
+            if (st["AddKeyword"] is { } adjust && adjust.StartsWith("UntapAdjust:", StringComparison.Ordinal))
+            {
+                var parts = adjust.Split(':');
+                foreach (var p in AffectedPlayers(g, st, x)) (p.StaticUntapLimits ??= new()).Add((parts[1], int.Parse(parts[2]), source.Id));
+                continue;
+            }
             var keywords = st["AddKeyword"]?.Split('&', StringSplitOptions.TrimEntries).Select(ForgeRequirements.KeywordName).ToList();
             if (addPower != 0 || addToughness != 0 || keywords is not null)
                 foreach (var card in Affected(i))

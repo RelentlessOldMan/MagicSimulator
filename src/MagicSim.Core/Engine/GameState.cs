@@ -231,6 +231,8 @@ public sealed class Player
     public int LandDropsPerTurn { get; set; } = 1;
     /// <summary>Extra land drops from continuous effects (Exploration, Azusa).</summary>
     public int StaticLandDrops { get; set; }
+    /// <summary>"Players can't untap more than one land during their untap steps" (Winter Orb): what, how many, and whose filter.</summary>
+    public List<(string Valid, int Max, int SourceId)>? StaticUntapLimits { get; set; }
     /// <summary>Maximum hand size set by continuous effects (Reliquary Tower = int.MaxValue).</summary>
     public int? StaticMaxHandSize { get; set; }
     /// <summary>Raised or reduced by continuous effects (Jin-Gitaxias, Core Augur: -7), after any that set it.</summary>
@@ -270,7 +272,7 @@ public sealed class Player
     public Player Clone() => new()
     {
         Index = Index, Life = Life, Poison = Poison, Counters = Counters is null ? null : new(Counters), Pool = Pool, RestrictedPool = RestrictedPool?.ToList(), LandsPlayedThisTurn = LandsPlayedThisTurn,
-        LandDropsPerTurn = LandDropsPerTurn, StaticLandDrops = StaticLandDrops, StaticMaxHandSize = StaticMaxHandSize, StaticMaxHandSizeRaise = StaticMaxHandSizeRaise, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary, AbstractHand = AbstractHand,
+        LandDropsPerTurn = LandDropsPerTurn, StaticLandDrops = StaticLandDrops, StaticUntapLimits = StaticUntapLimits?.ToList(), StaticMaxHandSize = StaticMaxHandSize, StaticMaxHandSizeRaise = StaticMaxHandSizeRaise, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary, AbstractHand = AbstractHand,
         IsGoldfish = IsGoldfish, CommanderDamageTaken = new Dictionary<int, int>(CommanderDamageTaken),
         LifePaidTotal = LifePaidTotal, DrewFromEmpty = DrewFromEmpty, KnownTop = KnownTop, CityBlessing = CityBlessing,
         Library = new List<int>(Library), Hand = new List<int>(Hand), Graveyard = new List<int>(Graveyard),
@@ -327,6 +329,8 @@ public sealed class StackItem
     public Zone CastFrom { get; init; }
     /// <summary>For an "unattached" trigger: the permanent it became unattached from (TriggeredObject).</summary>
     public int? TriggeredObjectId { get; init; }
+    /// <summary>"Whenever you activate an ability": that ability (Rings of Brighthearth copies it).</summary>
+    public int? TriggeredAbilityId { get; init; }
     /// <summary>A triggered ability (not a spell, a copy of one or an activated ability).</summary>
     public bool IsTriggered => !IsSpell && Ability.Kind == AbilityKind.TriggerEffect;
 
@@ -334,7 +338,7 @@ public sealed class StackItem
     public StackItem Clone(int? id = null, int? controller = null) => new()
     {
         DelayRemembered = DelayRemembered, DelayPlayers = DelayPlayers, DelayNumber = DelayNumber, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount, Sacrificed = Sacrificed, Exiled = Exiled, Spliced = Spliced,
-        TriggeredSourceId = TriggeredSourceId, CastFrom = CastFrom, TriggeredObjectId = TriggeredObjectId,
+        TriggeredSourceId = TriggeredSourceId, CastFrom = CastFrom, TriggeredObjectId = TriggeredObjectId, TriggeredAbilityId = TriggeredAbilityId,
         Id = id ?? Id, SourceId = SourceId, Ability = Ability, Controller = controller ?? Controller, IsSpell = id is null && IsSpell,
         ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, TriggeredPlayer = TriggeredPlayer, Description = Description, ExileAfter = ExileAfter,
     };

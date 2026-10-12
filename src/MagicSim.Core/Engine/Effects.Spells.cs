@@ -28,6 +28,13 @@ sealed class CopySpellAbilityEffect : Effect
             _ => Defined.Cards("Targeted", x),
         };
         var n = Amount(x, ab["Amount"], 1);
+        // "Copy that ability" (Rings of Brighthearth): the activated ability, if it's still on the stack.
+        if (ab["Defined"] == "TriggeredSpellAbility" && x.Item.TriggeredAbilityId is { } activatedId)
+        {
+            if (x.S.Stack.FirstOrDefault(s => s.Id == activatedId) is { } activated)
+                for (var i = 0; i < n; i++) x.Game.CopySpell(activated, x.Controller, ab["MayChooseTarget"] == "True");
+            return;
+        }
         foreach (var id in ids)
         {
             var original = ab["TargetType"] == "Triggered.YouCtrl"

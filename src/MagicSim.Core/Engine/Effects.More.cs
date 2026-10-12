@@ -857,6 +857,59 @@ sealed class TapOrUntapAllEffect : Effect
 }
 
 /// <summary>"Look at the top N cards of your library" (PeekAndReveal with NoReveal$): known to you, optionally remembered.</summary>
+/// <summary>
+/// Reveal cards from a hand: some or any number of those matching RevealValid$, all of them (RevealAllValid$), given
+/// ones (RevealDefined$) or random ones. Revealing only matters for what's remembered: nobody here hides information.
+/// </summary>
+sealed class RevealEffect : Effect
+{
+    public override string Api => "Reveal";
+    public override IReadOnlySet<string> Params { get; } = P(
+        "Defined", "RevealValid", "AnyNumber", "RememberRevealed", "Random", "NumCards", "RevealAllValid", "RevealDefined", "Optional",
+        "RevealToAll", "RevealTitle");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        Defined.ValidatePlayers(ab["Defined"], ctx);
+        foreach (var key in new[] { "RevealValid", "RevealAllValid" })
+            if (ab[key] is { } f) Filter.Parse(f, ctx);
+        Defined.ValidateCards(ab["RevealDefined"], ctx);
+        ValidateAmount(ab, "NumCards", ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var ab = x.Ability;
+        var revealed = new List<int>();
+        var unknown = 0;
+        if (ab["RevealDefined"] is { } rd) revealed.AddRange(Defined.Cards(rd, x));
+        else
+            foreach (var p in DrawEffect.Players(x).Select(i => x.S.Players[i]))
+            {
+                var n = Amount(x, ab["NumCards"], 1);
+                if (p.IsGoldfish) { unknown += ab["Random"] == "True" ? Math.Min(n, p.AbstractHand) : 0; continue; }
+                var valid = ab["RevealAllValid"] ?? ab["RevealValid"];
+                var filter = valid is null ? null : FilterFor(x.SVarFace, valid);
+                var hand = p.Hand.Where(id => filter is null || filter.MatchesCard(x.S[id], x)).ToList();
+                if (ab["Random"] == "True")
+                {
+                    x.S.Rng.Shuffle(hand);
+                    revealed.AddRange(hand.Take(n));
+                }
+                // Any number: all of them (revealing costs nothing, and the effects reward more).
+                else if (ab["RevealAllValid"] is not null || ab["AnyNumber"] == "True") revealed.AddRange(hand);
+                else if (hand.Count > 0 && !(ab["Optional"] == "True" && !x.Game.Decider.ChooseYesNo(x.Game, p.Index, x.Host, "reveal a card?")))
+                    revealed.AddRange(x.Game.Decider.ChooseCards(x.Game, p.Index, Choice.Generic, x.Host, hand, Math.Min(n, hand.Count), Math.Min(n, hand.Count)));
+            }
+        if (revealed.Count > 0) x.Game.Note("  reveal " + string.Join(", ", revealed.Select(id => x.S[id].Name)));
+        if (ab["RememberRevealed"] == "True")
+        {
+            (x.Host.Remembered ??= new()).AddRange(revealed);
+            x.Host.RememberedUnknown += unknown;
+        }
+    }
+}
+
 sealed class PeekAndRevealEffect : Effect
 {
     public override string Api => "PeekAndReveal";

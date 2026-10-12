@@ -595,10 +595,11 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch, AbilityCast }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
-    int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);
+    int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null,
+    StackItem? Activated = null);
 
 public readonly record struct PendingTrigger(int SourceId, TriggerDef Trigger, TriggerEvent Event, int Controller, List<int>? DelayRemembered = null,
     List<int>? DelayPlayers = null, int DelayNumber = 0);
@@ -665,6 +666,7 @@ public sealed partial class Game
                 TriggerAmount = pt.Event.Amount,
                 TriggeredSourceId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.CardId : null,
                 TriggeredObjectId = pt.Event.Mode == TriggerMode.Unattached ? pt.Event.TargetCardId : null,
+                TriggeredAbilityId = pt.Event.Activated?.Id,
                 Description = $"{src.Name} trigger",
             };
             item.ChainTargets = ChooseChainTargets(src, exec, pt.Controller, trigger: item);
@@ -953,6 +955,8 @@ public sealed partial class Game
     {
         var p = State.Players[player];
         if (cost.Tap && (source.Tapped || source.Zone != Zone.Battlefield || IsSickForAbilities(source))) return false;
+        // {Q}: untap this permanent (rule 107.6), which it can't if it's untapped or summoning sick.
+        if (cost.Untap && (!source.Tapped || source.Zone != Zone.Battlefield || IsSickForAbilities(source))) return false;
         var lifeNeeded = 0;
         foreach (var part in cost.Parts)
             switch (part.Kind)
@@ -1093,6 +1097,7 @@ public sealed partial class Game
         if (phyrexianLife > 0) PayLife(player, phyrexianLife);
 
         if (cost.Tap) Tap(source);
+        if (cost.Untap) source.Tapped = false;
         foreach (var part in cost.Parts)
         {
             var n = AmountOf(part, x);

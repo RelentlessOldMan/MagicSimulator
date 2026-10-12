@@ -1053,7 +1053,7 @@ public static partial class CardCompiler
         {
             if (token == "T") { tap = true; continue; }
             if (token == "Mandatory") { mandatory = true; continue; }
-            if (token == "Q") { untap = true; ctx.Need("Cost:Untap"); continue; }
+            if (token == "Q") { untap = true; continue; }
             var m = CostPartRx().Match(token);
             if (!m.Success) { manaTokens.Add(token); continue; }
             var args = m.Groups[2].Value.Split('/');

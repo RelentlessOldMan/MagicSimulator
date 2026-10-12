@@ -325,12 +325,14 @@ public sealed partial class Game
                 HashSet<int>? held = null;
                 foreach (var c in State.BattlefieldCards)
                     if (c.AttachedTo >= 0 && c.CurrentFace.AttachedDoesntUntap) (held ??= new()).Add(c.AttachedTo);
+                var untapping = new List<Card>();
                 foreach (var c in State.BattlefieldCards)
                     if (c.Controller == Me && !c.CurrentFace.DoesntUntap && !(held?.Contains(c.Id) ?? false))
                     {
                         if (c.SkipNextUntap) c.SkipNextUntap = false;
-                        else c.Tapped = false;
+                        else if (c.Tapped) untapping.Add(c);
                     }
+                foreach (var c in LimitUntaps(untapping)) c.Tapped = false;
                 return;   // no priority in the untap step
             case Step.Upkeep:
                 Suspended();
@@ -392,6 +394,24 @@ public sealed partial class Game
     }
 
     /// <summary>"At the beginning of the next end step" actions (tokens exiled or sacrificed at end of turn).</summary>
+    /// <summary>
+    /// "Players can't untap more than N [type] during their untap steps" (Winter Orb, Static Orb): the ones untapped are
+    /// those that make mana first, then the most expensive.
+    /// </summary>
+    private IEnumerable<Card> LimitUntaps(List<Card> untapping)
+    {
+        if (State.Players[Me].StaticUntapLimits is not { } limits) return untapping;
+        var result = untapping.OrderByDescending(c => c.Activated.Any(a => a.IsManaAbility || a.Api == "Mana")).ThenByDescending(c => c.ManaValue).ToList();
+        foreach (var (valid, max, sourceId) in limits)
+        {
+            var x = ContextFor(State[sourceId]);
+            var filter = Effect.FilterFor(State[sourceId].CurrentFace, valid);
+            var kept = 0;
+            result.RemoveAll(c => filter.MatchesCard(c, x) && ++kept > max);
+        }
+        return result;
+    }
+
     /// <summary>
     /// "End the turn" (rule 723): every spell and ability on the stack is exiled, and the turn goes on from its cleanup
     /// step. Abilities that triggered are dropped too.
@@ -1139,7 +1159,7 @@ public sealed partial class Game
         item.ChainTargets = targets;
         State.Stack.Add(item);
         Note($"copy {item.Description}" + TargetText(item));
-        if (!original.IsTriggered) Fire(new TriggerEvent(TriggerMode.SpellCopied, CardId: source.Id, Player: controller));
+        if (original.Ability.Kind == AbilityKind.Spell) Fire(new TriggerEvent(TriggerMode.SpellCopied, CardId: source.Id, Player: controller));
     }
 
     public void ActivateAbility(Card c, int abilityIndex)
@@ -1161,6 +1181,7 @@ public sealed partial class Game
             Exiled = LastExiled.Count > 0 ? LastExiled.ToList() : null,
         };
         Note($"activate {c.Name}: {ab.Description}" + TargetText(item));
+        if (!ab.IsSpecialAction) Fire(new TriggerEvent(TriggerMode.AbilityCast, CardId: c.Id, Player: player, Activated: item));
         if (ab.IsSpecialAction) RunChain(item);   // turning a permanent face up doesn't use the stack (rule 116.2b)
         else if (ab.IsManaAbility)
         {

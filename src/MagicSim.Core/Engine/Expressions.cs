@@ -91,6 +91,23 @@ public sealed class Filter
         return new Filter(text, terms);
     }
 
+    private static Func<Card?, int?, EffectContext, bool> SharesCardTypeWith(string defined, CompileContext ctx)
+    {
+        Defined.ValidateCards(defined, ctx);
+        return (c, pl, x) => c is not null && Defined.Cards(defined, x).Any(id => (x.S[id].Types.Types & c.Types.Types) != 0);
+    }
+
+    private static Func<Card?, int?, EffectContext, bool> GreatestManaValue(string among, CompileContext ctx)
+    {
+        Parse(among, ctx);
+        return (c, pl, x) =>
+        {
+            if (c is null) return false;
+            var f = Effect.FilterFor(x.SVarFace, among);
+            return x.S.BattlefieldCards.Where(o => f.MatchesCard(o, x)).All(o => o.ManaValue <= c.ManaValue);
+        };
+    }
+
     /// <summary>A property of a "Triggered." filter that compares a card with the card that triggered.</summary>
     private static Prop? RelativeToTriggered(string p)
     {
@@ -179,6 +196,9 @@ public sealed class Filter
             "sharesCreatureTypeWith Commander" => (c, pl, x) => c is not null && x.S.Cards.Any(k => k.IsCommander && k.Owner == x.Controller && SharesCreatureType(c.Types, k.Types)),
             // The remembered card as it last was: it may be this very card, back in its owner's hand.
             "sharesNameWith RememberedLKI" => (c, pl, x) => c is not null && x.Host.Remembered is { } lki && lki.Any(id => x.S[id].Name == c.Name),
+            _ when p.StartsWith("sharesCardTypeWith ", StringComparison.Ordinal) => SharesCardTypeWith(p[19..], ctx),
+            // "The artifact with the highest mana value or tied for it" (greatestCMC_Artifact): among those on the battlefield.
+            _ when p.StartsWith("greatestCMC_", StringComparison.Ordinal) => GreatestManaValue(p[12..], ctx),
             "sharesNameWith Remembered" => (c, pl, x) => c is not null && x.Host.Remembered is { } rem
                 && rem.Any(id => id != c.Id && x.S[id].Name == c.Name),
             "EquippedBy" or "EnchantedBy" or "AttachedBy" => (c, pl, x) => c is not null && x.Host.AttachedTo == c.Id,
