@@ -48,7 +48,7 @@ internal static class TestGames
         return g;
     }
 
-    public static int InHand(Game g, string name) => g.State.Players[Game.Me].Hand.First(id => g.State[id].Name == name);
+    public static int InHand(Game g, string name) => g.State.Players[Game.Me].Hand.First(id => g.State[id].Name == name || g.State[id].Def.Name == name);
 
     public static Card OnBattlefield(Game g, string name) => g.State.BattlefieldCards.First(c => c.Name == name);
 

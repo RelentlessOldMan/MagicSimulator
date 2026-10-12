@@ -53,6 +53,7 @@ public static class Triggers
         ["ClassLevelGained"] = new(StringComparer.Ordinal) { "ClassLevel" },
         ["Cycled"] = new(StringComparer.Ordinal) { },
         ["SpellCastOrCopy"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer" },
+        ["SpellCopy"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer", "ValidAttackers" },
         ["Drawn"] = new(StringComparer.Ordinal) { "Number", "FirstCardInDrawStep" },
@@ -185,6 +186,7 @@ public static class Triggers
             case "Cycled" when e.Mode == TriggerMode.Cycled:
                 return CardMatches(g, t, e.CardId, x, source);
             case "SpellCastOrCopy" when e.Mode is TriggerMode.SpellCast or TriggerMode.SpellCopied:
+            case "SpellCopy" when e.Mode == TriggerMode.SpellCopied:
                 return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller, x, t.Face) && CardMatches(g, t, e.CardId, x, source);
             case "ClassLevelGained" when e.Mode == TriggerMode.ClassLevelGained:
                 return (t["ClassLevel"] is not { } lvl || lvl == e.Amount.ToString()) && CardMatches(g, t, e.CardId, x, source);

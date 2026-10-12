@@ -117,7 +117,13 @@ public sealed class Card
     /// <summary>The copy effect ends at cleanup ("until end of turn").</summary>
     public bool CopyUntilCleanup { get; set; }
 
-    public FaceDef CurrentFace => FaceDown && Def.Faces[0].FaceDownFace is { } down ? down : CopyDef?.Front ?? Def.Faces[Face];
+    /// <summary>
+    /// Mana value (rule 202.3): a split card's is its two halves' combined, except as a spell on the stack (rule 709.4).
+    /// </summary>
+    public int ManaValue => Def.Layout == "Split" && Zone != Zone.Stack && CopyDef is null && !FaceDown
+        ? Def.Faces.Sum(f => f.ManaCost.ManaValue) : CurrentFace.ManaCost.ManaValue;
+
+    public FaceDef CurrentFace => FaceDown ? Def.Faces[0].FaceDownFace ?? Def.ManifestFace : CopyDef?.Front ?? Def.Faces[Face];
     /// <summary>The card (or what it copies) is unsupported and plays as a blank.</summary>
     public bool IsBlank => (CopyDef ?? Def).IsBlank;
     public string Name => CurrentFace.Name;
@@ -321,12 +327,15 @@ public sealed class StackItem
     public Zone CastFrom { get; init; }
     /// <summary>For an "unattached" trigger: the permanent it became unattached from (TriggeredObject).</summary>
     public int? TriggeredObjectId { get; init; }
+    /// <summary>A triggered ability (not a spell, a copy of one or an activated ability).</summary>
+    public bool IsTriggered => !IsSpell && Ability.Kind == AbilityKind.TriggerEffect;
 
-    public StackItem Clone() => new()
+    /// <summary>A copy of this item; with an id and controller, a copy of the ability on the stack (rule 707.10).</summary>
+    public StackItem Clone(int? id = null, int? controller = null) => new()
     {
         DelayRemembered = DelayRemembered, DelayPlayers = DelayPlayers, DelayNumber = DelayNumber, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount, Sacrificed = Sacrificed, Exiled = Exiled, Spliced = Spliced,
         TriggeredSourceId = TriggeredSourceId, CastFrom = CastFrom, TriggeredObjectId = TriggeredObjectId,
-        Id = Id, SourceId = SourceId, Ability = Ability, Controller = Controller, IsSpell = IsSpell,
+        Id = id ?? Id, SourceId = SourceId, Ability = Ability, Controller = controller ?? Controller, IsSpell = id is null && IsSpell,
         ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, TriggeredPlayer = TriggeredPlayer, Description = Description, ExileAfter = ExileAfter,
     };
 }

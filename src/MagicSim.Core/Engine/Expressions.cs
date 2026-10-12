@@ -79,14 +79,35 @@ public sealed class Filter
             var dot = raw.IndexOf('.');
             var baseName = dot < 0 ? raw : raw[..dot];
             var props = new List<Prop>();
+            // "Triggered.sameName", "Triggered.Other+sharesPermanentTypeWith": cards compared with the card that triggered.
+            var relative = baseName == "Triggered";
+            if (relative) baseName = "Card";
             if (!IsKnownBase(baseName)) ctx.Need("FilterBase:" + baseName);
             if (dot >= 0)
                 foreach (var p in raw[(dot + 1)..].Split('+', StringSplitOptions.RemoveEmptyEntries))
-                    if (ParseProp(p, ctx) is { } prop) props.Add(prop);
+                    if (((relative ? RelativeToTriggered(p) : null) ?? ParseProp(p, ctx)) is { } prop) props.Add(prop);
             terms.Add(new Term(baseName, props));
         }
         return new Filter(text, terms);
     }
+
+    /// <summary>A property of a "Triggered." filter that compares a card with the card that triggered.</summary>
+    private static Prop? RelativeToTriggered(string p)
+    {
+        static Card? Of(EffectContext x) => x.Item.TriggeredCardId is { } id ? x.S[id] : null;
+        Func<Card, Card, bool>? test = p switch
+        {
+            "Other" => (c, t) => c.Id != t.Id,
+            "sameName" => (c, t) => c.Name == t.Name,
+            "SharesColorWith" => (c, t) => (c.Colors & t.Colors) != 0,
+            "sharesPermanentTypeWith" => (c, t) => PermanentTypes.Any(k => c.Types.Is(k) && t.Types.Is(k)),
+            _ => null,
+        };
+        return test is null ? null : new Prop(false, (c, pl, x) => c is not null && Of(x) is { } t && test(c, t));
+    }
+
+    private static readonly CardType[] PermanentTypes =
+        { CardType.Artifact, CardType.Creature, CardType.Enchantment, CardType.Land, CardType.Planeswalker, CardType.Battle };
 
     private static bool IsKnownBase(string b) =>
         b is "Card" or "Permanent" or "Spell" or "Player" or "Opponent" or "You" or "Any" or "Creature" or "Planeswalker" or "Emblem" or "Effect"
@@ -140,6 +161,8 @@ public sealed class Filter
             "token" => (c, pl, x) => c is not null && c.IsToken,
             "tapped" => (c, pl, x) => c is not null && c.Tapped,
             "attacking" => (c, pl, x) => c is not null && x.S.Attackers.Contains(c.Id),
+            // Goldfish opponents never attack, so nothing ever blocks.
+            "blocking" => (c, pl, x) => false,
             "untapped" => (c, pl, x) => c is not null && !c.Tapped,
             "IsCommander" => (c, pl, x) => c is not null && c.IsCommander,
             "NamedCard" => (c, pl, x) => c is not null && x.Host.NamedCard is { } n && string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase),
@@ -154,6 +177,8 @@ public sealed class Filter
             "IsImprinted" => (c, pl, x) => c is not null && (x.Host.Imprinted?.Contains(c.Id) ?? false),
             // "Shares a creature type with your commander" (Path of Ancestry).
             "sharesCreatureTypeWith Commander" => (c, pl, x) => c is not null && x.S.Cards.Any(k => k.IsCommander && k.Owner == x.Controller && SharesCreatureType(c.Types, k.Types)),
+            // The remembered card as it last was: it may be this very card, back in its owner's hand.
+            "sharesNameWith RememberedLKI" => (c, pl, x) => c is not null && x.Host.Remembered is { } lki && lki.Any(id => x.S[id].Name == c.Name),
             "sharesNameWith Remembered" => (c, pl, x) => c is not null && x.Host.Remembered is { } rem
                 && rem.Any(id => id != c.Id && x.S[id].Name == c.Name),
             "EquippedBy" or "EnchantedBy" or "AttachedBy" => (c, pl, x) => c is not null && x.Host.AttachedTo == c.Id,
@@ -207,7 +232,7 @@ public sealed class Filter
             var op = m.Groups[2].Value;
             Func<Card, int> stat = m.Groups[1].Value switch
             {
-                "cmc" => c => c.CurrentFace.ManaCost.ManaValue,
+                "cmc" => c => c.ManaValue,
                 "power" => c => c.Power,
                 _ => c => c.Toughness,
             };
@@ -562,10 +587,10 @@ public sealed class Amount
                 case null: return new(core, x => filter.CountIn(zones, x));
                 case "GreatestCardPower": return new(core, x => Matching(x).Select(card => card.Power).DefaultIfEmpty(0).Max());
                 case "GreatestCardToughness": return new(core, x => Matching(x).Select(card => card.Toughness).DefaultIfEmpty(0).Max());
-                case "GreatestCMC": return new(core, x => Matching(x).Select(card => card.CurrentFace.ManaCost.ManaValue).DefaultIfEmpty(0).Max());
+                case "GreatestCMC": return new(core, x => Matching(x).Select(card => card.ManaValue).DefaultIfEmpty(0).Max());
                 case "CardPower": return new(core, x => Matching(x).Sum(card => card.Power));
                 case "CardToughness": return new(core, x => Matching(x).Sum(card => card.Toughness));
-                case "SumCMC": return new(core, x => Matching(x).Sum(card => card.CurrentFace.ManaCost.ManaValue));
+                case "SumCMC": return new(core, x => Matching(x).Sum(card => card.ManaValue));
                 case "DifferentCardNames": return new(core, x => Matching(x).Select(card => card.Name).Distinct(StringComparer.Ordinal).Count());
                 default: ctx.Need("Count:" + kind + "$" + arg[(dollar + 1)..]); return Const(0);
             }
@@ -668,7 +693,7 @@ public sealed class Amount
             _ when prop.StartsWith("CardCounters.", StringComparison.Ordinal) => new(core, x => Cards(x).Sum(c => c.CounterCount(prop[13..]))),
             "CardPower" => new(core, x => Cards(x).Sum(c => c.LastKnownPower)),
             "CardToughness" => new(core, x => Cards(x).Sum(c => c.LastKnownToughness)),
-            "CardManaCost" or "CardManaCostLKI" => new(core, x => Cards(x).Sum(c => c.CurrentFace.ManaCost.ManaValue)),
+            "CardManaCost" or "CardManaCostLKI" => new(core, x => Cards(x).Sum(c => c.ManaValue)),
             "Amount" => new(core, x => Cards(x).Count + (which is "Remembered" or "RememberedLKI" ? x.Host.RememberedUnknown : 0)),
             _ => new(core, x => Cards(x).Count(c => filter!.MatchesCard(c, x))
                 + (which is "Remembered" or "RememberedLKI" && x.Host.RememberedUnknown > 0 && filter!.MatchesUnknownCard(Filter.SomeOpponent(x), x) ? x.Host.RememberedUnknown : 0)),

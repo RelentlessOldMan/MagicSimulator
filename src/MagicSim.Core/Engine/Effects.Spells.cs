@@ -10,7 +10,7 @@ sealed class CopySpellAbilityEffect : Effect
     {
         if (ab["Defined"] is { } d && d is not ("TriggeredSpellAbility" or "Parent" or "Targeted")) ctx.Need("CopySpellAbility.Defined:" + d);
         if (ab["Defined"] is null && ab.TargetFilter is null) ctx.Need("CopySpellAbility:NothingToCopy");
-        if (ab["TargetType"] is { } tt && tt != "Spell") ctx.Need("CopySpellAbility.TargetType:" + tt);
+        if (ab["TargetType"] is { } tt && tt is not ("Spell" or "Triggered.YouCtrl")) ctx.Need("CopySpellAbility.TargetType:" + tt);
         // "That player copies it" (Bonus Round): the copied spell's controller.
         if (ab["Controller"] is { } c && c is not ("You" or "TriggeredCardController")) ctx.Need("CopySpellAbility.Controller:" + c);
         ValidateAmount(ab, "Amount", ctx);
@@ -30,8 +30,10 @@ sealed class CopySpellAbilityEffect : Effect
         var n = Amount(x, ab["Amount"], 1);
         foreach (var id in ids)
         {
-            var original = x.S.Stack.LastOrDefault(s => s.IsSpell && s.SourceId == id);
-            if (original is null || x.S[id].Types.IsPermanent) continue;   // copies of permanent spells (tokens) aren't supported
+            var original = ab["TargetType"] == "Triggered.YouCtrl"
+                ? x.S.Stack.LastOrDefault(s => s.IsTriggered && s.SourceId == id && s != x.Item)
+                : x.S.Stack.LastOrDefault(s => s.IsSpell && s.SourceId == id);
+            if (original is null || original.IsSpell && x.S[id].Types.IsPermanent) continue;   // copies of permanent spells (tokens) aren't supported
             var copier = ab["Controller"] == "TriggeredCardController" ? original.Controller : x.Controller;
             for (var i = 0; i < n; i++) x.Game.CopySpell(original, copier, ab["MayChooseTarget"] == "True");
         }

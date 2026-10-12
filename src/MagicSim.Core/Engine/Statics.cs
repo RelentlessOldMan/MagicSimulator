@@ -11,7 +11,11 @@ public static class Presence
     public static readonly HashSet<string> Params = new(StringComparer.Ordinal)
     {
         "IsPresent", "PresentCompare", "PresentZone", "PresentDefined", "CheckSVar", "SVarCompare", "Condition",
+        // "Metalcraft — when this enters, if you control three or more artifacts" (Metalcraft$ True).
+        "Metalcraft", "Threshold", "Delirium", "Hellbent",
     };
+
+    private static readonly string[] FlagConditions = { "Metalcraft", "Threshold", "Delirium", "Hellbent" };
 
     private static readonly HashSet<string> KnownConditions = new(StringComparer.Ordinal)
     {
@@ -78,6 +82,8 @@ public static class Presence
             if (!CompareTo(count, p["PresentCompare"] ?? "GE1", x)) return false;
         }
         if (p["CheckSVar"] is { } sv && !CompareTo(Effect.EvalAmount(x, sv), p["SVarCompare"] ?? "GE1", x)) return false;
+        foreach (var flag in FlagConditions)
+            if (p[flag] == "True" && !ConditionHolds(flag, x)) return false;
         if (p["Condition"] is { } cond && !ConditionHolds(cond, x)) return false;
         return true;
     }
@@ -133,7 +139,7 @@ public static class Statics
     private static readonly HashSet<string> CantAttackParams = new(StringComparer.Ordinal) { "ValidCard", "EffectZone" };
     private static readonly HashSet<string> ValidPlayerParams = new(StringComparer.Ordinal) { "ValidPlayer", "EffectZone" };
     private static readonly HashSet<string> CastWithFlashParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Caster" };
-    private static readonly HashSet<string> PanharmoniconParams = new(StringComparer.Ordinal) { "ValidMode", "ValidCard", "ValidCause", "Origin", "Destination" };
+    private static readonly HashSet<string> PanharmoniconParams = new(StringComparer.Ordinal) { "ValidMode", "ValidCard", "ValidCause", "Origin", "Destination", "ValidActivator" };
 
     private static readonly HashSet<string> CantBeCastParams = new(StringComparer.Ordinal) { "ValidCard", "Caster", "NumLimitEachTurn" };
 
@@ -142,8 +148,10 @@ public static class Statics
     {
         foreach (var (source, st) in Pairs(g))
         {
-            if (st.Mode != "CantBeCast" || source.Zone != Zone.Battlefield) continue;
+            if (st.Mode != "CantBeCast" || source.Zone is not (Zone.Battlefield or Zone.Command)) continue;
             if (st["Caster"] is "Opponent" || st["Caster"] == "You" && caster != source.Controller) continue;
+            // "That creature's owner can't cast spells with the same name" (Reflector Mage): the effect remembers the player.
+            if (st["Caster"] == "Player.IsRemembered" && !(source.RememberedPlayers?.Contains(caster) ?? false)) continue;
             var x = ContextFor(g, source, st);
             if (st["ValidCard"] is { } vc && !Effect.FilterFor(source.CurrentFace, vc).MatchesCard(spell, x)) continue;
             if (!Presence.Hold(st.P, x)) continue;
@@ -221,7 +229,7 @@ public static class Statics
             case "CantBeCast":
                 // "Each player can't cast more than one spell each turn" (Archon of Emeria), "can't cast creature spells".
                 own = CantBeCastParams;
-                if (s["Caster"] is { } cbc && cbc is not ("Player" or "You")) ctx.Need("CantBeCast.Caster:" + cbc);
+                if (s["Caster"] is { } cbc && cbc is not ("Player" or "You" or "Player.IsRemembered")) ctx.Need("CantBeCast.Caster:" + cbc);
                 if (s["ValidCard"] is { } cvc2) Filter.Parse(cvc2, ctx);
                 if (s["NumLimitEachTurn"] is { } limit && !int.TryParse(limit, out _)) ctx.Need("CantBeCast.NumLimitEachTurn:" + limit);
                 break;

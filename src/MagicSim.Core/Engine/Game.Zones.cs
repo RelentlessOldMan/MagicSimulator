@@ -78,7 +78,7 @@ public sealed partial class Game
             State.Attackers.Remove(c.Id);
         }
         // Off the battlefield and the stack a modal double-faced card is its front face again.
-        if (to is not (Zone.Battlefield or Zone.Stack) && c.Def.Layout is "Modal" or "Adventure") c.Face = 0;
+        if (to is not (Zone.Battlefield or Zone.Stack) && c.Def.Layout is "Modal" or "Adventure" or "Split") c.Face = 0;
         c.OnAdventure = false;
         // A face-down card is turned face up when it goes anywhere but the battlefield (rule 708.9).
         if (to is not (Zone.Battlefield or Zone.Stack)) c.FaceDown = false;
@@ -198,6 +198,30 @@ public sealed partial class Game
                 if (moves.Any(m => Triggers.ZoneMatches(st["Origin"], m.From) && Triggers.ZoneMatches(st["Destination"] ?? "Battlefield", m.To)
                                    && (cause is null || cause.MatchesCard(m.Moved, x))))
                     extra++;
+            }
+        }
+        return extra;
+    }
+
+    /// <summary>
+    /// How many extra times a trigger of <paramref name="source"/> caused by casting or copying a spell triggers
+    /// (Veyran, Voice of Duality; rule 603.2d).
+    /// </summary>
+    private int ExtraSpellTriggers(Card source, string mode, TriggerEvent e)
+    {
+        var extra = 0;
+        if (source.Zone != Zone.Battlefield || e.CardId is not { } spell) return 0;
+        foreach (var host in State.BattlefieldCards)
+        {
+            if (host.IsBlank || host.Controller != source.Controller) continue;
+            foreach (var st in host.Statics)
+            {
+                if (st.Mode != "Panharmonicon" || st["ValidMode"] is not { } vm || !vm.Split(',').Contains(mode)) continue;
+                var x = ContextFor(host);
+                if (st["ValidCard"] is { } vc && !Effect.FilterFor(host.CurrentFace, vc).MatchesCard(source, x)) continue;
+                if (st["ValidCause"] is { } vcause && !Effect.FilterFor(host.CurrentFace, vcause).MatchesCard(State[spell], x)) continue;
+                if (st["ValidActivator"] is { } va && !Effect.FilterFor(host.CurrentFace, va).MatchesPlayer(e.Player ?? -1, x)) continue;
+                extra++;
             }
         }
         return extra;
@@ -602,7 +626,8 @@ public sealed partial class Game
             foreach (var t in triggers)
             {
                 if (src.IsBlank || !Triggers.Matches(this, t, src, e) || !Triggers.UnderLimit(this, src, t)) continue;
-                var times = 1 + (e.Mode == TriggerMode.ChangesZone && e.CardId is { } changed ? ExtraZoneTriggers(src, "ChangesZone", new[] { (State[changed], e.From, e.To) }) : 0);
+                var times = 1 + (e.Mode == TriggerMode.ChangesZone && e.CardId is { } changed ? ExtraZoneTriggers(src, "ChangesZone", new[] { (State[changed], e.From, e.To) })
+                    : e.Mode is TriggerMode.SpellCast or TriggerMode.SpellCopied ? ExtraSpellTriggers(src, t.Mode, e) : 0);
                 // TriggerController$ TriggeredCardController: the creature's controller, not the granter's.
                 var controller = t["TriggerController"] is not null && e.CardId is { } tcard ? State[tcard].Controller : src.Controller;
                 for (var i = 0; i < times; i++) _pending.Add(new PendingTrigger(id, t, e, controller));

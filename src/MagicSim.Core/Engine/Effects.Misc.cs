@@ -357,7 +357,7 @@ sealed class CascadeEffect : Effect
     public override string Api => "Cascade";
     public override IReadOnlySet<string> Params { get; } = P();
 
-    public override void Resolve(EffectContext x) => Reveal(x, x.Host.CurrentFace.ManaCost.ManaValue - 1, toHandInstead: false);
+    public override void Resolve(EffectContext x) => Reveal(x, x.Host.ManaValue - 1, toHandInstead: false);
 
     /// <summary>Exiles from the top until a nonland card with mana value at most <paramref name="maxValue"/>; casts it free (or puts it in hand); the rest go to the bottom.</summary>
     public static void Reveal(EffectContext x, int maxValue, bool toHandInstead)
@@ -371,7 +371,7 @@ sealed class CascadeEffect : Effect
             var c = x.S[lib[0]];
             x.Game.MoveTo(c, Zone.Exile);
             exiled.Add(c);
-            if (!c.Types.Is(CardType.Land) && c.CurrentFace.ManaCost.ManaValue < mv) { hit = c; break; }
+            if (!c.Types.Is(CardType.Land) && c.ManaValue < mv) { hit = c; break; }
         }
         x.Game.Note($"  cascade exiles {exiled.Count} card(s)" + (hit is null ? "" : $", hitting {hit.Name}"));
         if (!toHandInstead) Replacements.AsCascade(x.Game, x.Controller, exiled);

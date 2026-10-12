@@ -144,7 +144,7 @@ sealed class TwoPilesEffect : Effect
         List<int> chosen;
         if (ab["Separator"] == "Opponent")
         {
-            var alone = cards.OrderByDescending(id => x.S[id].Types.Is(CardType.Land) ? -1 : x.S[id].CurrentFace.ManaCost.ManaValue).First();
+            var alone = cards.OrderByDescending(id => x.S[id].Types.Is(CardType.Land) ? -1 : x.S[id].ManaValue).First();
             var rest = cards.Where(id => id != alone).ToList();
             string Pile(IEnumerable<int> ids) => ids.Any() ? string.Join(", ", ids.Select(id => x.S[id].Name)) : "nothing";
             var pick = x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, new[] { Pile(new[] { alone }), Pile(rest) });

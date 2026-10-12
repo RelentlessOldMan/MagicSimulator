@@ -807,9 +807,9 @@ public sealed partial class Game
     /// <summary>Adds playing <paramref name="c"/> as a land, or casting it with each of its spell abilities, if allowed now.</summary>
     private void AddPlayOrCast(List<GameAction> result, Card c, Player p, bool sorcerySpeed, bool check)
     {
-        // A modal double-faced card can be played as either face (rule 712.12); an adventurer card can be
-        // cast as its Adventure from hand (rule 715.3).
-        var faces = c.Def.Layout == "Modal" || c.Def.Layout == "Adventure" && c.Zone == Zone.Hand ? c.Def.Faces.Count : 1;
+        // A modal double-faced card can be played as either face (rule 712.12), a split card cast as either half
+        // (rule 709.3); an adventurer card can be cast as its Adventure from hand (rule 715.3).
+        var faces = c.Def.Layout is "Modal" or "Split" || c.Def.Layout == "Adventure" && c.Zone == Zone.Hand ? c.Def.Faces.Count : 1;
         for (var f = 0; f < faces; f++)
         {
             c.Face = f;
@@ -1128,15 +1128,18 @@ public sealed partial class Game
                     targets[i] = chosen[i];
                 }
         }
-        var item = new StackItem
-        {
-            Id = State.NextStackId++, SourceId = original.SourceId, Ability = original.Ability, Controller = controller, IsSpell = false, X = original.X,
-            ChainTargets = targets,
-            Description = source.Name + " (copy)",
-        };
+        // A copied triggered ability keeps what it triggered on (Strionic Resonator).
+        var item = original.IsTriggered
+            ? original.Clone(State.NextStackId++, controller)
+            : new StackItem
+            {
+                Id = State.NextStackId++, SourceId = original.SourceId, Ability = original.Ability, Controller = controller, IsSpell = false, X = original.X,
+                Description = source.Name + " (copy)",
+            };
+        item.ChainTargets = targets;
         State.Stack.Add(item);
-        Note($"copy {source.Name}" + TargetText(item));
-        Fire(new TriggerEvent(TriggerMode.SpellCopied, CardId: source.Id, Player: controller));
+        Note($"copy {item.Description}" + TargetText(item));
+        if (!original.IsTriggered) Fire(new TriggerEvent(TriggerMode.SpellCopied, CardId: source.Id, Player: controller));
     }
 
     public void ActivateAbility(Card c, int abilityIndex)
@@ -1205,6 +1208,15 @@ public sealed partial class Game
         if (f.CanTargetPlayers)
             foreach (var p in State.Players)
                 if (!p.Lost && f.MatchesPlayer(p.Index, x)) list.Add(TargetRef.OfPlayer(p.Index));
+        // "Target triggered ability you control": a triggered ability on the stack, named by its source.
+        if (ab["TargetType"] is { } tt && tt.StartsWith("Triggered", StringComparison.Ordinal))
+        {
+            foreach (var item in State.Stack)
+                if (item.IsTriggered && (tt != "Triggered.YouCtrl" || item.Controller == controller) && f.MatchesCard(State[item.SourceId], x)
+                    && !list.Any(t => t.CardId == item.SourceId))
+                    list.Add(TargetRef.OfCard(item.SourceId));
+            return list;
+        }
         if (f.CanTargetCards)
         {
             foreach (var zone in TargetZones(ab))

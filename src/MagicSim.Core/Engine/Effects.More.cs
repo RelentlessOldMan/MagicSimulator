@@ -320,6 +320,46 @@ sealed class ChooseCardEffect : Effect
     }
 }
 
+/// <summary>
+/// Manifest (rule 701.40): the top card of a library goes onto the battlefield face down as a 2/2 creature. A goldfish
+/// opponent's library is a count, so they get a face-down 2/2 token for the card.
+/// </summary>
+sealed class ManifestEffect : Effect
+{
+    public override string Api => "Manifest";
+    public override IReadOnlySet<string> Params { get; } = P("DefinedPlayer", "Amount");
+
+    private static readonly CardDef FaceDown =
+        CardCompiler.Compile(Forge.ForgeCard.Parse("Name:Face-down creature\nTypes:Creature\nPT:2/2\n"));
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        ValidateAmount(ab, "Amount", ctx);
+        Defined.ValidatePlayers(ab["DefinedPlayer"], ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var n = Amount(x, x.Ability["Amount"], 1);
+        foreach (var p in Defined.Players(x.Ability["DefinedPlayer"], x).Select(i => x.S.Players[i]))
+            for (var i = 0; i < n; i++)
+            {
+                if (p.IsGoldfish)
+                {
+                    if (p.AbstractLibrary == 0) break;
+                    p.AbstractLibrary--;
+                    x.Game.CreateToken(FaceDown, p.Index, false);
+                    continue;
+                }
+                if (p.Library.Count == 0) break;
+                var c = x.S[p.Library[0]];
+                c.FaceDown = true;
+                x.Game.Note($"  manifest {c.Def.Name}");
+                x.Game.MoveTo(c, Zone.Battlefield);
+            }
+    }
+}
+
 /// <summary>Turns a face-down permanent face up (morph, megamorph: rule 702.37e).</summary>
 sealed class TurnFaceUpEffect : Effect
 {
@@ -437,7 +477,7 @@ sealed class CounterEffect : Effect
             if (x.Ability["RememberCounteredCMC"] == "True")
             {
                 x.Host.StoredVars ??= new();
-                x.Host.StoredVars[Card.RememberedNumberKey] = x.Host.StoredVars.GetValueOrDefault(Card.RememberedNumberKey) + x.S[id].CurrentFace.ManaCost.ManaValue;
+                x.Host.StoredVars[Card.RememberedNumberKey] = x.Host.StoredVars.GetValueOrDefault(Card.RememberedNumberKey) + x.S[id].ManaValue;
             }
             x.S.Stack.Remove(item);
             x.Game.Note($"  countered {x.S[id].Name}");

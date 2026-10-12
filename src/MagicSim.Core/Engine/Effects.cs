@@ -64,7 +64,7 @@ public static class Effects
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
         new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
-        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
+        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -230,7 +230,7 @@ sealed class ChangeZoneEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "Origin", "Destination", "ChangeType", "ChangeNum", "Hidden", "Mandatory", "Tapped", "LibraryPosition", "Defined",
         "ChangeTypeDesc", "Shuffle", "Reveal", "SelectPrompt", "Reorder", "Optional", "NoReveal", "ShuffleNonMandatory",
-        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "OriginAlternative", "AIXMax", "WithCountersType", "WithCountersAmount", "RememberTargets", "Duration", "TargetsWithDefinedController", "RememberLKI",
+        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "OriginAlternative", "AIXMax", "WithCountersType", "WithCountersAmount", "RememberTargets", "ForgetOtherTargets", "Duration", "TargetsWithDefinedController", "RememberLKI",
         // "Any number of creature cards with total mana value 6 or less."
         "WithTotalCMC",
         // Who chooses from another player's hand: you; a goldfish opponent's hand is unknown, so nothing is found.
@@ -324,6 +324,7 @@ sealed class ChangeZoneEffect : Effect
         if (ab["Defined"] is not null || ab.TargetFilter is not null || self)
         {
             var ids = self ? Defined.Cards("Self", x) : ab["Defined"] is { } d ? Defined.Cards(d, x) : Defined.Cards("Targeted", x);
+            if (ab["ForgetOtherTargets"] == "True") x.Host.Remembered = null;
             if (ab["RememberTargets"] == "True") (x.Host.Remembered ??= new()).AddRange(Defined.Cards("Targeted", x));
             foreach (var id in ids)
             {
@@ -372,12 +373,12 @@ sealed class ChangeZoneEffect : Effect
             var left = Amount(x, total, 0);
             while (chosen.Count < max)
             {
-                var fits = candidates.Where(id => !chosen.Contains(id) && x.S[id].CurrentFace.ManaCost.ManaValue <= left).ToList();
+                var fits = candidates.Where(id => !chosen.Contains(id) && x.S[id].ManaValue <= left).ToList();
                 if (fits.Count == 0) break;
                 var pick = x.Game.Decider.ChooseCards(x.Game, searcher, kind, x.Host, fits, 0, 1);
                 if (pick.Count == 0) break;
                 chosen.Add(pick[0]);
-                left -= x.S[pick[0]].CurrentFace.ManaCost.ManaValue;
+                left -= x.S[pick[0]].ManaValue;
             }
         }
         else chosen = max == 0 ? new List<int>() : x.Game.Decider.ChooseCards(x.Game, searcher, kind, x.Host, candidates, min, max);

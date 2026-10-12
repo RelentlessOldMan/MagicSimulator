@@ -239,6 +239,29 @@ public sealed class CardDef
     public bool Supported => Missing.Count == 0;
     public FaceDef Front => Faces[0];
 
+    private FaceDef? _manifest;
+    /// <summary>
+    /// Manifested (rule 701.40): a face-down 2/2 creature with no name, types or abilities. If the card is a creature
+    /// card it can be turned face up any time for its mana cost.
+    /// </summary>
+    public FaceDef ManifestFace => _manifest ??= BuildManifestFace();
+
+    private FaceDef BuildManifestFace()
+    {
+        var down = new FaceDef
+        {
+            Name = "Face-down creature", ManaCost = ManaCost.None, Types = TypeLine.Parse("Creature"), Power = 2, Toughness = 2, Colors = 0,
+            SVars = Front.SVars,
+        };
+        if (Front.Types.Is(CardType.Creature) && !IsBlank)
+            down.Activated.Add(new AbilityDef
+            {
+                P = new ForgeParams($"AB$ TurnFaceUp | Cost$ {Front.ManaCost} | SpellDescription$ Turn face up"), Api = "TurnFaceUp",
+                Kind = AbilityKind.Activated, Cost = new Cost { Mana = Front.ManaCost }, Face = down, IsSpecialAction = true,
+            });
+        return down;
+    }
+
     /// <summary>A blank stand-in for an unsupported card: same name/types/cost, no abilities.</summary>
     public bool IsBlank { get; init; }
     /// <summary>From Scryfall's color_identity (set by CardPool).</summary>
@@ -285,7 +308,7 @@ public static partial class CardCompiler
         foreach (var f in source.Faces)
             def.Faces.Add(CompileFace(f, def.Missing, tokens));
         // Two-faced transforming cards play their front face; other multi-face layouts need casting support first.
-        if (source.AlternateMode is { } mode && mode is not ("DoubleFaced" or "Modal" or "Adventure"))
+        if (source.AlternateMode is { } mode && mode is not ("DoubleFaced" or "Modal" or "Adventure" or "Split"))
             def.Missing.Add("Layout:" + mode);
         return def;
     }
@@ -964,7 +987,8 @@ public static partial class CardCompiler
             Amount.Parse(amountBody, ctx);
             ab.UnlessCostAmount = amountBody;
             ab.UnlessCost = Cost.Free;
-            if (p["UnlessPayer"] is { } amountPayer && amountPayer != "You") ctx.Need("UnlessPayer:" + amountPayer);
+            if (p["UnlessPayer"] is { } amountPayer && amountPayer is not ("You" or "TriggeredActivator" or "TriggeredPlayer" or "TargetedController"))
+                ctx.Need("UnlessPayer:" + amountPayer);
         }
         else if (p["UnlessCost"] is { } unless)
         {
