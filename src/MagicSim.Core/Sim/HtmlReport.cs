@@ -7,7 +7,8 @@ namespace MagicSim.Core.Sim;
 
 /// <summary>
 /// A self-contained HTML page from one or more magicsim.run/1 documents: cumulative win curves per table size,
-/// a per-turn histogram per deck, and a summary table. For people to read; not a stable format.
+/// a per-turn histogram per deck, and a summary table, plus each deck's Forge playtest (magicsim.forge/1) when one
+/// was run. For people to read; not a stable format.
 /// </summary>
 public static class HtmlReport
 {
@@ -17,13 +18,14 @@ public static class HtmlReport
     private static readonly string[] Tables = { "1v1", "1v1v1" };
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-    public static string Build(IReadOnlyList<JsonElement> runs, DateTime generated)
+    public static string Build(IReadOnlyList<JsonElement> runs, DateTime generated, IReadOnlyList<JsonElement>? forge = null)
     {
+        forge ??= Array.Empty<JsonElement>();
         var series = runs.SelectMany(Read).ToList();
-        if (series.Count == 0) throw new InvalidDataException("no result rows in the run files");
+        if (series.Count == 0 && forge.Count == 0) throw new InvalidDataException("no result rows in the run files");
         var labels = series.Select(s => s.Label).Distinct().ToList();
         var color = labels.Select((l, i) => (l, i)).ToDictionary(x => x.l, x => $"var(--c{x.i % 8})");
-        var maxTurn = series.Max(s => s.MaxTurn);
+        var maxTurn = series.Count == 0 ? 0 : series.Max(s => s.MaxTurn);
         var settings = runs.Select(r => r.GetProperty("settings")).ToList();
 
         var h = new StringBuilder();
@@ -68,6 +70,8 @@ public static class HtmlReport
             th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
             th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
             th { color: var(--muted); font-weight: 600; }
+            .forge td:nth-child(2) { text-align: right; }
+            .warn { color: var(--c1); }
             </style>
             </head>
             <body>
@@ -77,6 +81,14 @@ public static class HtmlReport
             (1/2 on the play at 1v1, 1/3 at 1v1v1). Generated {{Esc(generated.ToString("yyyy-MM-dd HH:mm", Inv))}}.
             {{Esc(SettingsText(settings))}}</p>
             """);
+        if (series.Count > 0) Goldfish(h, series, labels, color, maxTurn);
+        if (forge.Count > 0) Forge(h, forge);
+        h.Append("</main></body></html>\n");
+        return h.ToString();
+    }
+
+    private static void Goldfish(StringBuilder h, List<Series> series, List<string> labels, Dictionary<string, string> color, int maxTurn)
+    {
 
         // Cumulative curves, one chart per table size.
         h.Append("<h2>Win rate by turn (cumulative)</h2><div class=\"grid2\">");
@@ -118,9 +130,54 @@ public static class HtmlReport
             h.Append("<div class=\"legend\">" + string.Join("", rows.Select((r, i) =>
                 $"<span><span class=\"sw\" style=\"background:{TableColor(i)}\"></span>{r.Table}</span>")) + "</div></div>");
         }
-        h.Append("</div></main></body></html>\n");
-        return h.ToString();
+        h.Append("</div>");
     }
+
+    /// <summary>One card per Forge playtest: the deck against each opponent, with Forge's AI playing both.</summary>
+    private static void Forge(StringBuilder h, IReadOnlyList<JsonElement> docs)
+    {
+        h.Append("""
+            <h2>Forge playtest</h2>
+            <p class="muted">Real 1v1 Commander games in Forge's simulator, with Forge's AI playing both decks. Forge's AI doesn't look
+            ahead the way the goldfish search does, so read these as a rough check against real opponents, with their intervals.
+            Rounds count each player's turn once, like the goldfish turns.</p>
+            """);
+        foreach (var doc in docs)
+        {
+            var deck = doc.GetProperty("deck");
+            var totals = doc.GetProperty("totals");
+            var settings = doc.GetProperty("settings");
+            h.Append($"<div class=\"card tablewrap forge\"><h3>{Esc(deck.GetProperty("name").GetString() ?? "?")}</h3>");
+            h.Append($"<p>Won {totals.GetProperty("wins").GetInt32()} of {totals.GetProperty("games").GetInt32()} " +
+                     $"({Rate(totals)}, 95% CI {Ci(totals)}); {totals.GetProperty("draws").GetInt32()} draws. " +
+                     $"<span class=\"muted\">Forge {Esc(doc.GetProperty("forge").GetProperty("version").GetString() ?? "?")}, " +
+                     $"{settings.GetProperty("games").GetInt32()} games per opponent, a draw after {settings.GetProperty("timeout_s").GetInt32()}s, " +
+                     $"took {doc.GetProperty("elapsed_s").GetDouble() / 60:0} min.</span></p>");
+            var unknown = deck.GetProperty("unknown_cards");
+            if (unknown.GetArrayLength() > 0)
+                h.Append($"<p class=\"warn\">Forge doesn't know these cards, so they were left out: {Esc(string.Join(", ", unknown.EnumerateArray().Select(x => x.GetString())))}</p>");
+            h.Append("""
+                <table><thead><tr><th>Opponent</th><th>Games</th><th>Won</th><th>Lost</th><th>Draws</th><th>Win rate</th><th>95% CI</th>
+                <th>Win round</th><th>Loss round</th><th>Note</th></tr></thead><tbody>
+                """);
+            foreach (var o in doc.GetProperty("opponents").EnumerateArray().OrderByDescending(o => NullableDouble(o, "win_rate") ?? -1))
+            {
+                var unknownCards = o.GetProperty("unknown_cards").GetArrayLength();
+                var note = o.GetProperty("error").GetString() ?? (unknownCards switch { 0 => "", 1 => "1 card unknown to Forge", _ => $"{unknownCards} cards unknown to Forge" });
+                h.Append($"<tr><td>{Esc(o.GetProperty("name").GetString() ?? "?")}</td><td>{o.GetProperty("games").GetInt32()}</td>" +
+                         $"<td>{o.GetProperty("wins").GetInt32()}</td><td>{o.GetProperty("losses").GetInt32()}</td><td>{o.GetProperty("draws").GetInt32()}</td>" +
+                         $"<td>{Rate(o)}</td><td>{Ci(o)}</td><td>{Num(NullableDouble(o, "mean_win_round"))}</td>" +
+                         $"<td>{Num(NullableDouble(o, "mean_loss_round"))}</td><td class=\"muted\">{Esc(note)}</td></tr>");
+            }
+            h.Append("</tbody></table></div>");
+        }
+    }
+
+    private static string Rate(JsonElement e) => NullableDouble(e, "win_rate") is { } r ? Pct(r) : "–";
+
+    private static string Ci(JsonElement e) =>
+        e.TryGetProperty("win_rate_ci95", out var ci) && ci.ValueKind == JsonValueKind.Array
+            ? $"{Pct(ci[0].GetDouble(), 0)}–{Pct(ci[1].GetDouble(), 0)}" : "–";
 
     private static IEnumerable<Series> Read(JsonElement run)
     {

@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MagicSim.Core\MagicSim.Core.csproj" />
+    <ProjectReference Include="..\..\src\MagicSim.ForgeWrapper\MagicSim.ForgeWrapper.csproj" />
   </ItemGroup>
 
   <ItemGroup>

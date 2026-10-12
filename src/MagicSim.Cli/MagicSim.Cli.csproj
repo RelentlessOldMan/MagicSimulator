@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MagicSim.Core\MagicSim.Core.csproj" />
+    <ProjectReference Include="..\MagicSim.ForgeWrapper\MagicSim.ForgeWrapper.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

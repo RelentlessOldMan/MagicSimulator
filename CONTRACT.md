@@ -2,7 +2,7 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.7.2** (2026-10-12).
+Status: **draft v0.8** (2026-10-12).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
@@ -13,6 +13,7 @@ Status: **draft v0.7.2** (2026-10-12).
 - v0.7: games are played at two table sizes, 1v1 and 1v1v1 (`--table`, default `both`). Result rows and per-game rows gain a `table` field (§3). Readers that ignore it will see two rows per (mulligan, seat) and must filter on `table`.
 - v0.7.1: adds `sim report`, an HTML page of charts from one or more `run` JSON files (§3). It's for people to read, not a stable format.
 - v0.7.2: the default `--max-turn` goes from 10 to 20, so slower decks get a full curve (§3). Pass `--max-turn 10` for the old behavior.
+- v0.8: adds an opt-in Forge playtest: `sim forge-setup` and `sim forge-gauntlet` play a deck against other decks in Forge's AI-vs-AI simulator and write `magicsim.forge/1`, and `sim report` shows those results when they exist (§3). Nothing else changes.
 - Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
@@ -299,6 +300,52 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
 - **`popular`:** the same report for the most-played cards only, so work can go where real decks feel it. It's empty if the card index has no `edhrec_rank` (re-run `sync-cards`).
 - **`deck`:** appears only when `--deck` is given.
 
+### Forge playtest (opt-in, `magicsim.forge/1`)
+
+The goldfish numbers above say how fast a deck wins alone. As a second check, a deck can play real opponents in **Forge's own AI-vs-AI simulator**. This step is opt-in and slow (about 8 s per game per core), so it's meant for decks that are already tuned, not for every swap.
+
+```
+sim forge-setup [--dir path] [--version 2.0.15]
+sim forge-gauntlet <deck.txt> [--against <deck.txt | dir | list.txt>]... [--games N] [--parallel P]
+                   [--timeout S] [--forge-app dir] [--json out.json]
+```
+
+**`forge-setup`:**
+- Downloads a Forge desktop release from Forge's GitHub releases and a portable Java 17 (Microsoft build) into `%LOCALAPPDATA%\MagicSim\forge-app`. Override the folder with `--dir` or `%MAGICSIM_FORGE_APP%`.
+- Points Forge's user data and cache inside that folder, so it doesn't touch a normal Forge install.
+- **License:** Forge is GPL-3.0. It's downloaded to each machine and run as a separate program, and its output is read. Nothing from Forge is copied into this repo or bundled with `sim` (§6).
+- About 750 MB on disk (a ~300 MB download for Forge, ~190 MB for Java). Needs `tar` on the PATH (built into Windows 10 and later). It starts Forge once at the end, so Forge sets up its data folders before any parallel runs.
+
+**`forge-gauntlet`:**
+- Plays the deck against each opponent in 1v1 Commander games: Forge's AI pilots both decks, 40 life, commander damage, and Forge's own rules.
+- **Opponents (`--against`, repeatable):** a deck file, a folder, or a list file (one deck path per line, `#` comments, paths relative to the list file). A deck is a `.txt` with a `*CMDR*` line; any other `.txt` given directly is read as a list. A folder means every deck in it except `*-moxfield.txt` copies, so strategy notes and summaries are skipped. Without `--against`, the opponents are the other decks in the deck's own folder.
+- **Defaults:** `--games 20` per opponent, `--parallel 1` (one Forge process, at below-normal priority), `--timeout 120` seconds per game, after which Forge calls the game a draw.
+- **Not deterministic:** Forge's AI isn't seeded, so two runs differ. Read the win rates with their confidence intervals.
+- **Cards Forge doesn't have:** if the Forge card scripts from `sync-forge` are present, names Forge doesn't know are listed in `unknown_cards` (Forge leaves them out of the deck). An opponent whose deck Forge can't load gets an `error` and no games.
+- Exit code 0 when the JSON was written, even if some matchups failed. Their errors are in the JSON.
+
+```json
+{"schema": "magicsim.forge/1",
+ "deck": {"name": "Gary", "path": "C:/Playground/MagicDecks/Gary.txt", "unknown_cards": []},
+ "forge": {"version": "2.0.15", "format": "Commander", "players": 2},
+ "settings": {"games": 20, "timeout_s": 120},
+ "totals": {"games": 60, "wins": 31, "losses": 27, "draws": 2, "win_rate": 0.5167, "win_rate_ci95": [0.39, 0.64]},
+ "opponents": [
+   {"name": "Landslide", "path": "C:/Playground/MagicDecks/Landslide.txt", "unknown_cards": [],
+    "games": 20, "wins": 6, "losses": 14, "draws": 0, "timeouts": 0,
+    "win_rate": 0.3, "win_rate_ci95": [0.15, 0.52],
+    "mean_win_round": 6.2, "mean_loss_round": 4.9, "mean_game_ms": 9120, "error": null}],
+ "elapsed_s": 412.5}
+```
+
+**Fields:**
+- **`win_rate`:** wins / games, with draws counted as games not won. `win_rate_ci95` is a Wilson 95% interval.
+- **Rounds:** Forge counts every player's turn, so its "turn 8" in a 2-player game is round 4. `mean_win_round` and `mean_loss_round` convert to rounds, the same unit as goldfish results (§3, v0.6.1). They're null when there were no wins or no losses.
+- **`timeouts`:** draws caused by `--timeout` (a subset of `draws`).
+- **`error`:** null, or why the matchup didn't run (e.g. Forge couldn't load the deck). Then `games` is 0.
+
+**In the HTML report:** `sim report` also accepts `magicsim.forge/1` files as arguments, and picks up `<deck name>.forge.json` sitting next to a run JSON on its own. A deck with Forge results gets a "Forge playtest" section: one row per opponent with win rate, interval and average rounds, and the total. A deck without them shows no Forge section.
+
 ## 4. Deck profiles (planned)
 
 A deck profile lives at `profiles/<Deck>.yaml` in this repo and holds settings for one deck. MagicDecks keeps only decklists and strategy write-ups.
@@ -336,7 +383,7 @@ The simulator is **generic**: any deck from anyone. Card coverage is measured ag
 **Where card behavior comes from:** [Forge](https://github.com/Card-Forge/forge)'s card scripts. Forge is an open-source Magic engine that describes nearly every card in a structured script, e.g. `A:SP$ Mana | Produced$ B | Amount$ 3` for Dark Ritual.
 - **Download:** `sim sync-forge` fetches the scripts with a sparse git clone into `%LOCALAPPDATA%\MagicSim\forge`. It needs `git` on the PATH.
 - **License:** Forge is GPL-3.0, so its scripts are never copied into this repo or bundled with `sim`. They're downloaded to each machine, the same way the Scryfall data is.
-- **Our own engine:** the simulator implements Forge's effect types (`Mana`, `Draw`, `ChangeZone`, `Dig`, `DealDamage`, …) in C#. It doesn't use Forge's Java code.
+- **Our own engine:** the simulator implements Forge's effect types (`Mana`, `Draw`, `ChangeZone`, `Dig`, `DealDamage`, …) in C#. It doesn't use Forge's Java code. The opt-in Forge playtest (§3) is separate: it runs a downloaded copy of Forge's own program and reads its output.
 
 **Each card is in one of three tiers:**
 1. **Scripted:** the card's Forge script uses only effect types the engine implements.
@@ -356,4 +403,4 @@ The simulator is **generic**: any deck from anyone. Card coverage is measured ag
 ## 7. Later (not planned yet)
 
 - **Live mode:** you enter your actual hand, draws and board, and the simulator recommends the best play, using the same search as `run`.
-- **Head-to-head:** two decks played against each other.
+- **Head-to-head in our engine:** two decks played against each other with our search. Until then, the Forge playtest (§3) covers deck-versus-deck with Forge's AI.

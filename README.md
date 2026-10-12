@@ -10,7 +10,7 @@ It started as a one-off question: *how often does my turn-1 combo deck actually 
 
 - **Goldfish:** play a deck alone, over and over, and report the win rate by turn, the average and median turn to win, and which win line got there.
 - **Compare:** swap cards in and out and run each version on the *same* shuffles, so differences come from the cards, not luck. A paired significance test says whether a difference is real.
-- **Head-to-head (later):** pit two decks against each other.
+- **Head-to-head (later):** pit two decks against each other. Until then, an opt-in **Forge playtest** plays a tuned deck against other decks in [Forge](https://github.com/Card-Forge/forge)'s AI-vs-AI simulator as a second check.
 - **Honest numbers:** the play logic never peeks at the library order. A card whose rules aren't coded yet is treated as blank and listed in the report, so results are a lower bound.
 
 It's a headless command-line tool built to be driven by scripts. A deck-tuning loop can shell out to it, try swaps, and keep the ones that help.
@@ -45,6 +45,16 @@ sim compare MyDeck.txt --swap "Mox Opal=>Gemstone Mine"
 sim cards --deck MyDeck.txt
 ```
 
+**Forge playtest (opt-in):** after tuning a deck alone, check it against real opponents. Forge's AI plays both sides, about 8 s per game per process.
+
+```powershell
+sim forge-setup                                                   # download Forge and Java 17 (~750 MB, once)
+sim forge-gauntlet MyDeck.txt --against gauntlet.txt --games 20 --json MyDeck.forge.json
+sim report MyDeck.run.json MyDeck.forge.json                      # the report gains a Forge section
+```
+
+Forge is GPL-3.0, so it's downloaded to your machine and run as a separate program. None of it is in this repo.
+
 [CONTRACT.md](CONTRACT.md) has the full spec: deck format, card index, commands, exit codes and JSON output. It's shared with two sibling tools:
 - **MagicDecks**: the decklists themselves.
 - **[Cardinator](https://github.com/RelentlessOldMan/Cardinator)**: deck building and Moxfield import.
@@ -61,6 +71,7 @@ sim cards --deck MyDeck.txt
 ```
 src/MagicSim.Core    deck reader/writer, card index, Scryfall sync (engine to come)
 src/MagicSim.Cli     the `sim` command-line tool
+src/MagicSim.ForgeWrapper  the opt-in Forge playtest: downloads Forge, runs its simulator, reads the results
 tests/               xUnit tests and fixture decks
 CONTRACT.md          shared format + CLI spec
 ```

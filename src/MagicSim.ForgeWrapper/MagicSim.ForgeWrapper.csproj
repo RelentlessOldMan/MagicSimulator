@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Runs Forge's own AI-vs-AI simulator as a separate program (CONTRACT.md §3, "Forge playtest").
+       Forge is GPL-3.0: it's downloaded by `sim forge-setup`, never copied into this repo. -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MagicSim.Core\MagicSim.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MagicSim.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -5,6 +5,7 @@ using MagicSim.Core.Forge;
 using MagicSim.Core.Engine;
 using MagicSim.Core.Players;
 using MagicSim.Core.Sim;
+using MagicSim.ForgeWrapper;
 
 namespace MagicSim.Cli;
 
@@ -33,6 +34,8 @@ public static class Program
                 "run" => Run(opts),
                 "replay" => Replay(opts),
                 "report" => HtmlReportCommand(opts),
+                "forge-setup" => await ForgeSetup(opts),
+                "forge-gauntlet" => ForgeGauntlet(opts),
                 _ => Fail(UsageError, $"unknown command: {args[0]}"),
             };
         }
@@ -210,15 +213,65 @@ public static class Program
 
     private static int HtmlReportCommand(Options o)
     {
-        if (o.Positional.Count == 0) throw new UsageException("report needs one or more run JSON files");
-        var runs = o.Positional.Select(path => JsonDocument.Parse(File.ReadAllText(path)).RootElement).ToList();
-        foreach (var (run, path) in runs.Zip(o.Positional))
-            if (!run.TryGetProperty("schema", out var schema) || schema.GetString() != "magicsim.run/1")
-                throw new UsageException($"{path} isn't a magicsim.run/1 document");
-        var html = Core.Sim.HtmlReport.Build(runs, DateTime.Now);
+        if (o.Positional.Count == 0) throw new UsageException("report needs one or more run or forge JSON files");
+        var runs = new List<JsonElement>();
+        var runPaths = new List<string>();
+        var forge = new List<JsonElement>();
+        var forgePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in o.Positional)
+        {
+            var doc = JsonDocument.Parse(File.ReadAllText(path)).RootElement;
+            var schema = doc.TryGetProperty("schema", out var s) ? s.GetString() : null;
+            if (schema == "magicsim.run/1") { runs.Add(doc); runPaths.Add(path); }
+            else if (schema == GauntletReport.Schema && forgePaths.Add(Path.GetFullPath(path))) forge.Add(doc);
+            else throw new UsageException($"{path} isn't a magicsim.run/1 or {GauntletReport.Schema} document");
+        }
+        // A deck's Forge playtest, when one was run: <deck name>.forge.json next to its run JSON.
+        foreach (var (run, path) in runs.Zip(runPaths))
+        {
+            if (!run.TryGetProperty("deck", out var deck) || deck.GetProperty("name").GetString() is not { } name) continue;
+            var candidate = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".", name + ".forge.json"));
+            if (File.Exists(candidate) && forgePaths.Add(candidate))
+            {
+                var doc = JsonDocument.Parse(File.ReadAllText(candidate)).RootElement;
+                if (doc.TryGetProperty("schema", out var s) && s.GetString() == GauntletReport.Schema) forge.Add(doc);
+            }
+        }
+        var html = Core.Sim.HtmlReport.Build(runs, DateTime.Now, forge);
         var outPath = o.Get("--out") ?? "report.html";
         File.WriteAllText(outPath, html, new System.Text.UTF8Encoding(false));
         Console.Error.WriteLine($"wrote {outPath}");
+        return Ok;
+    }
+
+    private static async Task<int> ForgeSetup(Options o)
+    {
+        o.RequirePositional(0);
+        await ForgeApp.SetupAsync(o.Get("--dir") ?? ForgeApp.DefaultDir, o.Get("--version") ?? ForgeApp.DefaultVersion, Console.Error);
+        return Ok;
+    }
+
+    private static int ForgeGauntlet(Options o)
+    {
+        var deckPath = o.RequirePositional(1)[0];
+        if (!File.Exists(deckPath)) throw new FileNotFoundException($"deck not found: {deckPath}");
+        int Int(string key, int fallback)
+        {
+            if (o.Get(key) is not { } v) return fallback;
+            return int.TryParse(v, out var n) && n >= 1 ? n : throw new UsageException($"{key} must be an integer >= 1");
+        }
+        var options = new GauntletOptions { Games = Int("--games", 20), Parallel = Int("--parallel", 1), TimeoutSeconds = Int("--timeout", 120) };
+        var app = ForgeApp.Load(o.Get("--forge-app"));
+        var opponents = Gauntlet.ResolveOpponents(deckPath, o.GetAll("--against"));
+        if (opponents.Count == 0) throw new UsageException("no opponent decks found (a deck is a .txt with a *CMDR* line)");
+        ForgeLibrary? scripts = null;
+        try { scripts = ForgeLibrary.Load(o.Get("--forge")); }
+        catch (FileNotFoundException) { Console.Error.WriteLine("Forge card scripts not found (`sim sync-forge`), so unknown cards aren't listed."); }
+        Console.Error.WriteLine($"Forge {app.Version}: {Path.GetFileNameWithoutExtension(deckPath)} vs {opponents.Count} decks, " +
+                                $"{options.Games} games each, {options.Parallel} at a time");
+        var result = Gauntlet.Run(app, deckPath, opponents, options, scripts, Console.Error);
+        foreach (var m in result.Opponents.Where(m => m.Error is not null)) Console.Error.WriteLine($"vs {m.Name}: {m.Error}");
+        Emit(o, JsonSerializer.Serialize(GauntletReport.Document(result), JsonOut));
         return Ok;
     }
 
@@ -273,8 +326,13 @@ public static class Program
                   [--table 1v1|1v1v1|both] [--max-turn T] [--rollouts R] [--threads N] [--json out.json] [--per-game games.jsonl]
               replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--table 1v1|1v1v1]
                   [--max-turn T]
-              report <run.json> [<run.json> ...] [--out report.html]
-                                                   HTML charts of one or more run results
+              report <run.json | deck.forge.json> [...] [--out report.html]
+                                                   HTML charts of run results, plus Forge playtests if any
+
+              forge-setup [--dir path] [--version V]   download Forge and Java 17 for the Forge playtest
+              forge-gauntlet <deck.txt> [--against deck|dir|list.txt]... [--games N] [--parallel P]
+                  [--timeout S] [--forge-app dir] [--json out.json]
+                                                   play the deck against other decks with Forge's AI (1v1 Commander)
 
             Planned (see CONTRACT.md): compare.
             Card index path: --cards, else %MAGICSIM_CARDS%, else %LOCALAPPDATA%\MagicSim\oracle-cards.jsonl.gz

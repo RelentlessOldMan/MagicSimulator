@@ -239,6 +239,7 @@ public class EngineTests
         Assert.Contains("<h3>1v1</h3>", html);
         Assert.Contains("<h3>1v1v1</h3>", html);
         Assert.Contains("</span>Bears</td>", html);
+        Assert.DoesNotContain("Forge playtest", html);
     }
 
     [Fact]
