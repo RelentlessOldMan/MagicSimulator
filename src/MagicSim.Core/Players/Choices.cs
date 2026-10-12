@@ -74,7 +74,9 @@ public abstract class ChoiceDecider : IDecider
         var remaining = candidates.ToList();
         while (picked.Count < max && remaining.Count > 0)
         {
-            var options = remaining.Cast<object?>().ToList();
+            // Interchangeable targets (a board of identical tokens) are offered once.
+            var attachedTo = g.State.BattlefieldCards.Where(c => c.AttachedTo >= 0).Select(c => c.AttachedTo).ToHashSet();
+            var options = remaining.DistinctBy(t => TargetClass(g, t, attachedTo)).Cast<object?>().ToList();
             if (picked.Count >= min) options.Add(null);
             var choice = options.Count == 1 ? options[0]
                 : options[Pick(g, new Decision { Kind = DecisionKind.Target, Options = options, Source = source, Ability = ability, Player = player })];
@@ -83,6 +85,25 @@ public abstract class ChoiceDecider : IDecider
             remaining.Remove(t);
         }
         return picked;
+    }
+
+    /// <summary>
+    /// Two plain cards (no counters, attachments, memory or one-off changes) with the same definition, controller
+    /// and visible state make the same target; anything else is its own class.
+    /// </summary>
+    private static object TargetClass(Game g, TargetRef t, HashSet<int> attachedTo)
+    {
+        if (t.CardId is not { } id) return t;
+        var c = g.State[id];
+        var plain = c.Counters is not { Count: > 0 } && c.TempKeywords is null && c.Animations is null && c.CopyDef is null
+            && c.Remembered is null && c.Imprinted is null && c.StoredVars is null && c.ChosenCards is null && c.NamedCard is null
+            && c.ChosenColor is null && c.ChosenType is null && c.ChosenPlayer is null && c.ChosenMode is null
+            && c.AttachedTo < 0 && !attachedTo.Contains(id) && !c.FaceDown && c.RegenShields == 0 && !c.IsCommander
+            && c.ExiledWith < 0 && c.LeftTriggers is null && c.StaticActivated is null && c.StaticTriggers is null;
+        if (!plain) return t;
+        var keywords = c.StaticKeywords is null ? "" : string.Join(",", c.StaticKeywords.Order(StringComparer.Ordinal));
+        return (c.Def, c.Zone, c.IsToken, c.Owner, c.Controller, c.Tapped, c.Damage, c.Power, c.Toughness,
+            g.IsSick(c), c.EnteredTurn, keywords, c.StaticTypes?.ToString(), c.StaticColors);
     }
 
     public int ChooseX(Game g, int player, Card source, int maxX)

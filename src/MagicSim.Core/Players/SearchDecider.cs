@@ -71,9 +71,17 @@ public sealed class SearchDecider : ChoiceDecider
         for (var i = 0; i < d.Options.Count; i++)
         {
             var total = 0.0;
-            foreach (var (policySeed, worldSeed) in seeds) total += Rollout(i, policySeed, worldSeed);
+            var alwaysWins = true;
+            foreach (var (policySeed, worldSeed) in seeds)
+            {
+                var r = Rollout(i, policySeed, worldSeed);
+                total += r;
+                alwaysWins &= r >= WinScore;
+            }
             var score = scores[i] = total / seeds.Length + Bias(d.Options[i]);
             if (score > bestScore) { bestScore = score; best = i; }
+            // Nothing beats winning in every future tried: stop looking.
+            if (alwaysWins) { best = i; scores = scores[..(i + 1)]; break; }
         }
         if (g.Log is not null)
             g.Note("  search " + d.Kind + ": " + string.Join(" | ", Enumerable.Range(0, scores.Length)
@@ -116,11 +124,13 @@ public sealed class SearchDecider : ChoiceDecider
         return Math.Max(best, Evaluate(sim));
     }
 
+    private const double WinScore = 1e6;
+
     /// <summary>End-of-turn score: winning dwarfs everything; otherwise resources and damage.</summary>
     public static double Evaluate(Game g)
     {
         var s = g.State;
-        if (s.GameOver) return s.Winner == Game.Me ? 1e6 : -1e6;
+        if (s.GameOver) return s.Winner == Game.Me ? WinScore : -WinScore;
         var me = s.Players[Game.Me];
         double oppDamage = 0;
         foreach (var p in s.Players)

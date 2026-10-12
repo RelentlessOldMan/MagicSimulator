@@ -483,7 +483,7 @@ public sealed partial class Game
         foreach (var id in p.Graveyard)
         {
             var c = State[id];
-            if (c.IsBlank || !seenNames.Add("graveyard-ability:" + c.Name)) continue;
+            if (c.IsBlank || !HasAbility(c, ab => ab["ActivationZone"] == "Graveyard") || !seenNames.Add("graveyard-ability:" + c.Name)) continue;
             for (var i = 0; i < c.Activated.Count; i++)
             {
                 var ab = c.Activated[i];
@@ -509,18 +509,23 @@ public sealed partial class Game
         var seenPermanents = new HashSet<(string, bool, bool)>();
         foreach (var c in State.BattlefieldCards)
         {
-            if (c.Controller != player || c.IsBlank) continue;
+            if (c.Controller != player || c.IsBlank || !HasAbility(c, Offerable)) continue;
             if (c.Counters is null && c.Animations is null && c.StaticActivated is null && !seenPermanents.Add((c.FaceDown ? "face-down " + c.Def.Name : c.Name, c.Tapped, IsSick(c)))) continue;
             for (var i = 0; i < c.Activated.Count; i++)
-            {
-                var ab = c.Activated[i];
-                if (ab["ActivationZone"] is not null) continue;
-                if (IsAutoManaAbility(ab) || ab["RestrictValid"] is not null) continue;   // used automatically when paying
-                if (CanActivate(c, ab, sorcerySpeed)) result.Add(new GameAction.Activate(c.Id, i));
-            }
+                if (Offerable(c.Activated[i]) && CanActivate(c, c.Activated[i], sorcerySpeed)) result.Add(new GameAction.Activate(c.Id, i));
         }
         return result;
     }
+
+    private static bool HasAbility(Card c, Func<AbilityDef, bool> pred)
+    {
+        foreach (var ab in c.Activated)
+            if (pred(ab)) return true;
+        return false;
+    }
+
+    /// <summary>A battlefield ability offered as an action (mana abilities are used automatically when paying).</summary>
+    private static bool Offerable(AbilityDef ab) => ab["ActivationZone"] is null && !IsAutoManaAbility(ab) && ab["RestrictValid"] is null;
 
     /// <summary>Adds playing <paramref name="c"/> as a land, or casting it with each of its spell abilities, if allowed now.</summary>
     private void AddPlayOrCast(List<GameAction> result, Card c, Player p, bool sorcerySpeed)

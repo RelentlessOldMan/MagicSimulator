@@ -226,7 +226,7 @@ public class EngineTests
             Assert.Equal(g.HandKept, games.Single(h => h.Table == "1v1v1" && h.Game == g.Game && h.Seat == g.Seat).HandKept);
 
         var doc = System.Text.Json.JsonSerializer.SerializeToElement(Report.RunDocument(deck, "bears.txt", o, games), Report.Json);
-        var rows = doc.GetProperty("results").EnumerateArray().Select(r => (r.GetProperty("table").GetString(), r.GetProperty("seat").GetString())).ToList();
+        var rows = doc.GetProperty("results").EnumerateArray().Select(r => (r.GetProperty("table").GetString()!, r.GetProperty("seat").GetString()!)).ToList();
         Assert.Equal(new[] { ("1v1", "play"), ("1v1", "draw"), ("1v1", "weighted"), ("1v1v1", "play"), ("1v1v1", "draw"), ("1v1v1", "weighted") }, rows);
         Assert.Equal(0.5, Report.PlayWeight("1v1"));
         Assert.Equal(1.0 / 3, Report.PlayWeight("1v1v1"));

@@ -54,6 +54,8 @@ public sealed class AbilityDef
     public bool IsCycling { get; set; }
     /// <summary>Activated mana ability: resolves immediately, doesn't use the stack.</summary>
     public bool IsManaAbility { get; init; }
+    /// <summary>Cached <see cref="Game.IsAutoManaAbility"/> (abilities don't change once compiled).</summary>
+    internal bool? AutoMana;
     /// <summary>Position in its chain (0 = the head) — index into StackItem.ChainTargets.</summary>
     public int ChainIndex { get; set; }
     /// <summary>"UnlessCost$": the effect doesn't happen if the payer pays this.</summary>

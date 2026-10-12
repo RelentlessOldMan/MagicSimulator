@@ -618,7 +618,9 @@ public sealed partial class Game
     /// itself (Lotus Petal, Simian Spirit Guide). Payment prefers the cheapest. Anything else
     /// (rituals, Lion's Eye Diamond, sacrificing other permanents) is an explicit choice.
     /// </summary>
-    public static bool IsAutoManaAbility(AbilityDef ab)
+    public static bool IsAutoManaAbility(AbilityDef ab) => ab.AutoMana ??= ComputeAutoMana(ab);
+
+    private static bool ComputeAutoMana(AbilityDef ab)
     {
         if (!ab.IsManaAbility || !ab.Cost.Mana.IsZero || ab.Cost.Untap) return false;
         if (!ab.P.Values.Keys.All(k => k is "AB" or "Cost" or "Produced" or "Amount" or "SpellDescription" or "AILogic"

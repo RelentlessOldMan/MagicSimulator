@@ -445,6 +445,7 @@ public class MechanicsTests
         "T:Mode$ ChangesZone | ValidCard$ Land.YouCtrl | Origin$ Any | Destination$ Battlefield | Execute$ TrigGain | NoResolvingCheck$ True | TriggerZones$ Battlefield\n" +
         "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 3 | ConditionPresent$ Land.YouCtrl+!TriggeredCard | ConditionCompare$ GE2\n",
         "Name:Names\nManaCost:0\nTypes:Sorcery\nA:SP$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:Count$Valid Land.YouCtrl$DifferentCardNames\n",
+        "Name:Nick\nManaCost:0\nTypes:Sorcery\nA:SP$ PutCounter | ValidTgts$ Creature | CounterType$ P1P1 | CounterNum$ 1\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -2672,5 +2673,18 @@ public class MechanicsTests
         g.CastSpell(g.State[InHand(g, "Names")], 0);
         ResolveAll(g);
         Assert.Equal(42, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void IdenticalTargetsAreOfferedOnce()
+    {
+        var offered = 0;
+        var d = new TestDecider { Choose = (game, dec) => { if (dec.Kind == DecisionKind.Target) offered = dec.Options.Count; return null; } };
+        var g = Setup(new[] { "Nick", "Nick" }, battlefield: new[] { "Bear", "Bear", "Bear", "Bear" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Nick")], 0);
+        Assert.Equal(0, offered);   // four identical bears: nothing to choose
+        ResolveAll(g);
+        g.CastSpell(g.State[InHand(g, "Nick")], 0);
+        Assert.Equal(2, offered);   // the bear with a counter is now different
     }
 }
