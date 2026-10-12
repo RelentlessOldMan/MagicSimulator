@@ -223,7 +223,7 @@ public static partial class CardCompiler
         foreach (var f in source.Faces)
             def.Faces.Add(CompileFace(f, def.Missing, tokens));
         // Two-faced transforming cards play their front face; other multi-face layouts need casting support first.
-        if (source.AlternateMode is { } mode && mode is not ("DoubleFaced" or "Modal"))
+        if (source.AlternateMode is { } mode && mode is not ("DoubleFaced" or "Modal" or "Adventure"))
             def.Missing.Add("Layout:" + mode);
         return def;
     }
@@ -412,6 +412,13 @@ public static partial class CardCompiler
                 face.SVars["__MyriadCopies"] = "DB$ CopyPermanent | Defined$ Self | NumCopies$ __MyriadX | TokenTapped$ True | TokenAttacking$ True | AtEOT$ Exile";
                 face.SVars["__MyriadX"] = "PlayerCountOpponents$Amount/Minus.1";
                 face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ Attacks | ValidCard$ Card.Self | TriggerZones$ Battlefield | Execute$ __MyriadCopies"), ctx));
+                return true;
+            case "Mobilize":
+                // "Whenever this attacks, create N tapped and attacking 1/1 red Warriors; sacrifice them at the next end step."
+                face.SVars["__Mobilize"] = $"DB$ Token | TokenScript$ r_1_1_warrior | TokenAmount$ {Part(1)} | TokenOwner$ You | TokenTapped$ True | TokenAttacking$ True | AtEOT$ Sacrifice";
+                if (Part(1) == "X") face.SVars["__Mobilize"] = face.SVars["__Mobilize"].Replace("TokenAmount$ X", "TokenAmount$ __MobilizeX");
+                face.SVars["__MobilizeX"] = "Count$CardPower";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ Attacks | ValidCard$ Card.Self | TriggerZones$ Battlefield | Execute$ __Mobilize"), ctx));
                 return true;
             case "Annihilator":
                 return true;   // the defending goldfish opponent has no permanents to sacrifice
@@ -680,7 +687,7 @@ public static partial class CardCompiler
             if (!m.Success) { manaTokens.Add(token); continue; }
             var args = m.Groups[2].Value.Split('/');
             var amount = args[0];
-            var valid = args.Length > 1 ? args[1] : "";
+            var valid = args.Length > 1 ? args[1].Replace(';', ',') : "";   // "Artifact;Creature": either
             CostPartKind? kind = m.Groups[1].Value switch
             {
                 "Sac" => CostPartKind.Sacrifice,

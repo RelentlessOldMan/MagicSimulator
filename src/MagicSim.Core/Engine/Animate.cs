@@ -59,14 +59,17 @@ public static class TypeChange
                 ctx.Need($"{what}:{w}");
     }
 
-    public static TypeLine Apply(TypeLine t, string? addWords, bool removeCardTypes, bool removeCreatureTypes, bool removeSupertypes, bool allCreatureTypes)
+    public static TypeLine Apply(TypeLine t, string? addWords, bool removeCardTypes, bool removeCreatureTypes, bool removeSupertypes, bool allCreatureTypes,
+        string? removeWords = null)
     {
         var added = addWords is null ? null : TypeLine.Parse(addWords);
-        var types = (removeCardTypes ? 0 : t.Types) | (added?.Types ?? 0);
-        var supers = (removeSupertypes ? 0 : t.Supers) | (added?.Supers ?? 0);
+        var removed = removeWords is null ? null : TypeLine.Parse(removeWords.Replace('&', ' ').Replace(',', ' '));
+        var types = ((removeCardTypes ? 0 : t.Types) | (added?.Types ?? 0)) & ~(removed?.Types ?? 0);
+        var supers = ((removeSupertypes ? 0 : t.Supers) | (added?.Supers ?? 0)) & ~(removed?.Supers ?? 0);
         // Losing the other card types loses their subtypes too (an Equipment that becomes only a creature).
         var subs = t.Subtypes.Where(s => TypeLine.IsCreatureType(s) ? !removeCreatureTypes : !removeCardTypes);
-        var allSubs = subs.Concat(added?.Subtypes ?? Array.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var allSubs = subs.Concat(added?.Subtypes ?? Array.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(sub => removed is null || !removed.Subtypes.Contains(sub, StringComparer.OrdinalIgnoreCase)).ToList();
         return new TypeLine
         {
             Types = types, Supers = supers, Subtypes = allSubs,

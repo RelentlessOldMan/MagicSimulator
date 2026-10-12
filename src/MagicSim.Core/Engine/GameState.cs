@@ -55,6 +55,8 @@ public sealed class Card
     public int? TokenToughness { get; init; }
     /// <summary>Triggers with a per-turn limit (ActivationLimit$) and the turn and times each last triggered.</summary>
     public Dictionary<TriggerDef, (int Turn, int Count)>? TriggerUses { get; set; }
+    /// <summary>In exile "on an adventure": its owner may cast the creature half from there (rule 715.4).</summary>
+    public bool OnAdventure { get; set; }
     /// <summary>Suspended in exile (rule 702.62).</summary>
     public bool Suspended { get; set; }
     /// <summary>A Class's current level (rule 716).</summary>
@@ -148,7 +150,7 @@ public sealed class Card
         Remembered = Remembered is null ? null : new List<int>(Remembered),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended,
+        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
         TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
@@ -286,6 +288,8 @@ public sealed class GameState
     public TurnInfo ThisTurn { get; set; } = new();
     public List<int> Attackers { get; set; } = new();
     public int NextStackId { get; set; }
+    /// <summary>Cards exiled "until [host] leaves the battlefield": (exiled card, host).</summary>
+    public List<(int CardId, int HostId)> UntilHostLeaves { get; set; } = new();
     /// <summary>Delayed triggers waiting for their event.</summary>
     public List<DelayedTrigger> Delayed { get; set; } = new();
     /// <summary>Cards seen in the game's main player's hand, cards cast, notes — for per-game output.</summary>
@@ -315,6 +319,7 @@ public sealed class GameState
         Turn = Turn, Step = Step, ActivePlayer = ActivePlayer, Rng = Rng,
         GameOver = GameOver, Winner = Winner, WinReason = WinReason, ThisTurn = ThisTurn.Clone(), Attackers = new List<int>(Attackers),
         NextStackId = NextStackId, Record = Record.Clone(), Delayed = new List<DelayedTrigger>(Delayed),
+        UntilHostLeaves = new(UntilHostLeaves),
     };
 }
 

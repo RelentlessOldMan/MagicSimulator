@@ -60,7 +60,8 @@ public sealed partial class Game
             State.Attackers.Remove(c.Id);
         }
         // Off the battlefield and the stack a modal double-faced card is its front face again.
-        if (to is not (Zone.Battlefield or Zone.Stack) && c.Def.Layout == "Modal") c.Face = 0;
+        if (to is not (Zone.Battlefield or Zone.Stack) && c.Def.Layout is "Modal" or "Adventure") c.Face = 0;
+        c.OnAdventure = false;
         if (c.IsToken && to != Zone.Battlefield)
         {
             c.Zone = Zone.None;   // tokens cease to exist outside the battlefield (rule 111.8)
@@ -277,6 +278,13 @@ public sealed partial class Game
     private void CheckEffectLinks()
     {
         foreach (var c in State.BattlefieldCards) EndAnimations(c, "links");
+        // Cards exiled until a permanent leaves come back when it does.
+        foreach (var (card, host) in State.UntilHostLeaves.ToList())
+        {
+            if (State[host].Zone == Zone.Battlefield) continue;
+            State.UntilHostLeaves.Remove((card, host));
+            if (State[card].Zone == Zone.Exile) MoveTo(State[card], Zone.Battlefield);
+        }
         foreach (var p in State.Players)
             foreach (var id in p.Command.ToList())
             {
@@ -315,12 +323,24 @@ public sealed partial class Game
         Fire(new TriggerEvent(TriggerMode.Taps, CardId: c.Id, Player: c.Controller));
     }
 
+    /// <summary>Draw replacements now replacing a draw (each applies once to its own event, rule 614.5).</summary>
+    private readonly HashSet<ReplacementDef> _drawReplacing = new();
+
     public void Draw(int player, int n, bool record = true)
     {
         var p = State.Players[player];
         for (var i = 0; i < n; i++)
         {
             if (p.IsGoldfish) { p.AbstractLibrary = Math.Max(0, p.AbstractLibrary - 1); continue; }
+            var firstInDrawStep = State.Step == Step.Draw && State.ThisTurn.CardsDrawn.GetValueOrDefault(player) == 0;
+            if (record && Replacements.DrawReplacement(this, player, firstInDrawStep, _drawReplacing) is var (host, r) && r.With is { } instead)
+            {
+                Note($"{host.Name} replaces a draw");
+                _drawReplacing.Add(r);
+                try { RunChain(new StackItem { SourceId = host.Id, Ability = instead, Controller = host.Controller, Description = host.Name + " (instead of drawing)" }); }
+                finally { _drawReplacing.Remove(r); }
+                continue;
+            }
             if (p.Library.Count == 0) { p.DrewFromEmpty = true; continue; }
             var c = State[p.Library[0]];
             MoveTo(c, Zone.Hand);

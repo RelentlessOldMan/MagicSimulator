@@ -61,7 +61,7 @@ public static class Effects
         new DelayedTriggerEffect(), new RepeatEachEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
         new AnimateAllEffect(), new FightEffect(), new BranchEffect(), new MultiplyCounterEffect(), new SetStateEffect(),
         new UntapAllEffect(), new RemoveCounterEffect(), new ClassLevelUpEffect(), new ProtectionEffect(), new RollDiceEffect(),
-        new ImmediateTriggerEffect(), new SuspendEffect(),
+        new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -78,12 +78,13 @@ public static class Effects
 sealed class ManaReflectedEffect : Effect
 {
     public override string Api => "ManaReflected";
-    public override IReadOnlySet<string> Params { get; } = P("ColorOrType", "Valid", "ReflectProperty");
+    public override IReadOnlySet<string> Params { get; } = P("ColorOrType", "Valid", "ReflectProperty", "Defined");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         if (ab["ReflectProperty"] is not ("Is" or "Produce" or "Produced")) ctx.Need("ManaReflected.ReflectProperty:" + ab["ReflectProperty"]);
         if (ab["Valid"] is { } v && v != "Defined.Imprinted") Filter.Parse(v, ctx);
+        Defined.ValidatePlayers(ab["Defined"], ctx);
     }
 
     public override void Resolve(EffectContext x)
@@ -93,7 +94,7 @@ sealed class ManaReflectedEffect : Effect
         var color = System.Numerics.BitOperations.PopCount((uint)mask) == 1
             ? ManaColors.All.First(c => c.Mask() == mask)
             : x.Game.Decider.ChooseColor(x.Game, x.Controller, x.Host, mask);
-        x.S.Players[x.Controller].Pool.Add(color);
+        x.S.Players[x.Ability["Defined"] is { } d ? Defined.Players(d, x).FirstOrDefault(x.Controller) : x.Controller].Pool.Add(color);
     }
 }
 
@@ -194,7 +195,7 @@ sealed class ChangeZoneEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "Origin", "Destination", "ChangeType", "ChangeNum", "Hidden", "Mandatory", "Tapped", "LibraryPosition", "Defined",
         "ChangeTypeDesc", "Shuffle", "Reveal", "SelectPrompt", "Reorder", "Optional", "NoReveal", "ShuffleNonMandatory",
-        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "WithCountersType", "WithCountersAmount", "RememberTargets");
+        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "WithCountersType", "WithCountersAmount", "RememberTargets", "Duration", "TargetsWithDefinedController");
 
     private static readonly HashSet<string> Zones = new() { "Library", "Hand", "Battlefield", "Graveyard", "Exile" };
 
@@ -204,6 +205,7 @@ sealed class ChangeZoneEffect : Effect
             if (ab[key] is { } z && !z.Split(',').All(s => Zones.Contains(s.Trim()) || key == "Origin" && s.Trim() is "Stack" or "All" && (ab["Defined"] is not null || ab.TargetFilter is not null)))
                 ctx.Need($"ChangeZone.{key}:{z}");
         ValidateAmount(ab, "WithCountersAmount", ctx);
+        if (ab["Duration"] is { } dur && dur != "UntilHostLeavesPlay") ctx.Need("ChangeZone.Duration:" + dur);
         if (ab["Destination"] is null) ctx.Need("ChangeZone.Destination:none");
         if (ab["ChangeType"] is { } ct) Filter.Parse(ct, ctx);
         if (ab["ChangeNum"] is { } cn && cn != "All") Engine.Amount.Parse(cn, ctx);
@@ -256,8 +258,12 @@ sealed class ChangeZoneEffect : Effect
                 var c = x.S[id];
                 if (!origins.Contains(c.Zone)) continue;
                 if (ab["Optional"] == "True" && !x.Game.Decider.ChooseYesNo(x.Game, x.Controller, x.Host, $"move {c.Name}?")) continue;
+                var from = c.Zone;
                 Move(x, c, dest, position, tapped);
                 Note(x, id);
+                // "… until this leaves the battlefield" (Banisher Priest, Oblivion Ring-style).
+                if (ab["Duration"] == "UntilHostLeavesPlay" && from == Zone.Battlefield && c.Zone == dest)
+                    x.S.UntilHostLeaves.Add((c.Id, x.Host.Id));
             }
             return;
         }
@@ -492,7 +498,7 @@ sealed class NameCardEffect : Effect
 sealed class DealDamageEffect : Effect
 {
     public override string Api => "DealDamage";
-    public override IReadOnlySet<string> Params { get; } = P("NumDmg", "Defined");
+    public override IReadOnlySet<string> Params { get; } = P("NumDmg", "Defined", "DividedAsYouChoose");
     public override void Validate(AbilityDef ab, CompileContext ctx) { ValidateAmount(ab, "NumDmg", ctx); Defined.ValidatePlayers(ab["Defined"], ctx); }
 
     public override void Resolve(EffectContext x)
@@ -501,10 +507,16 @@ sealed class DealDamageEffect : Effect
         var targets = x.Ability["Defined"] is { } d
             ? Defined.Players(d, x).Select(TargetRef.OfPlayer).ToList()
             : x.Targets;
-        foreach (var t in targets)
+        // "N damage divided as you choose": one to each target, the rest to the first (players first).
+        var divided = x.Ability["DividedAsYouChoose"] is not null && targets.Count > 0;
+        var order = divided ? targets.OrderBy(t => t.Player is null).ToList() : targets;
+        for (var i = 0; i < order.Count; i++)
         {
-            if (t.Player is { } p) x.Game.DamagePlayer(p, n, x.Host);
-            else if (t.CardId is { } id && x.S[id].Zone == Zone.Battlefield) x.Game.DamageCard(x.S[id], n, x.Host);
+            var t = order[i];
+            var dmg = !divided ? n : i == 0 ? n - (order.Count - 1) : 1;
+            if (dmg <= 0) continue;
+            if (t.Player is { } p) x.Game.DamagePlayer(p, dmg, x.Host);
+            else if (t.CardId is { } id && x.S[id].Zone == Zone.Battlefield) x.Game.DamageCard(x.S[id], dmg, x.Host);
         }
     }
 }
@@ -669,7 +681,7 @@ sealed class DestroyEffect : CardsEffect
 sealed class SacrificeEffect : Effect
 {
     public override string Api => "Sacrifice";
-    public override IReadOnlySet<string> Params { get; } = P("SacValid", "Amount", "Defined");
+    public override IReadOnlySet<string> Params { get; } = P("SacValid", "Amount", "Defined", "RememberSacrificed", "Optional", "SacMessage");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -681,8 +693,12 @@ sealed class SacrificeEffect : Effect
     public override void Resolve(EffectContext x)
     {
         var valid = x.Ability["SacValid"] ?? "Self";
+        var remember = x.Ability["RememberSacrificed"] == "True";
         if (valid == "Self")
         {
+            if (x.Host.Zone != Zone.Battlefield) return;
+            if (x.Ability["Optional"] == "True" && !x.Game.Decider.ChooseYesNo(x.Game, x.Controller, x.Host, $"sacrifice {x.Host.Name}?")) return;
+            if (remember) (x.Host.Remembered ??= new()).Add(x.Host.Id);
             x.Game.Sacrifice(x.Host);
             return;
         }
@@ -692,8 +708,12 @@ sealed class SacrificeEffect : Effect
             if (x.S.Players[p].IsGoldfish) continue;
             var candidates = x.S.BattlefieldCards.Where(c => c.Controller == p && filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
             var n = Math.Min(Amount(x, x.Ability["Amount"], 1), candidates.Count);
-            foreach (var id in x.Game.Decider.ChooseCards(x.Game, p, Choice.Sacrifice, x.Host, candidates, n, n))
+            var min = x.Ability["Optional"] == "True" ? 0 : n;
+            foreach (var id in x.Game.Decider.ChooseCards(x.Game, p, Choice.Sacrifice, x.Host, candidates, min, n))
+            {
+                if (remember) (x.Host.Remembered ??= new()).Add(id);
                 x.Game.Sacrifice(x.S[id]);
+            }
         }
     }
 }

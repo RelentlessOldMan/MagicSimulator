@@ -419,6 +419,13 @@ public sealed partial class Game
                 }
         }
 
+        // The creature half of a card on an adventure.
+        foreach (var id in p.Exile)
+        {
+            var c = State[id];
+            if (c.OnAdventure && !c.IsBlank && seenNames.Add("adventure:" + c.Name)) AddPlayOrCast(result, c, p, sorcerySpeed);
+        }
+
         // Cards an effect lets you play from exile, the graveyard or the top of your library.
         foreach (var id in Statics.MayPlay(this, player).Keys)
         {
@@ -456,8 +463,9 @@ public sealed partial class Game
     /// <summary>Adds playing <paramref name="c"/> as a land, or casting it with each of its spell abilities, if allowed now.</summary>
     private void AddPlayOrCast(List<GameAction> result, Card c, Player p, bool sorcerySpeed)
     {
-        // A modal double-faced card can be played as either face (rule 712.12).
-        var faces = c.Def.Layout == "Modal" ? c.Def.Faces.Count : 1;
+        // A modal double-faced card can be played as either face (rule 712.12); an adventurer card can be
+        // cast as its Adventure from hand (rule 715.3).
+        var faces = c.Def.Layout == "Modal" || c.Def.Layout == "Adventure" && c.Zone == Zone.Hand ? c.Def.Faces.Count : 1;
         for (var f = 0; f < faces; f++)
         {
             c.Face = f;
@@ -792,7 +800,13 @@ public sealed partial class Game
             return;
         }
         RunChain(item);
-        if (item.IsSpell && source.Zone == Zone.Stack) MoveTo(source, afterwards);
+        if (item.IsSpell && source.Zone == Zone.Stack)
+        {
+            // An Adventure cast from hand goes on an adventure: exiled, castable later as the creature.
+            var adventure = source.Def.Layout == "Adventure" && source.Face == 1 && !item.ExileAfter;
+            MoveTo(source, adventure ? Zone.Exile : afterwards);
+            if (adventure && source.Zone == Zone.Exile) source.OnAdventure = true;
+        }
     }
 
     private bool TargetsAllGone(StackItem item)

@@ -203,6 +203,18 @@ public class MechanicsTests
         "Name:Reflex\nManaCost:0\nTypes:Sorcery\nA:SP$ GainLife | Defined$ You | LifeAmount$ 1 | SubAbility$ DBRef\n" +
         "SVar:DBRef:DB$ ImmediateTrigger | Cost$ PayLife<3> | Execute$ TrigDraw\nSVar:TrigDraw:DB$ Draw | Defined$ You | NumCards$ 2\n",
         "Name:Chains\nManaCost:0\nTypes:Enchantment Aura\nK:Enchant:Creature\nS:Mode$ CantAttack | ValidCard$ Creature.EnchantedBy\n",
+        "Name:Knight\nManaCost:1\nTypes:Creature Knight\nPT:2/2\nAlternateMode:Adventure\n" +
+        "ALTERNATE\nName:Quest\nManaCost:0\nTypes:Instant Adventure\nA:SP$ GainLife | Defined$ You | LifeAmount$ 2\n",
+        "Name:Ring\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ ChangesZone | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ TrigExile\n" +
+        "SVar:TrigExile:DB$ ChangeZone | ValidTgts$ Creature | Origin$ Battlefield | Destination$ Exile | Duration$ UntilHostLeavesPlay\n",
+        "Name:Maniac\nManaCost:0\nTypes:Creature Human\nPT:2/2\n" +
+        "R:Event$ Draw | ActiveZones$ Battlefield | ValidPlayer$ You | IsPresent$ Card.YouOwn | PresentZone$ Library | PresentCompare$ EQ0 | ReplaceWith$ Win\n" +
+        "SVar:Win:DB$ WinsGame | Defined$ You\n",
+        "Name:Horde\nManaCost:0\nTypes:Sorcery\nA:SP$ Amass | Type$ Orc | Num$ 2\n",
+        "Name:Raider\nManaCost:0\nTypes:Creature Human\nPT:2/2\nK:Haste\nK:Mobilize:2\n",
+        "Name:Anger\nManaCost:3\nTypes:Creature Incarnation\nPT:2/2\nS:Mode$ Continuous | Affected$ Creature.YouCtrl | AddKeyword$ Haste | EffectZone$ Graveyard\n",
+        "Name:Humble\nManaCost:0\nTypes:Enchantment\nS:Mode$ Continuous | Affected$ Artifact.Creature | RemoveType$ Creature\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -213,6 +225,8 @@ public class MechanicsTests
         ["w_1_1_soldier"] = "Name:Soldier Token\nManaCost:no cost\nColors:white\nTypes:Creature Soldier\nPT:1/1\n",
         ["c_a_treasure_sac"] = "Name:Treasure Token\nManaCost:no cost\nTypes:Artifact Treasure\n" +
             "A:AB$ Mana | Cost$ T Sac<1/CARDNAME/this token> | Produced$ Any | Amount$ 1\n",
+        ["b_0_0_orc_army"] = "Name:Orc Army Token\nManaCost:no cost\nColors:black\nTypes:Creature Orc Army\nPT:0/0\n",
+        ["r_1_1_warrior"] = "Name:Warrior Token\nManaCost:no cost\nColors:red\nTypes:Creature Warrior\nPT:1/1\n",
     };
 
     private static readonly CardPool Pool = new(ForgeLibrary.FromScripts(Scripts, Tokens), null);
@@ -1252,6 +1266,88 @@ public class MechanicsTests
     {
         var names = Scripts.Select(script => script.Split('\n')[0]).ToList();
         Assert.Equal(names.Count, names.Distinct().Count());
+    }
+
+    [Fact]
+    public void AdventureThenCreatureFromExile()
+    {
+        var g = Setup(new[] { "Knight" }, battlefield: new[] { "Bog" });
+        var card = g.State[InHand(g, "Knight")];
+        var quest = g.LegalActions(Game.Me).OfType<GameAction.Cast>().Single(a => a.CardId == card.Id && a.Face == 1);
+        g.Perform(quest);
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+        Assert.Equal(Zone.Exile, card.Zone);
+        Assert.True(card.OnAdventure);
+        var creature = g.LegalActions(Game.Me).OfType<GameAction.Cast>().Single(a => a.CardId == card.Id);
+        Assert.Equal(0, creature.Face);
+        g.Perform(creature);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, card.Zone);
+        Assert.Equal("Knight", card.Name);
+    }
+
+    [Fact]
+    public void ExiledUntilTheHostLeaves()
+    {
+        var g = Setup(new[] { "Ring" }, battlefield: new[] { "Bear" });
+        g.CastSpell(g.State[InHand(g, "Ring")], -1);
+        ResolveAll(g);
+        var bear = g.State.Cards.First(c => c.Name == "Bear");
+        Assert.Equal(Zone.Exile, bear.Zone);
+        g.MoveTo(OnBattlefield(g, "Ring"), Zone.Graveyard);
+        g.CheckStateBasedActions();
+        Assert.Equal(Zone.Battlefield, bear.Zone);
+    }
+
+    [Fact]
+    public void DrawingFromAnEmptyLibraryWinsWithAReplacement()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Maniac" });
+        g.Draw(Game.Me, 1);
+        Assert.True(g.State.GameOver);
+        Assert.Equal(Game.Me, g.State.Winner);
+    }
+
+    [Fact]
+    public void AmassGrowsOneArmy()
+    {
+        var g = Setup(new[] { "Horde", "Horde" });
+        g.CastSpell(g.State[InHand(g, "Horde")], 0);
+        ResolveAll(g);
+        g.CastSpell(g.State[InHand(g, "Horde")], 0);
+        ResolveAll(g);
+        var army = g.State.BattlefieldCards.Single(c => c.Types.HasSubtype("Army"));
+        Assert.Equal(4, army.Power);
+    }
+
+    [Fact]
+    public void MobilizeTokensAttackToo()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Raider" }, library: new[] { "Filler", "Filler" });
+        g.ResumeTurn();
+        Assert.Equal(36, g.State.Players.Where(p => p.Index != Game.Me).Min(p => p.Life));
+        Assert.DoesNotContain(g.State.BattlefieldCards, c => c.IsToken);
+    }
+
+    [Fact]
+    public void StaticWorksFromTheGraveyard()
+    {
+        var g = Setup(new[] { "Bear" }, battlefield: new[] { "Anger", "Bog", "Bog" });
+        g.MoveTo(OnBattlefield(g, "Anger"), Zone.Graveyard);
+        g.CastSpell(g.State[InHand(g, "Bear")], -1);
+        ResolveAll(g);
+        g.CheckStateBasedActions();
+        Assert.False(g.IsSick(OnBattlefield(g, "Bear")));
+    }
+
+    [Fact]
+    public void RemoveTypeTakesAwayACardType()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Humble", "Frog" });
+        g.CheckStateBasedActions();
+        Assert.False(OnBattlefield(g, "Frog").Types.Is(CardType.Creature));
+        Assert.True(OnBattlefield(g, "Frog").Types.Is(CardType.Artifact));
     }
 
     [Fact]

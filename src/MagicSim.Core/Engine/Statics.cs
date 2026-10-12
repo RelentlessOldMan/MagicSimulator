@@ -105,6 +105,7 @@ public static class Statics
         "Affected", "AffectedDefined", "AddPower", "AddToughness", "AddKeyword", "SetPower", "SetToughness",
         "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize", "MayPlay", "MayPlayWithoutManaCost",
         "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
+        "RemoveType", "RemoveAllAbilities",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
         "AddSVar",
         // Goaded creatures must attack someone else: only opponents' creatures get goaded, and they never attack.
@@ -202,7 +203,7 @@ public static class Statics
             if (s.P.Values.Keys.Any(k => k is "AddPower" or "AddToughness" or "AddKeyword" or "SetPower" or "SetToughness")) ctx.Need("MayPlay+Modify");
         }
         else if (s["AffectedZone"] is { } az && az != "Battlefield") ctx.Need("AffectedZone:" + az);
-        if (s["EffectZone"] is { } ez && ez is not ("Battlefield" or "All" or "Command")) ctx.Need("EffectZone:" + ez);
+        if (s["EffectZone"] is { } ez && ez is not ("Battlefield" or "All" or "Command" or "Graveyard")) ctx.Need("EffectZone:" + ez);
         foreach (var key in new[] { "AddPower", "AddToughness", "SetPower", "SetToughness", "AdjustLandPlays" })
             if (s[key] is { } v && v != "Unlimited") Amount.Parse(v, ctx);
         if (s["SetMaxHandSize"] is { } mh && mh != "Unlimited") Amount.Parse(mh, ctx);
@@ -232,7 +233,7 @@ public static class Statics
         var active = new List<(Card Source, StaticDef Static, EffectContext X)>();
         foreach (var c in Sources(g))
             foreach (var st in c.Statics)
-                if (st.Mode == "Continuous" && st["MayPlay"] is null) active.Add((c, st, ContextFor(g, c, st)));
+                if (st.Mode == "Continuous" && st["MayPlay"] is null && WorksFrom(c, st)) active.Add((c, st, ContextFor(g, c, st)));
         var animated = s.BattlefieldCards.Where(c => c.Animations is not null).ToList();
         var leveled = s.BattlefieldCards.Where(c => c.ClassLevel > 1).ToList();
         if (active.Count == 0 && animated.Count == 0 && leveled.Count == 0 && !g.StaticsApplied) return;
@@ -251,11 +252,12 @@ public static class Statics
         for (var i = 0; i < holding.Count; i++)
         {
             var (source, st, x) = holding[i];
-            if (st["AddType"] is null && st["RemoveCardTypes"] is null && st["RemoveCreatureTypes"] is null && st["AddAllCreatureTypes"] is null) continue;
+            if (st["AddType"] is null && st["RemoveCardTypes"] is null && st["RemoveCreatureTypes"] is null && st["AddAllCreatureTypes"] is null
+                && st["RemoveType"] is null) continue;
             var words = st["AddType"] is { } at ? TypeChange.Words(at, source) : null;
             foreach (var card in Affected(i))
                 card.StaticTypes = TypeChange.Apply(card.Types, words, st["RemoveCardTypes"] == "True", st["RemoveCreatureTypes"] == "True",
-                    false, st["AddAllCreatureTypes"] == "True");
+                    false, st["AddAllCreatureTypes"] == "True", st["RemoveType"]);
         }
         foreach (var card in animated)
             foreach (var a in card.Animations!)
@@ -295,6 +297,17 @@ public static class Statics
                         .UnionWith(kws.Split('&', StringSplitOptions.TrimEntries).Select(ForgeRequirements.KeywordName));
                 Grant(card, a.Ability.Grants);
             }
+        // "Loses all abilities" from a static: activated and triggered abilities and keywords. The affected
+        // cards' own static abilities keep applying (removing them would change what this computes).
+        for (var i = 0; i < holding.Count; i++)
+            if (holding[i].Static["RemoveAllAbilities"] == "True")
+                foreach (var card in Affected(i))
+                {
+                    card.LostAbilities = true;
+                    card.StaticActivated = new();
+                    card.StaticTriggers = new();
+                    card.StaticKeywords = null;
+                }
         foreach (var card in leveled)
             foreach (var (level, grants) in card.CurrentFace.ClassLevels)
                 if (level <= card.ClassLevel) Grant(card, grants);
@@ -361,9 +374,20 @@ public static class Statics
         if (grants.Triggers.Count > 0) (card.StaticTriggers ??= new(card.CurrentFace.Triggers)).AddRange(grants.Triggers);
     }
 
-    /// <summary>Where static abilities work from: the battlefield, plus effects and emblems in command zones.</summary>
+    /// <summary>Whether a static ability works from where its card is: the battlefield, or its EffectZone$.</summary>
+    private static bool WorksFrom(Card c, StaticDef st) => c.Zone switch
+    {
+        Zone.Battlefield => st["EffectZone"] is null or "Battlefield" or "All",
+        Zone.Graveyard => st["EffectZone"] == "Graveyard",
+        _ => true,
+    };
+
+    /// <summary>Where static abilities work from: the battlefield, effects and emblems in command zones, and cards whose statics work from the graveyard.</summary>
     public static IEnumerable<Card> Sources(Game g)
     {
+        foreach (var p in g.State.Players)
+            foreach (var id in p.Graveyard)
+                if (g.State[id] is { IsBlank: false } gc && gc.CurrentFace.Statics.Any(st => st["EffectZone"] == "Graveyard")) yield return gc;
         foreach (var c in g.State.BattlefieldCards)
             if (!c.IsBlank && (c.CurrentFace.Statics.Count > 0 || c.Animations is not null || c.ClassLevel > 1)) yield return c;
         foreach (var p in g.State.Players)
@@ -380,7 +404,7 @@ public static class Statics
             if (source.Controller != player) continue;
             foreach (var st in source.Statics)
             {
-                if (st.Mode != "Continuous" || st["MayPlay"] != "True") continue;
+                if (st.Mode != "Continuous" || st["MayPlay"] != "True" || !WorksFrom(source, st)) continue;
                 var x = ContextFor(g, source, st);
                 if (!Presence.Hold(st.P, x)) continue;
                 var zone = Enum.Parse<Zone>(st["AffectedZone"]!);
@@ -428,7 +452,7 @@ public static class Statics
         foreach (var source in Sources(g))
             foreach (var st in source.Statics)
             {
-                if (st.Mode != "CantAttack" || st["Target"] is not null) continue;
+                if (st.Mode != "CantAttack" || st["Target"] is not null || !WorksFrom(source, st)) continue;
                 var x = ContextFor(g, source, st);
                 if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(creature, x)) && Presence.Hold(st.P, x)) return true;
             }
@@ -441,7 +465,7 @@ public static class Statics
         foreach (var source in Sources(g).Append(spell))
             foreach (var st in source.Statics)
             {
-                if (st.Mode != "CastWithFlash") continue;
+                if (st.Mode != "CastWithFlash" || source.Id != spell.Id && !WorksFrom(source, st)) continue;
                 var self = source.Id == spell.Id;
                 if (self != (st["EffectZone"] == "All")) continue;
                 if (st["Caster"] != "Player" && source.Controller != caster) continue;

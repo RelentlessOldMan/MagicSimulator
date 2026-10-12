@@ -8,6 +8,8 @@ public enum ReplacementKind
     Amount,
     /// <summary>"If a card would be put into a graveyard, exile it instead" (Rest in Peace).</summary>
     ExileInstead,
+    /// <summary>The event doesn't happen; an ability happens instead (draw replacements: Laboratory Maniac).</summary>
+    Instead,
 }
 
 /// <summary>A replacement effect (rule 614) of a permanent or effect object, other than its own "as this enters".</summary>
@@ -19,6 +21,8 @@ public sealed class ReplacementDef
     public required FaceDef Face { get; init; }
     /// <summary>For an amount replacement: the new amount, given the old one (ReplaceCount$…).</summary>
     public string? NewAmount { get; init; }
+    /// <summary>For an "instead" replacement: what happens instead.</summary>
+    public AbilityDef? With { get; init; }
     public string? this[string key] => P[key];
 }
 
@@ -37,6 +41,7 @@ public static class Replacements
         ["AddCounter"] = new(StringComparer.Ordinal) { "ValidCard", "ValidCounterType", "EffectOnly", "ValidObject" },
         ["GainLife"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["Moved"] = new(StringComparer.Ordinal) { "ValidCard", "Origin", "Destination", "ValidLKI" },
+        ["Draw"] = new(StringComparer.Ordinal) { "ValidPlayer", "NotFirstCardInDrawStep" },
     };
 
     /// <summary>Compiles a non-self replacement into <paramref name="face"/>. False if it isn't one this knows.</summary>
@@ -51,8 +56,9 @@ public static class Replacements
         if (evt == "DamageDone" && (r["Prevent"] == "True" || r["PreventionEffect"] == "True"))
             return r["ValidTarget"] is { } vt && vt.Split(',').All(AboutYou);
         // Effects on what opponents' cards do: goldfish opponents have none.
-        if (r["ValidCard"] is { } ovc && ovc.Split(',').All(t => t.Contains("OppCtrl", StringComparison.Ordinal) || t.Contains("OppOwn", StringComparison.Ordinal)))
-            return true;
+        foreach (var key in new[] { "ValidCard", "ValidLKI" })
+            if (r[key] is { } ovc && ovc.Split(',').All(t => t.Contains("OppCtrl", StringComparison.Ordinal) || t.Contains("OppOwn", StringComparison.Ordinal)))
+                return true;
 
         if (!MatchParams.TryGetValue(evt, out var own)) return false;
         if (r.Values.Keys.Any(k => !Common.Contains(k) && !own.Contains(k) && !Presence.Params.Contains(k))) return false;
@@ -61,8 +67,13 @@ public static class Replacements
 
         ReplacementKind kind;
         string? newAmount = null;
+        AbilityDef? instead = null;
         switch (evt)
         {
+            case "Draw":
+                kind = ReplacementKind.Instead;
+                instead = CardCompiler.CompileAbility(w, ctx, AbilityKind.Sub, 0);
+                break;
             case "DamageDone" when w.Api == "ReplaceEffect" && w["VarName"] == "DamageAmount" && OnlyKeys(w, "VarName", "VarValue"):
             case "GainLife" when w.Api == "ReplaceEffect" && w["VarName"] == "LifeGained" && OnlyKeys(w, "VarName", "VarValue"):
                 kind = ReplacementKind.Amount;
@@ -90,7 +101,7 @@ public static class Replacements
             if (r[key] is { } f) Filter.Parse(WithoutEmblems(f), ctx);
         if (r["ValidPlayer"] is { } vp) Filter.Parse(vp, ctx);
         Presence.Validate(r, ctx);
-        face.Replacements.Add(new ReplacementDef { P = r, Event = evt, Kind = kind, Face = face, NewAmount = newAmount });
+        face.Replacements.Add(new ReplacementDef { P = r, Event = evt, Kind = kind, Face = face, NewAmount = newAmount, With = instead });
         return true;
     }
 
@@ -197,6 +208,24 @@ public static class Replacements
             var rest = items.Where((_, j) => j != i).ToList();
             foreach (var p in Permute(rest)) yield return new[] { items[i] }.Concat(p).ToArray();
         }
+    }
+
+    /// <summary>
+    /// A replacement for a player's draw, if one applies: its host and what happens instead. One that is
+    /// already replacing a draw doesn't apply to the draws its own ability makes.
+    /// </summary>
+    public static (Card Host, ReplacementDef R)? DrawReplacement(Game g, int player, bool firstInDrawStep, ISet<ReplacementDef> applying)
+    {
+        foreach (var (host, r) in Active(g, "Draw"))
+        {
+            if (r.Kind != ReplacementKind.Instead || applying.Contains(r)) continue;
+            var x = ContextFor(g, host, r, 0);
+            if (!PlayerOk(r, "ValidPlayer", player, x)) continue;
+            if (r["NotFirstCardInDrawStep"] == "True" && firstInDrawStep) continue;
+            if (!Presence.Hold(r.P, x)) continue;
+            return (host, r);
+        }
+        return null;
     }
 
     /// <summary>Where a card moving to <paramref name="to"/> actually goes (Rest in Peace sends graveyard-bound cards to exile).</summary>

@@ -13,7 +13,7 @@ public static class Keywords
         // Deck-building only.
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
-        "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke",
+        "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize",
     };
 }
 

@@ -389,7 +389,7 @@ public sealed class Amount
         return Const(0);
     }
 
-    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|Remembered|Imprinted|Sacrificed)\$(CardPower|CardToughness|CardManaCost|Amount|Valid)(?: (.+))?$", RegexOptions.Compiled);
+    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|Remembered|Imprinted|Sacrificed)\$(CardPower|CardToughness|CardManaCost|Amount|Valid|CardCounters\.\w+)(?: (.+))?$", RegexOptions.Compiled);
 
     /// <summary>"Targeted$CardPower", "Remembered$CardManaCost", "Imprinted$Valid Card.X": a property of defined cards (summed), or how many there are.</summary>
     private static Amount DefinedCardsAmount(string core, Match m, CompileContext ctx)
@@ -412,6 +412,7 @@ public sealed class Amount
         }
         return prop switch
         {
+            _ when prop.StartsWith("CardCounters.", StringComparison.Ordinal) => new(core, x => Cards(x).Sum(c => c.CounterCount(prop[13..]))),
             "CardPower" => new(core, x => Cards(x).Sum(c => c.LastKnownPower)),
             "CardToughness" => new(core, x => Cards(x).Sum(c => c.LastKnownToughness)),
             "CardManaCost" => new(core, x => Cards(x).Sum(c => c.CurrentFace.ManaCost.ManaValue)),

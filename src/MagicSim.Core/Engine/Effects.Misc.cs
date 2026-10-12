@@ -228,3 +228,28 @@ sealed class RollDiceEffect : Effect
             if (Range(range) is var (lo, hi) && roll >= lo && roll <= hi) x.Game.RunSideChain(x, chain);
     }
 }
+
+/// <summary>Amass [type] N: put N +1/+1 counters on an Army you control, creating a 0/0 [type] Army first if you have none.</summary>
+sealed class AmassEffect : Effect
+{
+    public override string Api => "Amass";
+    public override IReadOnlySet<string> Params { get; } = P("Type", "Num", "RememberAmass");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        ValidateAmount(ab, "Num", ctx);
+        var script = TokenScript(ab["Type"]);
+        if (ctx.Tokens?.Invoke(script) is { } def) ab.Tokens = new() { def };
+        else ctx.Need("TokenScript:" + script);
+    }
+
+    private static string TokenScript(string? type) => type is null or "" ? "b_0_0_army" : $"b_0_0_{type.ToLowerInvariant()}_army";
+
+    public override void Resolve(EffectContext x)
+    {
+        var army = x.S.BattlefieldCards.FirstOrDefault(c => c.Controller == x.Controller && c.Types.HasSubtype("Army"))
+                   ?? x.Game.CreateToken(x.Ability.Tokens![0], x.Controller, tapped: false);
+        x.Game.PutCounters(army, "P1P1", Amount(x, x.Ability["Num"], 1));
+        if (x.Ability["RememberAmass"] == "True") (x.Host.Remembered ??= new()).Add(army.Id);
+    }
+}
