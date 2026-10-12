@@ -230,5 +230,10 @@ public class EngineTests
         Assert.Equal(new[] { ("1v1", "play"), ("1v1", "draw"), ("1v1", "weighted"), ("1v1v1", "play"), ("1v1v1", "draw"), ("1v1v1", "weighted") }, rows);
         Assert.Equal(0.5, Report.PlayWeight("1v1"));
         Assert.Equal(1.0 / 3, Report.PlayWeight("1v1v1"));
+
+        var html = HtmlReport.Build(new[] { doc }, new DateTime(2026, 1, 1));
+        Assert.Contains("<h3>1v1</h3>", html);
+        Assert.Contains("<h3>1v1v1</h3>", html);
+        Assert.Contains("</span>Bears</td>", html);
     }
 }

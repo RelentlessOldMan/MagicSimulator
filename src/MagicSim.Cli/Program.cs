@@ -32,6 +32,7 @@ public static class Program
                 "cards" => Cards(opts),
                 "run" => Run(opts),
                 "replay" => Replay(opts),
+                "report" => HtmlReportCommand(opts),
                 _ => Fail(UsageError, $"unknown command: {args[0]}"),
             };
         }
@@ -206,6 +207,20 @@ public static class Program
         return Ok;
     }
 
+    private static int HtmlReportCommand(Options o)
+    {
+        if (o.Positional.Count == 0) throw new UsageException("report needs one or more run JSON files");
+        var runs = o.Positional.Select(path => JsonDocument.Parse(File.ReadAllText(path)).RootElement).ToList();
+        foreach (var (run, path) in runs.Zip(o.Positional))
+            if (!run.TryGetProperty("schema", out var schema) || schema.GetString() != "magicsim.run/1")
+                throw new UsageException($"{path} isn't a magicsim.run/1 document");
+        var html = Core.Sim.HtmlReport.Build(runs, DateTime.Now);
+        var outPath = o.Get("--out") ?? "report.html";
+        File.WriteAllText(outPath, html, new System.Text.UTF8Encoding(false));
+        Console.Error.WriteLine($"wrote {outPath}");
+        return Ok;
+    }
+
     private static int Replay(Options o)
     {
         var opts = RunOptionsFrom(o, single: true);
@@ -257,6 +272,8 @@ public static class Program
                   [--table 1v1|1v1v1|both] [--max-turn T] [--rollouts R] [--threads N] [--json out.json] [--per-game games.jsonl]
               replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--table 1v1|1v1v1]
                   [--max-turn T]
+              report <run.json> [<run.json> ...] [--out report.html]
+                                                   HTML charts of one or more run results
 
             Planned (see CONTRACT.md): compare.
             Card index path: --cards, else %MAGICSIM_CARDS%, else %LOCALAPPDATA%\MagicSim\oracle-cards.jsonl.gz

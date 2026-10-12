@@ -2,7 +2,7 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.7** (2026-10-11).
+Status: **draft v0.7.1** (2026-10-12).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
@@ -11,6 +11,7 @@ Status: **draft v0.7** (2026-10-11).
 - v0.6.1: states that turn numbers in results are rounds, so extra turns don't add to them (§3). No field changes.
 - v0.6.2: states what the goldfish opponents are assumed to have for effects that look at them: 7 cards in hand, lands of every color (§3). No field changes.
 - v0.7: games are played at two table sizes, 1v1 and 1v1v1 (`--table`, default `both`). Result rows and per-game rows gain a `table` field (§3). Readers that ignore it will see two rows per (mulligan, seat) and must filter on `table`.
+- v0.7.1: adds `sim report`, an HTML page of charts from one or more `run` JSON files (§3). It's for people to read, not a stable format.
 - Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
@@ -127,6 +128,8 @@ sim compare <base.txt> --swap "Out=>In" [--swap ...] [same options as run]
 sim compare <a.txt> <b.txt> [<c.txt> ...]           [same options as run]
 sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--table 1v1|1v1v1] [--profile p.yaml]
 ```
+
+`report <run.json> [<run.json> ...] [--out report.html]` (built) writes one self-contained HTML page: cumulative win-rate curves for each table size with one line per deck, a summary table, and each deck's wins-per-turn histogram. It uses each table's play/draw-weighted row when there is one. Its HTML isn't a stable format.
 
 `replay` prints a readable turn-by-turn log of one game: the mulligans, each spell and ability, each trigger, what's on the stack and when it resolves, the mana pool, and how the game ended. The same (deck, seed, `--game`, mulligan, seat, table) gives the same game as row `game` in the `--per-game` output, so any interesting row can be replayed. This is for checking by hand that the engine plays correctly. Its text output isn't a stable format.
 
