@@ -6,6 +6,8 @@ public sealed class SearchSettings
 {
     /// <summary>Rollouts per option at each searched decision.</summary>
     public int Rollouts { get; init; } = 6;
+    /// <summary>Outside the main phases, with nothing on the stack, just pass (a goldfish has nothing to answer there).</summary>
+    public bool QuietSteps { get; init; } = true;
     /// <summary>Mulligan policy A: how many determinized turn-1 tries a hand gets.</summary>
     public int KeepTrials { get; init; } = 3;
     public MulliganPolicy Mulligan { get; init; } = MulliganPolicy.C;
@@ -37,6 +39,8 @@ public sealed class SearchDecider : ChoiceDecider
         _fallback = new RolloutPolicy(_rng.NextULong()) { Mulligan = settings.Mulligan };
     }
 
+    public override bool PassesQuietSteps => _settings.QuietSteps;
+
     protected override int Pick(Game g, Decision d)
     {
         if (d.Kind == DecisionKind.Keep) return KeepHand(g) ? 0 : 1;
@@ -53,7 +57,7 @@ public sealed class SearchDecider : ChoiceDecider
         }
 
         int choice;
-        if (!d.Searchable || d.Options.Count == 1) choice = _fallback.PickPublic(g, d);
+        if (!d.Searchable || d.Options.Count == 1 || _settings.Rollouts == 0) choice = _fallback.PickPublic(g, d);
         else choice = Best(g, d);
         _prefix.Add(choice);
         return choice;

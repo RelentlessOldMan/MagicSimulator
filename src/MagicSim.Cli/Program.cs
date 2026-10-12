@@ -180,7 +180,7 @@ public static class Program
         return new RunOptions
         {
             Games = Int("--games", 10000), Seed = seed, MaxTurn = Int("--max-turn", 20), Mulligans = mulls, Seats = seats, Tables = tables,
-            Rollouts = Int("--rollouts", 6), Threads = Int("--threads", Environment.ProcessorCount),
+            Rollouts = Int("--rollouts", 6, 0), Threads = Int("--threads", Environment.ProcessorCount),
         };
     }
 
@@ -201,7 +201,7 @@ public static class Program
         var games = Runner.Run(deck, opts, progress: new Progress<int>(n =>
             Console.Error.Write($"\r{n}/{total} games ({sw.Elapsed.TotalSeconds:F0}s)")));
         var cpu = System.Diagnostics.Process.GetCurrentProcess().TotalProcessorTime;
-        Console.Error.WriteLine($"\r{total}/{total} games in {sw.Elapsed.TotalSeconds:F1}s (CPU {cpu.TotalSeconds:F1}s)");
+        Console.Error.WriteLine($"\r{total}/{total} games in {sw.Elapsed.TotalSeconds:F1}s (CPU {cpu.TotalSeconds:F1}s, allocated {GC.GetTotalAllocatedBytes() / 1e9:F1} GB)");
         if (o.Get("--per-game") is { } perGame)
             File.WriteAllLines(perGame, games.Select(Report.GameLine), new System.Text.UTF8Encoding(false));
         Emit(o, JsonSerializer.Serialize(Report.RunDocument(deck, path, opts, games), Report.Json));
