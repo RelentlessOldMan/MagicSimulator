@@ -42,6 +42,8 @@ public sealed class Card
     public Dictionary<string, int>? Counters { get; set; }
     public HashSet<string>? TempKeywords { get; set; }
     public List<int>? Remembered { get; set; }
+    /// <summary>Remembered cards from a goldfish opponent's hand, which has no real cards: only how many (Dark Deal).</summary>
+    public int RememberedUnknown { get; set; }
     /// <summary>Cards imprinted on (exiled with) this card: Chrome Mox, Tainted Pact.</summary>
     public List<int>? Imprinted { get; set; }
     /// <summary>Values set by StoreSVar$, overriding the card's SVar of that name.</summary>
@@ -172,7 +174,7 @@ public sealed class Card
         Damage = Damage, PowerBonus = PowerBonus, ToughnessBonus = ToughnessBonus,
         Counters = Counters is null ? null : new Dictionary<string, int>(Counters),
         TempKeywords = TempKeywords is null ? null : new HashSet<string>(TempKeywords),
-        Remembered = Remembered is null ? null : new List<int>(Remembered),
+        Remembered = Remembered is null ? null : new List<int>(Remembered), RememberedUnknown = RememberedUnknown,
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
         NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
@@ -221,14 +223,18 @@ public sealed class Player
 
     public int LibraryCount => IsGoldfish ? AbstractLibrary : Library.Count;
 
-    /// <summary>Goldfish opponents have no real hand; for "cards in an opponent's hand" they're assumed to hold a full grip.</summary>
-    public const int AssumedGoldfishHand = 7;
-    public int HandCount => IsGoldfish ? AssumedGoldfishHand : Hand.Count;
+    /// <summary>
+    /// A goldfish opponent's hand is only a count: 7 to start, one more per draw, one fewer per discard, back down to
+    /// 7 at their cleanup. They never play a card (CONTRACT.md §3).
+    /// </summary>
+    public int AbstractHand { get; set; }
+    public const int GoldfishStartingHand = 7;
+    public int HandCount => IsGoldfish ? AbstractHand : Hand.Count;
 
     public Player Clone() => new()
     {
         Index = Index, Life = Life, Poison = Poison, Pool = Pool, LandsPlayedThisTurn = LandsPlayedThisTurn,
-        LandDropsPerTurn = LandDropsPerTurn, StaticLandDrops = StaticLandDrops, StaticMaxHandSize = StaticMaxHandSize, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary,
+        LandDropsPerTurn = LandDropsPerTurn, StaticLandDrops = StaticLandDrops, StaticMaxHandSize = StaticMaxHandSize, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary, AbstractHand = AbstractHand,
         IsGoldfish = IsGoldfish, CommanderDamageTaken = new Dictionary<int, int>(CommanderDamageTaken),
         LifePaidTotal = LifePaidTotal, DrewFromEmpty = DrewFromEmpty, KnownTop = KnownTop, CityBlessing = CityBlessing,
         Library = new List<int>(Library), Hand = new List<int>(Hand), Graveyard = new List<int>(Graveyard),
@@ -306,6 +312,8 @@ public sealed class TurnInfo
     public Dictionary<int, int> LifeGained { get; set; } = new();
     /// <summary>Cards each player drew this turn.</summary>
     public Dictionary<int, int> CardsDrawn { get; set; } = new();
+    /// <summary>Cards each player discarded this turn.</summary>
+    public Dictionary<int, int> CardsDiscarded { get; set; } = new();
     /// <summary>Zone changes this turn ("a creature died this turn", "lands that entered this turn").</summary>
     public List<(int CardId, Zone From, Zone To)> Moves { get; set; } = new();
     /// <summary>Life each player lost this turn.</summary>
@@ -318,7 +326,7 @@ public sealed class TurnInfo
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
         ExtraPhases = new(ExtraPhases), Combats = Combats,
-        CardsDrawn = new(CardsDrawn), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
+        CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
     };
 }
 

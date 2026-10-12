@@ -93,7 +93,8 @@ public sealed partial class Game
         var s = new GameState { Rng = rng, Turn = 0, Step = Step.Untap };
         var players = new List<Player> { new() { Index = Me, Life = settings.StartingLife } };
         for (var i = 1; i <= settings.Opponents; i++)
-            players.Add(new Player { Index = i, Life = settings.StartingLife, IsGoldfish = true, AbstractLibrary = settings.OpponentLibrary });
+            players.Add(new Player { Index = i, Life = settings.StartingLife, IsGoldfish = true, AbstractLibrary = settings.OpponentLibrary,
+                AbstractHand = Player.GoldfishStartingHand });
         s.Players = players.ToArray();
 
         foreach (var def in commanders)
@@ -172,6 +173,58 @@ public sealed partial class Game
         {
             RunTurn();
             RunExtraTurns();
+            RunOpponentTurns();
+        }
+    }
+
+    /// <summary>
+    /// Each goldfish opponent's turn, in which they do nothing but still have one (CONTRACT.md §3): "at the beginning
+    /// of each opponent's upkeep" and "each end step" trigger, they draw a card, and they discard down to 7 at cleanup.
+    /// The simulated player doesn't act in them; their triggers resolve.
+    /// </summary>
+    public void RunOpponentTurns()
+    {
+        foreach (var p in State.Players)
+        {
+            if (State.GameOver) break;
+            if (p.Index == Me || p.Lost) continue;
+            State.ActivePlayer = p.Index;
+            State.ThisTurn = new TurnInfo();
+            State.Attackers.Clear();
+            Log?.Add($"--- opponent {p.Index}'s turn ---");
+            foreach (var step in new[] { Step.Upkeep, Step.Draw, Step.End })
+            {
+                SetStep(step);
+                if (step == Step.Draw) Draw(p.Index, 1);
+                FirePhase(step == Step.End ? "End of Turn" : step.ToString());
+                ResolveWithoutActing();
+                if (State.GameOver) break;
+            }
+            SetStep(Step.Cleanup);
+            p.AbstractHand = Math.Min(p.AbstractHand, p.StaticMaxHandSize ?? Settings.MaxHandSize);
+            EndOfTurnCleanup();
+        }
+        State.ActivePlayer = Me;
+    }
+
+    /// <summary>Triggers go on the stack and everything resolves, with the simulated player passing.</summary>
+    private void ResolveWithoutActing()
+    {
+        for (var n = 0; !State.GameOver; n++)
+        {
+            CheckStateBasedActions();
+            if (State.GameOver) return;
+            if (n >= Settings.MaxActionsPerTurn)
+            {
+                Note("the stack never empties: a mandatory loop, so the game is a draw");
+                State.GameOver = true;
+                State.Winner = null;
+                State.WinReason = null;
+                return;
+            }
+            if (_pending.Count > 0) PutTriggersOnStack();
+            else if (State.Stack.Count > 0) ResolveTop();
+            else return;
         }
     }
 
@@ -182,7 +235,7 @@ public sealed partial class Game
         Step.EndCombat, Step.Main2, Step.End, Step.Cleanup,
     };
 
-    /// <summary>Takes any extra turns due: right after this one (goldfish opponents' turns don't matter), in the same round.</summary>
+    /// <summary>Takes any extra turns due: right after this one, before the opponents' turns, in the same round.</summary>
     public void RunExtraTurns()
     {
         while (!State.GameOver && State.ExtraTurns > 0)
@@ -384,6 +437,12 @@ public sealed partial class Game
         if (excess > 0)
             foreach (var id in Decider.ChooseCards(this, Me, Choice.Discard, null, me.Hand.ToList(), excess, excess))
                 Discard(State[id]);
+        EndOfTurnCleanup();
+    }
+
+    /// <summary>The cleanup step after the active player's discard: "until end of turn" ends and damage wears off.</summary>
+    private void EndOfTurnCleanup()
+    {
         // "Gain control until end of turn" ends.
         foreach (var (id, controller) in State.ThisTurn.ControlUntilEot)
             if (State[id].Zone == Zone.Battlefield) State[id].Controller = controller;

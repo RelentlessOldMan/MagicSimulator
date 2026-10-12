@@ -81,7 +81,11 @@ public static class Triggers
         // A granted "when this creature dies" trigger is controlled by that creature's controller.
         if (t["TriggerController"] is { } tc && tc != "TriggeredCardController") ctx.Need("TriggerController:" + tc);
         if (t["AttackingPlayer"] is { } ap && ap != "You") ctx.Need("AttackingPlayer:" + ap);
-        if (t["ValidPlayer"] is { } vp && vp is not ("You" or "Player" or "Opponent")) ctx.Need("TriggerValidPlayer:" + vp);
+        if (t["ValidPlayer"] is { } vp && vp is not ("You" or "Player" or "Opponent"))
+        {
+            if (vp.StartsWith("Player.", StringComparison.Ordinal)) Filter.Parse(vp, ctx);
+            else ctx.Need("TriggerValidPlayer:" + vp);
+        }
         if (t["Number"] is { } num && !int.TryParse(num, out _)) ctx.Need("TriggerNumber:" + num);
         if (t["ActivatorThisTurnCast"] is { } atc && (atc.Length < 3 || !int.TryParse(atc[2..], out _))) ctx.Need("ActivatorThisTurnCast:" + atc);
         if (t["ValidSource"] is { } vsr && t.Mode == "CounterAddedOnce" && vsr != "You") ctx.Need("CounterAddedOnce.ValidSource:" + vsr);
@@ -132,7 +136,7 @@ public static class Triggers
             Item = new StackItem { SourceId = d.HostId, Ability = t.Execute ?? Game.PermanentSpell, Controller = d.Controller, DelayRemembered = d.Remembered },
         };
         if (t.Mode == "Phase" && e.Mode == TriggerMode.Phase)
-            return string.Equals(t["Phase"], e.Phase, StringComparison.OrdinalIgnoreCase) && PlayerMatches(t["ValidPlayer"], e.Player, d.Controller)
+            return string.Equals(t["Phase"], e.Phase, StringComparison.OrdinalIgnoreCase) && PlayerMatches(t["ValidPlayer"], e.Player, d.Controller, x, t.Face)
                 && Presence.Hold(t.P, x);
         return ModeMatches(g, t, host, e, x) && Presence.Hold(t.P, x);
     }
@@ -146,11 +150,11 @@ public static class Triggers
                 return CardMatches(g, t, e.CardId, x, source);
             case "Phase" when e.Mode == TriggerMode.Phase:
                 if (!string.Equals(t["Phase"], e.Phase, StringComparison.OrdinalIgnoreCase)) return false;
-                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
+                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller, x, t.Face);
             case "TurnFaceUp" when e.Mode == TriggerMode.TurnFaceUp:
                 return CardMatches(g, t, e.CardId, x, source);
             case "LifeLost" when e.Mode == TriggerMode.LifeLost:
-                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
+                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller, x, t.Face);
             case "Exploited" when e.Mode == TriggerMode.Exploited:
                 return (t["ValidSource"] is not { } exploiter || Effect.FilterFor(t.Face, exploiter).MatchesCard(g.State[e.TargetCardId!.Value], x))
                     && CardMatches(g, t, e.CardId, x, source);
@@ -160,21 +164,21 @@ public static class Triggers
             case "SpellCast" when e.Mode == TriggerMode.SpellCast && t["ActivatorThisTurnCast"] is { } nth:
                 // "Whenever you cast your second spell each turn": this is that spell.
                 if (!Filter.Compare(g.State.ThisTurn.SpellsCast, nth[..2], int.Parse(nth[2..]))) return false;
-                return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
+                return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller, x, t.Face) && CardMatches(g, t, e.CardId, x, source);
             case "Cycled" when e.Mode == TriggerMode.Cycled:
                 return CardMatches(g, t, e.CardId, x, source);
             case "SpellCastOrCopy" when e.Mode is TriggerMode.SpellCast or TriggerMode.SpellCopied:
-                return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
+                return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller, x, t.Face) && CardMatches(g, t, e.CardId, x, source);
             case "ClassLevelGained" when e.Mode == TriggerMode.ClassLevelGained:
                 return (t["ClassLevel"] is not { } lvl || lvl == e.Amount.ToString()) && CardMatches(g, t, e.CardId, x, source);
             case "TapsForMana" when e.Mode == TriggerMode.TapsForMana:
-                return PlayerMatches(t["Activator"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
+                return PlayerMatches(t["Activator"], e.Player, source.Controller, x, t.Face) && CardMatches(g, t, e.CardId, x, source);
             case "CounterAddedOnce" when e.Mode == TriggerMode.CounterAddedOnce:
                 if (t["CounterType"] is { } ct && ct != e.CounterType) return false;
                 if (t["ValidSource"] is { } vsrc && vsrc != "You") return false;
                 return CardMatches(g, t, e.CardId, x, source);
             case "SpellCast" when e.Mode == TriggerMode.SpellCast:
-                return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
+                return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller, x, t.Face) && CardMatches(g, t, e.CardId, x, source);
             case "Attacks" when e.Mode == TriggerMode.Attacks:
                 return CardMatches(g, t, e.CardId, x, source);
             case "DamageDone" when e.Mode == TriggerMode.DamageDone:
@@ -190,16 +194,16 @@ public static class Triggers
                 if (e.Player != source.Controller) return false;
                 return t["ValidAttackers"] is not { } va || g.State.Attackers.Any(a => FilterOf(x, va).MatchesCard(g.State[a], x));
             case "Drawn" when e.Mode == TriggerMode.Drawn && t["Number"] is { } number:
-                return int.TryParse(number, out var nthCard) && e.Amount == nthCard && CardMatches(g, t, e.CardId, x, source);
+                return int.TryParse(number, out var nthCard) && e.Amount == nthCard && CardMatches(g, t, e.CardId, x, source, e.Player);
             case "Drawn" when e.Mode == TriggerMode.Drawn:
             case "LandPlayed" when e.Mode == TriggerMode.LandPlayed:
             case "Discarded" when e.Mode == TriggerMode.Discarded:
             case "Taps" when e.Mode == TriggerMode.Taps:
-                return CardMatches(g, t, e.CardId, x, source);
+                return CardMatches(g, t, e.CardId, x, source, e.Player);
             case "Sacrificed" when e.Mode == TriggerMode.Sacrificed:
-                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
+                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller, x, t.Face) && CardMatches(g, t, e.CardId, x, source);
             case "LifeGained" when e.Mode == TriggerMode.LifeGained:
-                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
+                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller, x, t.Face);
             default:
                 return false;
         }
@@ -207,10 +211,14 @@ public static class Triggers
 
     private static Filter FilterOf(EffectContext x, string text) => Effect.FilterFor(x.SVarFace, text);
 
-    private static bool CardMatches(Game g, TriggerDef t, int? cardId, EffectContext x, Card source)
+    /// <summary>
+    /// Whether the event's card fits ValidCard$. A card from a goldfish opponent's hand (drawn or discarded) isn't a
+    /// real card: it fits only filters about whose it is (<see cref="Filter.MatchesUnknownCard"/>).
+    /// </summary>
+    private static bool CardMatches(Game g, TriggerDef t, int? cardId, EffectContext x, Card source, int? unknownOwner = null)
     {
         if (t["ValidCard"] is not { } vc) return true;
-        if (cardId is not { } id) return false;
+        if (cardId is not { } id) return unknownOwner is { } owner && FilterOf(x, vc).MatchesUnknownCard(owner, x);
         return FilterOf(x, vc).MatchesCard(g.State[id], x);
     }
 
@@ -229,12 +237,13 @@ public static class Triggers
     public static bool ZoneMatches(string? spec, Zone z) =>
         spec is null or "Any" || spec.Split(',').Any(s => Enum.TryParse<Zone>(s.Trim(), out var want) && want == z);
 
-    private static bool PlayerMatches(string? spec, int? player, int controller) => spec switch
+    private static bool PlayerMatches(string? spec, int? player, int controller, EffectContext x, FaceDef? face) => spec switch
     {
         null or "Player" => true,
         "You" => player == controller,
         "Opponent" => player != controller,
-        _ => false,
+        // "Player.Chosen": the player chosen as this entered (The Rack).
+        _ => player is { } p && Effect.FilterFor(face ?? x.SVarFace, spec).MatchesPlayer(p, x),
     };
 }
 

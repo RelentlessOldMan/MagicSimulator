@@ -368,7 +368,14 @@ public sealed partial class Game
         var p = State.Players[player];
         for (var i = 0; i < n; i++)
         {
-            if (p.IsGoldfish) { p.AbstractLibrary = Math.Max(0, p.AbstractLibrary - 1); continue; }
+            if (p.IsGoldfish)
+            {
+                p.AbstractLibrary = Math.Max(0, p.AbstractLibrary - 1);
+                p.AbstractHand++;
+                var nthUnknown = State.ThisTurn.CardsDrawn[player] = State.ThisTurn.CardsDrawn.GetValueOrDefault(player) + 1;
+                if (record) Fire(new TriggerEvent(TriggerMode.Drawn, Player: player, Amount: nthUnknown));
+                continue;
+            }
             var firstInDrawStep = State.Step == Step.Draw && State.ThisTurn.CardsDrawn.GetValueOrDefault(player) == 0;
             if (record && Replacements.DrawReplacement(this, player, firstInDrawStep, _drawReplacing) is var (host, r) && r.With is { } instead)
             {
@@ -391,7 +398,21 @@ public sealed partial class Game
     {
         Note($"discard {c.Name}");
         MoveTo(c, Zone.Graveyard);
+        State.ThisTurn.CardsDiscarded[c.Owner] = State.ThisTurn.CardsDiscarded.GetValueOrDefault(c.Owner) + 1;
         Fire(new TriggerEvent(TriggerMode.Discarded, CardId: c.Id, Player: c.Owner));
+    }
+
+    /// <summary>A goldfish opponent discards <paramref name="n"/> of the cards they hold; returns how many they had to discard.</summary>
+    public int DiscardUnknown(int player, int n)
+    {
+        var p = State.Players[player];
+        n = Math.Min(n, p.AbstractHand);
+        if (n <= 0) return 0;
+        p.AbstractHand -= n;
+        State.ThisTurn.CardsDiscarded[player] = State.ThisTurn.CardsDiscarded.GetValueOrDefault(player) + n;
+        Note($"opponent {player} discards {n} ({p.AbstractHand} left)");
+        for (var i = 0; i < n; i++) Fire(new TriggerEvent(TriggerMode.Discarded, Player: player));
+        return n;
     }
 
     /// <summary>Mills <paramref name="n"/> cards; returns the cards milled.</summary>

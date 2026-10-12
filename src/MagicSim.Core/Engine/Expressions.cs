@@ -50,7 +50,8 @@ public sealed class Filter
     private Filter(string text, List<Term> terms) { Text = text; _terms = terms; }
 
     private sealed record Term(string Base, List<Prop> Props);
-    private sealed record Prop(bool Negated, Func<Card?, int?, EffectContext, bool> Test);
+    /// <summary>A property; <paramref name="OwnerTest"/> when it's only about whose the card is, for cards nobody can see.</summary>
+    private sealed record Prop(bool Negated, Func<Card?, int?, EffectContext, bool> Test, Func<int, EffectContext, bool>? OwnerTest = null);
 
     /// <summary>Subtypes seen in any card's type line (filled once the Forge library loads).</summary>
     public static HashSet<string> KnownSubtypes { get; } = new(StringComparer.Ordinal)
@@ -68,6 +69,7 @@ public sealed class Filter
 
     private static readonly Regex CompareRx = new(@"^(cmc|power|toughness)(LE|LT|GE|GT|EQ|NE)(.+)$", RegexOptions.Compiled);
     private static readonly Regex CountersRx = new(@"^counters_(GE|LE|EQ|GT|LT)(\d+)_([A-Z0-9]+)$", RegexOptions.Compiled);
+    private static readonly Regex HasCardsRx = new(@"^HasCardsIn(Hand|Graveyard|Library|Exile)_(.+)_(LE|LT|GE|GT|EQ|NE)(\d+)$", RegexOptions.Compiled);
 
     public static Filter Parse(string text, CompileContext ctx)
     {
@@ -102,6 +104,9 @@ public sealed class Filter
             "YouOwn" => (c, pl, x) => c is not null && c.Owner == x.Controller,
             "OppCtrl" => (c, pl, x) => c is not null ? c.Controller != x.Controller : pl is not null && pl != x.Controller,
             "OppOwn" => (c, pl, x) => c is not null && c.Owner != x.Controller,
+            "ActivePlayerCtrl" => (c, pl, x) => c is not null ? c.Controller == x.S.ActivePlayer : pl == x.S.ActivePlayer,
+            "ChosenCtrl" => (c, pl, x) => c is not null ? c.Controller == x.Host.ChosenPlayer : pl is not null && pl == x.Host.ChosenPlayer,
+            "Chosen" => (c, pl, x) => c is null && pl is not null && pl == x.Host.ChosenPlayer,
             "YouDontCtrl" => (c, pl, x) => c is not null && c.Controller != x.Controller,
             "Opponent" => (c, pl, x) => pl is not null && pl != x.Controller,
             "You" => (c, pl, x) => pl == x.Controller,
@@ -187,12 +192,30 @@ public sealed class Filter
             test = (c, pl, x) => c is not null && Compare(c.LastKnownCounterCount(kind), op, n);
         }
 
+        // "HasCardsInHand_Card_EQ0": a player with that many such cards there.
+        if (test is null && HasCardsRx.Match(p) is { Success: true } hm)
+        {
+            var inZone = Enum.Parse<Zone>(hm.Groups[1].Value);
+            var cards = Parse(hm.Groups[2].Value, ctx);
+            var op = hm.Groups[3].Value;
+            var n = int.Parse(hm.Groups[4].Value);
+            test = (c, pl, x) => c is null && pl is { } who && Compare(cards.CountIn(new[] { inZone }, x, who), op, n);
+        }
+
         if (test is null)
         {
             ctx.Need("FilterProp:" + p);
             return null;
         }
-        return new Prop(neg, test);
+        Func<int, EffectContext, bool>? owner = p switch
+        {
+            "YouCtrl" or "YouOwn" => (o, x) => o == x.Controller,
+            "OppCtrl" or "OppOwn" => (o, x) => o != x.Controller,
+            "ActivePlayerCtrl" => (o, x) => o == x.S.ActivePlayer,
+            "ChosenCtrl" => (o, x) => o == x.Host.ChosenPlayer,
+            _ => null,
+        };
+        return new Prop(neg, test, owner);
     }
 
     public static bool Compare(int a, string op, int b) => op switch
@@ -202,6 +225,26 @@ public sealed class Filter
     };
 
     private static string SplitCamel(string s) => Regex.Replace(s, "(?<=[a-z])([A-Z])", " $1");
+
+    /// <summary>
+    /// Whether a card nobody can see fits: one in a goldfish opponent's hand, which is only a count. It fits a "Card"
+    /// filter about whose it is ("Card.OppOwn"), never one about what it is (a type, a cost).
+    /// </summary>
+    public bool MatchesUnknownCard(int owner, EffectContext x) =>
+        _terms.Any(t => t.Base == "Card" && t.Props.All(p => p.OwnerTest is { } o && o(owner, x) != p.Negated));
+
+    /// <summary>How many cards in these zones fit (only <paramref name="player"/>'s, if given), counting goldfish opponents' hands.</summary>
+    public int CountIn(IReadOnlyCollection<Zone> zones, EffectContext x, int? player = null)
+    {
+        var n = 0;
+        foreach (var z in zones)
+            foreach (var c in x.Game.CardsIn(z))
+                if ((player is null || (z == Zone.Battlefield ? c.Controller : c.Owner) == player) && MatchesCard(c, x)) n++;
+        if (zones.Contains(Zone.Hand))
+            foreach (var p in x.S.Players)
+                if (p.IsGoldfish && (player is null || p.Index == player) && MatchesUnknownCard(p.Index, x)) n += p.AbstractHand;
+        return n;
+    }
 
     public bool MatchesCard(Card c, EffectContext x) => _terms.Any(t => BaseMatchesCard(t.Base, c) && t.Props.All(p => p.Test(c, null, x) != p.Negated));
 
@@ -277,7 +320,7 @@ public sealed class Amount
         return ParseExpression(text, ctx, depth);
     }
 
-    private static readonly Regex MathRx = new(@"/(Plus|Minus|Times|Twice|Thrice|HalfUp|HalfDown|Negative|LimitMax|LimitMin)(?:\.(\-?\w+))?", RegexOptions.Compiled);
+    private static readonly Regex MathRx = new(@"/(Plus|NMinus|Minus|Times|Twice|Thrice|HalfUp|HalfDown|Negative|LimitMax|LimitMin)(?:\.(\-?\w+))?", RegexOptions.Compiled);
 
     private static Amount ParseExpression(string body, CompileContext ctx, int depth)
     {
@@ -296,6 +339,7 @@ public sealed class Amount
             {
                 "Plus" => new(body, x => prev.Eval(x) + arg.Eval(x)),
                 "Minus" => new(body, x => prev.Eval(x) - arg.Eval(x)),
+                "NMinus" => new(body, x => arg.Eval(x) - prev.Eval(x)),   // "/NMinus.3": 3 minus it
                 "Times" => new(body, x => prev.Eval(x) * arg.Eval(x)),
                 "Twice" => new(body, x => prev.Eval(x) * 2),
                 "Thrice" => new(body, x => prev.Eval(x) * 3),
@@ -383,7 +427,7 @@ public sealed class Amount
             case "CardsInYourHand": return new(core, x => x.S.Players[x.Controller].Hand.Count);
             case "YourLifeTotal": return new(core, x => x.S.Players[x.Controller].Life);
             case "YourStartingLife": return new(core, x => x.Game.Settings.StartingLife);
-            case "RememberedSize": return new(core, x => x.Host.Remembered?.Count ?? 0);
+            case "RememberedSize": return new(core, x => (x.Host.Remembered?.Count ?? 0) + x.Host.RememberedUnknown);
             case "ThisTurnCast" when arg.Length == 0: return new(core, x => x.S.ThisTurn.SpellsCast);
             case "StormCount": return new(core, x => Math.Max(0, x.S.ThisTurn.SpellsCast - 1));
             case "InYourLibrary": return new(core, x => x.S.Players[x.Controller].Library.Count);
@@ -436,7 +480,7 @@ public sealed class Amount
             IEnumerable<Card> Matching(EffectContext x) => zones.SelectMany(z => x.Game.CardsIn(z)).Where(card => filter.MatchesCard(card, x));
             switch (dollar < 0 ? null : arg[(dollar + 1)..])
             {
-                case null: return new(core, x => Matching(x).Count());
+                case null: return new(core, x => filter.CountIn(zones, x));
                 case "GreatestCardPower": return new(core, x => Matching(x).Select(card => card.Power).DefaultIfEmpty(0).Max());
                 case "GreatestCardToughness": return new(core, x => Matching(x).Select(card => card.Toughness).DefaultIfEmpty(0).Max());
                 case "GreatestCMC": return new(core, x => Matching(x).Select(card => card.CurrentFace.ManaCost.ManaValue).DefaultIfEmpty(0).Max());
@@ -485,6 +529,7 @@ public sealed class Amount
             case "LifeTotal": return (p, x) => x.S.Players[p].Life;
             case "PoisonCounters" or "Counters.Poison": return (p, x) => x.S.Players[p].Poison;
             case "LifeLostThisTurn": return (p, x) => x.S.ThisTurn.LifeLost.GetValueOrDefault(p);
+            case "CardsDiscardedThisTurn": return (p, x) => x.S.ThisTurn.CardsDiscarded.GetValueOrDefault(p);
         }
         var space = text.IndexOf(' ');
         if (text.StartsWith("Valid", StringComparison.Ordinal) && space > 0)
@@ -502,7 +547,7 @@ public sealed class Amount
                     Game = x.Game, Ability = x.Ability, FaceOverride = x.FaceOverride, ReplacedAmount = x.ReplacedAmount,
                     Item = new StackItem { SourceId = x.Item.SourceId, Ability = x.Item.Ability, Controller = p, X = x.Item.X, IteratedPlayer = x.Item.IteratedPlayer },
                 };
-                return zones.SelectMany(z => x.Game.CardsIn(z)).Count(c => filter.MatchesCard(c, asPlayer));
+                return filter.CountIn(zones, asPlayer);
             };
         }
         ctx.Need("PlayerProperty:" + text);
@@ -536,7 +581,7 @@ public sealed class Amount
             "CardPower" => new(core, x => Cards(x).Sum(c => c.LastKnownPower)),
             "CardToughness" => new(core, x => Cards(x).Sum(c => c.LastKnownToughness)),
             "CardManaCost" or "CardManaCostLKI" => new(core, x => Cards(x).Sum(c => c.CurrentFace.ManaCost.ManaValue)),
-            "Amount" => new(core, x => Cards(x).Count),
+            "Amount" => new(core, x => Cards(x).Count + (which is "Remembered" or "RememberedLKI" ? x.Host.RememberedUnknown : 0)),
             _ => new(core, x => Cards(x).Count(c => filter!.MatchesCard(c, x))),
         };
     }
@@ -576,7 +621,10 @@ public static class Defined
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
     {
-        if (text is not null && !PlayerRefs.Contains(text)) ctx.Need("DefinedPlayer:" + text);
+        if (text is null || PlayerRefs.Contains(text)) return;
+        // "Player.Opponent+HasCardsInHand_Card_EQ0": every player that fits.
+        if (text.StartsWith("Player.", StringComparison.Ordinal)) Filter.Parse(text, ctx);
+        else ctx.Need("DefinedPlayer:" + text);
     }
 
     public static void ValidateCards(string? text, CompileContext ctx)
@@ -604,6 +652,8 @@ public static class Defined
             "Remembered" => x.Item.IteratedPlayer is { } ip ? new() { ip } : new(),
             "TargetedOwner" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Owner).Take(1).ToList(),
             "TriggeredTarget" or "TriggeredPlayer" or "TriggeredActivator" => x.Item.TriggeredPlayer is { } tp ? new() { tp } : new(),
+            var f when f.StartsWith("Player.", StringComparison.Ordinal) =>
+                players.Where(p => !p.Lost && Effect.FilterFor(x.SVarFace, f).MatchesPlayer(p.Index, x)).Select(p => p.Index).ToList(),
             _ => new() { x.Controller },
         };
     }

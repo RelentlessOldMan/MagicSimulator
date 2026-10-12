@@ -1981,7 +1981,7 @@ public class MechanicsTests
         g.CastSpell(jeska, both);
         ResolveAll(g);
         Assert.Equal(43, g.State.Players[Game.Me].Life);
-        Assert.Equal(Player.AssumedGoldfishHand, g.State.Players[Game.Me].Pool[ManaColor.R]);
+        Assert.Equal(Player.GoldfishStartingHand, g.State.Players[Game.Me].Pool[ManaColor.R]);
     }
 
     [Fact]

@@ -211,7 +211,9 @@ sealed class ChangeZoneEffect : Effect
         // "From outside the game" (wishes): a Commander deck has no sideboard, so there's nothing to get.
         foreach (var key in new[] { "Origin", "Destination", "OriginAlternative" })
             if (ab[key] is { } z && !z.Split(',').All(s => Zones.Contains(s.Trim()) || key == "Origin" && s.Trim() == "Sideboard"
-                    || key == "Origin" && s.Trim() is "Stack" or "All" && (ab["Defined"] is not null || ab.TargetFilter is not null)))
+                    || key == "Origin" && s.Trim() is "Stack" or "All" && (ab["Defined"] is not null || ab.TargetFilter is not null)
+                    // "Exile this effect": an effect object ends itself (Words of Waste).
+                    || key == "Origin" && s.Trim() == "Command" && ab["Defined"] == "Self"))
                 ctx.Need($"ChangeZone.{key}:{z}");
         ValidateAmount(ab, "WithCountersAmount", ctx);
         if (ab["Duration"] is { } dur && dur != "UntilHostLeavesPlay") ctx.Need("ChangeZone.Duration:" + dur);
@@ -276,6 +278,7 @@ sealed class ChangeZoneEffect : Effect
             {
                 var c = x.S[id];
                 if (!origins.Contains(c.Zone)) continue;
+                if (c.IsEffect) { x.Game.EndEffect(c); continue; }   // an effect object exiling itself just ends
                 if (ab["Optional"] == "True" && !x.Game.Decider.ChooseYesNo(x.Game, x.Controller, x.Host, $"move {c.Name}?")) continue;
                 var from = c.Zone;
                 Move(x, c, dest, position, tapped);
@@ -440,7 +443,7 @@ sealed class MillEffect : Effect
 sealed class DiscardEffect : Effect
 {
     public override string Api => "Discard";
-    public override IReadOnlySet<string> Params { get; } = P("Mode", "NumCards", "Defined", "DiscardValid", "Optional", "RememberDiscarded");
+    public override IReadOnlySet<string> Params { get; } = P("Mode", "NumCards", "Defined", "DiscardValid", "Optional", "RememberDiscarded", "UnlessType");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -448,18 +451,26 @@ sealed class DiscardEffect : Effect
         ValidateAmount(ab, "NumCards", ctx);
         Defined.ValidatePlayers(ab["Defined"], ctx);
         if (ab["DiscardValid"] is { } dv) Filter.Parse(dv, ctx);
+        if (ab["UnlessType"] is { } ut) Filter.Parse(ut, ctx);
     }
 
     public override void Resolve(EffectContext x)
     {
         foreach (var p in DrawEffect.Players(x))
         {
+            if (x.S.Players[p].IsGoldfish) { DiscardUnknown(x, p); continue; }
             var hand = x.S.Players[p].Hand;
-            if (x.S.Players[p].IsGoldfish) continue;   // goldfish opponents have no real hand
             var mode = x.Ability["Mode"] ?? "TgtChoose";
             var filter = x.Ability["DiscardValid"] is { } dv ? FilterFor(x.SVarFace, dv) : null;
             var eligible = hand.Where(id => filter is null || filter.MatchesCard(x.S[id], x)).ToList();
             var n = Math.Min(Amount(x, x.Ability["NumCards"], 1), eligible.Count);
+            // "Discards two cards unless they discard an artifact card": one of those does instead.
+            if (x.Ability["UnlessType"] is { } unless && FilterFor(x.SVarFace, unless) is var instead
+                && eligible.Where(id => instead.MatchesCard(x.S[id], x)).ToList() is { Count: > 0 } ofType)
+            {
+                eligible = ofType;
+                n = 1;
+            }
             List<int> chosen = mode switch
             {
                 "Hand" => eligible,
@@ -469,6 +480,22 @@ sealed class DiscardEffect : Effect
             foreach (var id in chosen) x.Game.Discard(x.S[id]);
             if (x.Ability["RememberDiscarded"] == "True") (x.Host.Remembered ??= new()).AddRange(chosen);
         }
+    }
+
+    /// <summary>
+    /// A goldfish opponent's hand is only a count, so where what's in it matters, it's assumed to be what's worse for
+    /// you: no card that fits DiscardValid$ (unless only whose it is matters), and a card that fits UnlessType$; they
+    /// never take an optional discard.
+    /// </summary>
+    private static void DiscardUnknown(EffectContext x, int p)
+    {
+        var ab = x.Ability;
+        if (ab["Optional"] == "True") return;
+        if (ab["DiscardValid"] is { } dv && !FilterFor(x.SVarFace, dv).MatchesUnknownCard(p, x)) return;
+        var n = ab["Mode"] == "Hand" ? x.S.Players[p].AbstractHand : Amount(x, ab["NumCards"], 1);
+        if (ab["UnlessType"] is not null) n = Math.Min(n, 1);
+        var discarded = x.Game.DiscardUnknown(p, n);
+        if (ab["RememberDiscarded"] == "True") x.Host.RememberedUnknown += discarded;
     }
 }
 
@@ -518,7 +545,7 @@ sealed class CleanupEffect : Effect
         if (x.Ability["ClearChosenColor"] == "True") x.Host.ChosenColor = null;
         if (x.Ability["ClearChosenCard"] == "True") x.Host.ChosenCards = null;
         if (x.Ability["ClearChosenPlayer"] == "True") x.Host.ChosenPlayer = null;
-        if (x.Ability["ClearRemembered"] == "True") x.Host.Remembered = null;
+        if (x.Ability["ClearRemembered"] == "True") { x.Host.Remembered = null; x.Host.RememberedUnknown = 0; }
         if (x.Ability["ClearImprinted"] == "True") x.Host.Imprinted = null;
         if (x.Ability["ClearNamedCard"] == "True") x.Host.NamedCard = null;
     }
