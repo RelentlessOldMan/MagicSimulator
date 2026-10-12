@@ -53,6 +53,8 @@ public sealed class Card
     /// <summary>A token created with set power/toughness (TokenPower$/TokenToughness$).</summary>
     public int? TokenPower { get; init; }
     public int? TokenToughness { get; init; }
+    /// <summary>Triggers with a per-turn limit (ActivationLimit$) and the turn and times each last triggered.</summary>
+    public Dictionary<TriggerDef, (int Turn, int Count)>? TriggerUses { get; set; }
     /// <summary>The turn this permanent last activated a loyalty ability: one per turn (rule 606.3).</summary>
     public int LoyaltyActivatedTurn { get; set; }
     /// <summary>Regeneration shields until end of turn (rule 701.15).</summary>
@@ -138,7 +140,8 @@ public sealed class Card
         Remembered = Remembered is null ? null : new List<int>(Remembered),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness,
+        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn,
+        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
         Animations = Animations is null ? null : new List<Animation>(Animations),
@@ -218,6 +221,8 @@ public sealed class StackItem
     /// <summary>For triggers: the player involved (e.g. the player dealt damage), if any.</summary>
     public int? TriggeredPlayer { get; init; }
     public string Description { get; init; } = "";
+    /// <summary>For a trigger: the amount of its event (damage dealt, life gained, cards moved).</summary>
+    public int TriggerAmount { get; init; }
     /// <summary>For a delayed trigger: the objects it remembers (DelayTriggerRemembered).</summary>
     public List<int>? DelayRemembered { get; init; }
     /// <summary>The player a RepeatEach is currently on ("Remembered" as a player).</summary>
@@ -225,7 +230,7 @@ public sealed class StackItem
 
     public StackItem Clone() => new()
     {
-        DelayRemembered = DelayRemembered, IteratedPlayer = IteratedPlayer,
+        DelayRemembered = DelayRemembered, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount,
         Id = Id, SourceId = SourceId, Ability = Ability, Controller = Controller, IsSpell = IsSpell,
         ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, TriggeredPlayer = TriggeredPlayer, Description = Description, ExileAfter = ExileAfter,
     };
@@ -238,7 +243,9 @@ public sealed class TurnInfo
     public int MaxManaSeen { get; set; }
     /// <summary>"At the beginning of the next end step" actions: (card id, "Exile" or "Sacrifice").</summary>
     public List<(int CardId, string Action)> AtEndStep { get; set; } = new();
-    public TurnInfo Clone() => new() { SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep) };
+    /// <summary>Control changes that end at cleanup: (card id, controller to return it to).</summary>
+    public List<(int CardId, int Controller)> ControlUntilEot { get; set; } = new();
+    public TurnInfo Clone() => new() { SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot) };
 }
 
 /// <summary>Everything about a game in progress. <see cref="Clone"/> gives an independent copy for search.</summary>

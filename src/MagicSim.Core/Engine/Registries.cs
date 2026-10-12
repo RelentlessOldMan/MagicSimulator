@@ -28,7 +28,7 @@ public static class Triggers
 
     private static readonly HashSet<string> CommonParams = new(StringComparer.Ordinal)
     {
-        "Mode", "Execute", "TriggerDescription", "TriggerZones", "OptionalDecider", "Secondary", "ValidCard", "Static",
+        "Mode", "Execute", "TriggerDescription", "TriggerZones", "OptionalDecider", "Secondary", "ValidCard", "Static", "ActivationLimit",
     };
 
     private static readonly Dictionary<string, HashSet<string>> ModeParams = new()
@@ -37,6 +37,8 @@ public static class Triggers
         ["Phase"] = new(StringComparer.Ordinal) { "Phase", "ValidPlayer" },
         ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer" },
         ["Attacks"] = new(StringComparer.Ordinal) { },
+        ["Sacrificed"] = new(StringComparer.Ordinal) { "ValidPlayer" },
+        ["ChangesZoneAll"] = new(StringComparer.Ordinal) { "ValidCards", "Origin", "Destination" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer" },
         ["Drawn"] = new(StringComparer.Ordinal) { },
@@ -129,6 +131,8 @@ public static class Triggers
             case "Discarded" when e.Mode == TriggerMode.Discarded:
             case "Taps" when e.Mode == TriggerMode.Taps:
                 return CardMatches(g, t, e.CardId, x, source);
+            case "Sacrificed" when e.Mode == TriggerMode.Sacrificed:
+                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
             case "LifeGained" when e.Mode == TriggerMode.LifeGained:
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
             default:
@@ -145,7 +149,19 @@ public static class Triggers
         return FilterOf(x, vc).MatchesCard(g.State[id], x);
     }
 
-    private static bool ZoneMatches(string? spec, Zone z) =>
+    /// <summary>"This ability triggers only once each turn" (ActivationLimit$): counts this triggering if allowed.</summary>
+    public static bool UnderLimit(Game g, Card source, TriggerDef t)
+    {
+        if (t["ActivationLimit"] is not { } lim || !int.TryParse(lim, out var limit)) return true;
+        source.TriggerUses ??= new();
+        var (turn, count) = source.TriggerUses.GetValueOrDefault(t);
+        if (turn != g.State.Turn) count = 0;
+        if (count >= limit) return false;
+        source.TriggerUses[t] = (g.State.Turn, count + 1);
+        return true;
+    }
+
+    public static bool ZoneMatches(string? spec, Zone z) =>
         spec is null or "Any" || spec.Split(',').Any(s => Enum.TryParse<Zone>(s.Trim(), out var want) && want == z);
 
     private static bool PlayerMatches(string? spec, int? player, int controller) => spec switch

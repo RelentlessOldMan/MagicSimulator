@@ -133,6 +133,19 @@ public class MechanicsTests
         "SVar:DBLose:DB$ LoseLife | Defined$ Remembered | LifeAmount$ 2\n",
         "Name:Census\nManaCost:0\nTypes:Sorcery\nA:SP$ RepeatEach | RepeatCards$ Creature.YouCtrl | RepeatSubAbility$ DBGain\n" +
         "SVar:DBGain:DB$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:Remembered$CardPower\n",
+        "Name:Twin\nManaCost:0\nTypes:Instant\nA:SP$ CopySpellAbility | ValidTgts$ Instant,Sorcery | TargetType$ Spell | MayChooseTarget$ True\n",
+        "Name:Echo\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ SpellCast | ValidCard$ Instant,Sorcery | ValidActivatingPlayer$ You | TriggerZones$ Battlefield | Execute$ TrigCopy\n" +
+        "SVar:TrigCopy:DB$ CopySpellAbility | Defined$ TriggeredSpellAbility | MayChooseTarget$ True\n",
+        "Name:Desire\nManaCost:0\nTypes:Sorcery\n" +
+        "A:SP$ Play | Valid$ Card.nonLand+YouOwn | ValidZone$ Hand | ValidSA$ Spell | WithoutManaCost$ True | Amount$ All | Controller$ You | Optional$ True\n",
+        "Name:Grab\nManaCost:0\nTypes:Sorcery\nA:SP$ GainControl | ValidTgts$ Creature | LoseControl$ EOT | Untap$ True | AddKWs$ Haste\n",
+        "Name:Altar\nManaCost:0\nTypes:Artifact\nA:AB$ GainLife | Cost$ Sac<1/Creature> | Defined$ You | LifeAmount$ 1\n" +
+        "T:Mode$ Sacrificed | ValidCard$ Creature | ValidPlayer$ You | TriggerZones$ Battlefield | Execute$ TrigDraw\n" +
+        "SVar:TrigDraw:DB$ Draw | Defined$ You | NumCards$ 1\n",
+        "Name:Grief\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ ChangesZoneAll | ValidCards$ Creature.YouCtrl | Origin$ Battlefield | Destination$ Graveyard | TriggerZones$ Battlefield | Execute$ TrigGain | ActivationLimit$ 1\n" +
+        "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:TriggerCount$Amount\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -764,6 +777,71 @@ public class MechanicsTests
         g.CastSpell(g.State[InHand(g, "Census")], 0);
         ResolveAll(g);
         Assert.Equal(43, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void CopyTargetSpell()
+    {
+        var g = Setup(new[] { "Toll", "Twin" });
+        g.CastSpell(g.State[InHand(g, "Toll")], 0);
+        g.CastSpell(g.State[InHand(g, "Twin")], 0);
+        ResolveAll(g);
+        Assert.All(g.State.Players.Where(p => p.Index != Game.Me), p => Assert.Equal(36, p.Life));
+    }
+
+    [Fact]
+    public void TriggerCopiesTheSpellThatWasCast()
+    {
+        var g = Setup(new[] { "Toll" }, battlefield: new[] { "Echo" });
+        g.CastSpell(g.State[InHand(g, "Toll")], 0);
+        ResolveAll(g);
+        Assert.All(g.State.Players.Where(p => p.Index != Game.Me), p => Assert.Equal(36, p.Life));
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Toll").Zone);
+    }
+
+    [Fact]
+    public void PlayCastsCardsWithoutPayingTheirManaCost()
+    {
+        var g = Setup(new[] { "Desire", "Filler" }, library: new[] { "Bear" }, decider: new TestDecider { Choose = (game, d) => d.Kind == DecisionKind.Card ? 0 : null });
+        g.CastSpell(g.State[InHand(g, "Desire")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Filler").Zone);
+        Assert.Equal("Bear", g.State[g.State.Players[Game.Me].Hand.Single()].Name);
+    }
+
+    [Fact]
+    public void GainControlUntilEndOfTurn()
+    {
+        var g = Setup(new[] { "Grab" }, battlefield: new[] { "Bear" }, library: new[] { "Filler", "Filler" });
+        var bear = OnBattlefield(g, "Bear");
+        bear.Controller = 2;
+        bear.Tapped = true;
+        g.CastSpell(g.State[InHand(g, "Grab")], 0);
+        ResolveAll(g);
+        Assert.Equal(Game.Me, bear.Controller);
+        Assert.False(bear.Tapped);
+        Assert.False(g.IsSick(bear));
+        g.ResumeTurn();
+        Assert.Equal(2, bear.Controller);
+    }
+
+    [Fact]
+    public void SacrificeTriggersFire()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Altar", "Bear" }, library: new[] { "Filler" });
+        g.ActivateAbility(OnBattlefield(g, "Altar"), 0);
+        ResolveAll(g);
+        Assert.Equal(41, g.State.Players[Game.Me].Life);
+        Assert.Single(g.State.Players[Game.Me].Hand);
+    }
+
+    [Fact]
+    public void OneOrMoreTriggerFiresOnceForCardsMovingTogether()
+    {
+        var g = Setup(new[] { "Wrath" }, battlefield: new[] { "Grief", "Bear", "Sneak", "Bog", "Bog" });
+        g.CastSpell(g.State[InHand(g, "Wrath")], 0);
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
     }
 
     [Fact]

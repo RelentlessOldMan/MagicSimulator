@@ -234,7 +234,7 @@ public sealed partial class Game
             var c = State[id];
             if (c.Zone != Zone.Battlefield) continue;
             Note($"{action.ToLowerInvariant()} {c.Name} (end of turn)");
-            MoveTo(c, action == "Exile" ? Zone.Exile : Zone.Graveyard);
+            if (action == "Exile") MoveTo(c, Zone.Exile); else Sacrifice(c);
         }
         State.ThisTurn.AtEndStep.Clear();
     }
@@ -290,6 +290,10 @@ public sealed partial class Game
         if (excess > 0)
             foreach (var id in Decider.ChooseCards(this, Me, Choice.Discard, null, me.Hand.ToList(), excess, excess))
                 Discard(State[id]);
+        // "Gain control until end of turn" ends.
+        foreach (var (id, controller) in State.ThisTurn.ControlUntilEot)
+            if (State[id].Zone == Zone.Battlefield) State[id].Controller = controller;
+        State.ThisTurn.ControlUntilEot.Clear();
         foreach (var c in State.BattlefieldCards)
         {
             c.Damage = 0;
@@ -495,7 +499,7 @@ public sealed partial class Game
         else
             cost = new Cost { Mana = c.CurrentFace.ManaCost };
         // "You may cast it without paying its mana cost" from an effect.
-        if (c.Zone is Zone.Exile or Zone.Graveyard or Zone.Library && Statics.MayPlay(this, c.Controller).GetValueOrDefault(c.Id))
+        if (c.Id == _freeCast || c.Zone is Zone.Exile or Zone.Graveyard or Zone.Library && Statics.MayPlay(this, c.Controller).GetValueOrDefault(c.Id))
             cost = new Cost { Mana = ManaCost.Zero, Tap = cost.Tap, Untap = cost.Untap, Parts = cost.Parts };
         var extra = c.Zone == Zone.Command ? 2 * c.CommandCasts : 0;
         extra -= Statics.CostReduction(this, c, c.Controller);
@@ -540,7 +544,7 @@ public sealed partial class Game
         {
             Id = State.NextStackId++, SourceId = c.Id, Ability = ability, Controller = player, IsSpell = true, X = x,
             ChainTargets = ChooseChainTargets(c, ability, player), Description = c.Name + (from == Zone.Graveyard ? " (flashback)" : ""),
-            ExileAfter = from == Zone.Graveyard,
+            ExileAfter = from == Zone.Graveyard || _castExileAfter,
         };
         _payingForSpell = true;
         var paid = PayCost(cost, c, player, x, excludeSourceFromMana: true);
@@ -565,6 +569,53 @@ public sealed partial class Game
             if (copies > 0) Note($"storm: {copies} cop{(copies == 1 ? "y" : "ies")}");
         }
         Fire(new TriggerEvent(TriggerMode.SpellCast, CardId: c.Id, Player: player));
+    }
+
+    // A cast an effect allows mid-resolution ("cast it without paying its mana cost"): which card, and whether it's exiled afterwards.
+    private int _freeCast = -1;
+    private bool _castExileAfter;
+
+    /// <summary>The spell abilities an effect could cast <paramref name="c"/> with now (-1 = as a permanent spell), ignoring timing.</summary>
+    private List<int> CastableFromEffect(Card c, bool free)
+    {
+        var saved = _freeCast;
+        _freeCast = free ? c.Id : -1;
+        try
+        {
+            var options = c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0
+                ? new List<int> { -1 } : Enumerable.Range(0, c.CurrentFace.SpellAbilities.Count).ToList();
+            return options.Where(i => CanCast(c, i)).ToList();
+        }
+        finally { _freeCast = saved; }
+    }
+
+    public bool CanCastFromEffect(Card c, bool free) => CastableFromEffect(c, free).Count > 0;
+
+    /// <summary>Casts a card as part of an effect's resolution (Play$), optionally without paying its mana cost.</summary>
+    public void CastFromEffect(Card c, bool free, bool exileAfter)
+    {
+        var options = CastableFromEffect(c, free);
+        if (options.Count == 0) return;
+        var index = options.Count == 1 ? options[0]
+            : options[Decider.ChooseOption(this, c.Controller, c, options.Select(i => i < 0 ? c.Name : c.CurrentFace.SpellAbilities[i].Description).ToList())];
+        _freeCast = free ? c.Id : -1;
+        _castExileAfter = exileAfter;
+        try { CastSpell(c, index); }
+        finally { _freeCast = -1; _castExileAfter = false; }
+    }
+
+    /// <summary>Puts a copy of a spell on the stack (rule 707.10), with new targets if allowed.</summary>
+    public void CopySpell(StackItem original, int controller, bool newTargets)
+    {
+        var source = State[original.SourceId];
+        var item = new StackItem
+        {
+            Id = State.NextStackId++, SourceId = original.SourceId, Ability = original.Ability, Controller = controller, IsSpell = false, X = original.X,
+            ChainTargets = newTargets ? ChooseChainTargets(source, original.Ability, controller) : original.ChainTargets.Select(t => new List<TargetRef>(t)).ToList(),
+            Description = source.Name + " (copy)",
+        };
+        State.Stack.Add(item);
+        Note($"copy {source.Name}" + TargetText(item));
     }
 
     public void ActivateAbility(Card c, int abilityIndex)
@@ -778,11 +829,12 @@ public sealed partial class Game
             else if (c.AttachedTo >= 0 && (!attachedOk || c.Types.HasSubtype("Equipment") && !host!.Types.Is(CardType.Creature))) c.AttachedTo = -1;
         }
         CheckEffectLinks();
+        FireZoneBatch();
         // A Saga with all its chapters done and none still waiting to resolve is sacrificed (rule 714.4).
         foreach (var saga in State.BattlefieldCards.Where(c => c.CurrentFace.Chapters.Count > 0).ToList())
             if (saga.CounterCount("LORE") >= saga.CurrentFace.Chapters.Count && !_pending.Any(t => t.SourceId == saga.Id)
                 && !State.Stack.Any(i => i.SourceId == saga.Id && saga.CurrentFace.Chapters.Any(t => t.Execute == i.Ability || (t.Modes?.Contains(i.Ability) ?? false))))
-                MoveTo(saga, Zone.Graveyard);
+                Sacrifice(saga);
         // Legend rule (704.5j): keep the newest.
         var legends = State.BattlefieldCards.Where(c => c.Types.Has(SuperType.Legendary)).GroupBy(c => (c.Controller, c.Name)).Where(g => g.Count() > 1);
         foreach (var grp in legends.ToList())

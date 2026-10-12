@@ -97,7 +97,43 @@ public sealed partial class Game
                 break;
         }
         if (to == Zone.Hand && c.Owner == Me) State.Record.Seen.Add(c.Name);
-        if (from != Zone.None || c.IsToken) Fire(new TriggerEvent(TriggerMode.ChangesZone, CardId: c.Id, From: from, To: to));
+        if (from != Zone.None || c.IsToken)
+        {
+            Fire(new TriggerEvent(TriggerMode.ChangesZone, CardId: c.Id, From: from, To: to));
+            _zoneBatch.Add((c.Id, from, to));
+        }
+    }
+
+    /// <summary>Zone changes since triggers were last checked: "whenever one or more …" triggers see them together.</summary>
+    private readonly List<(int CardId, Zone From, Zone To)> _zoneBatch = new();
+
+    /// <summary>Fires "one or more cards …" (ChangesZoneAll) triggers once for the zone changes that happened together.</summary>
+    private void FireZoneBatch()
+    {
+        if (_zoneBatch.Count == 0) return;
+        var batch = _zoneBatch.ToList();
+        _zoneBatch.Clear();
+        var sources = State.Battlefield.ToList();
+        foreach (var p in State.Players) sources.AddRange(p.Command);
+        foreach (var id in sources)
+        {
+            var src = State[id];
+            if (src.IsBlank) continue;
+            foreach (var t in src.Triggers)
+            {
+                if (t.Mode != "ChangesZoneAll") continue;
+                var x = new EffectContext
+                {
+                    Game = this, Ability = t.Execute ?? PermanentSpell, FaceOverride = t.Face,
+                    Item = new StackItem { SourceId = id, Ability = t.Execute ?? PermanentSpell, Controller = src.Controller },
+                };
+                var filter = t["ValidCards"] is { } vc ? Effect.FilterFor(x.SVarFace, vc) : null;
+                var n = batch.Count(m => Triggers.ZoneMatches(t["Origin"], m.From) && Triggers.ZoneMatches(t["Destination"], m.To)
+                                         && (filter is null || filter.MatchesCard(State[m.CardId], x)));
+                if (n == 0 || !Presence.Hold(t.P, x) || !Triggers.UnderLimit(this, src, t)) continue;
+                _pending.Add(new PendingTrigger(id, t, new TriggerEvent(TriggerMode.ChangesZoneAll, Amount: n), src.Controller));
+            }
+        }
     }
 
     /// <summary>"Enters with counters" and "as this enters" replacements (enters tapped, shocklands).</summary>
@@ -200,6 +236,15 @@ public sealed partial class Game
     }
 
     /// <summary>Taps a permanent, firing "whenever this becomes tapped" triggers.</summary>
+    /// <summary>Sacrifices a permanent: it goes to its owner's graveyard and "whenever you sacrifice" triggers fire.</summary>
+    public void Sacrifice(Card c)
+    {
+        if (c.Zone != Zone.Battlefield) return;
+        var controller = c.Controller;
+        MoveTo(c, Zone.Graveyard);
+        Fire(new TriggerEvent(TriggerMode.Sacrificed, CardId: c.Id, Player: controller));
+    }
+
     public void Tap(Card c)
     {
         if (c.Tapped) return;
@@ -317,7 +362,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false);
@@ -340,7 +385,7 @@ public sealed partial class Game
             var src = State[id];
             foreach (var t in src.Triggers)
             {
-                if (src.IsBlank || !Triggers.Matches(this, t, src, e)) continue;
+                if (src.IsBlank || !Triggers.Matches(this, t, src, e) || !Triggers.UnderLimit(this, src, t)) continue;
                 _pending.Add(new PendingTrigger(id, t, e, src.Controller));
             }
         }
@@ -372,6 +417,7 @@ public sealed partial class Game
                 Id = State.NextStackId++, SourceId = pt.SourceId, Ability = exec, Controller = pt.Controller,
                 TriggeredCardId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.TargetCardId : pt.Event.CardId,
                 TriggeredPlayer = pt.Event.Player, ChainTargets = ChooseChainTargets(src, exec, pt.Controller), DelayRemembered = pt.DelayRemembered,
+                TriggerAmount = pt.Event.Amount,
                 Description = $"{src.Name} trigger",
             };
             // "Static" triggers (bookkeeping such as forgetting an imprinted card) happen at once, without the stack.
@@ -563,7 +609,7 @@ public sealed partial class Game
             switch (part.Kind)
             {
                 case CostPartKind.PayLife: PayLife(player, int.Parse(part.Amount)); break;
-                case CostPartKind.Sacrifice: MoveTo(card, Zone.Graveyard); break;
+                case CostPartKind.Sacrifice: Sacrifice(card); break;
                 case CostPartKind.ExileSelf: MoveTo(card, Zone.Exile); break;
             }
         State.Players[player].Pool.Add(color, src.Amount);
@@ -681,10 +727,10 @@ public sealed partial class Game
                     PayLife(player, n);
                     break;
                 case CostPartKind.Sacrifice:
-                    if (part.Valid == "CARDNAME") MoveTo(source, Zone.Graveyard);
+                    if (part.Valid == "CARDNAME") Sacrifice(source);
                     else
                         foreach (var id in Decider.ChooseCards(this, player, Choice.Sacrifice, source, CostCandidates(part, source, player), n, n))
-                            MoveTo(State[id], Zone.Graveyard);
+                            Sacrifice(State[id]);
                     break;
                 case CostPartKind.Discard:
                     if (part.Valid == "Hand")

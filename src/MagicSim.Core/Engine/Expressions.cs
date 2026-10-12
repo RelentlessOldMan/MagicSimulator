@@ -302,6 +302,9 @@ public sealed class Amount
         // The amount a replacement effect is replacing: damage, tokens, counters, life.
         if (core is "ReplaceCount$DamageAmount" or "ReplaceCount$CounterNum" or "ReplaceCount$Amount" or "ReplaceCount$LifeGained")
             return new(core, x => x.ReplacedAmount);
+        // The amount of the event that triggered this: damage dealt, life gained, cards moved.
+        if (core is "TriggerCount$DamageAmount" or "TriggerCount$LifeAmount" or "TriggerCount$Amount")
+            return new(core, x => x.Item.TriggerAmount);
         if (DefinedCardsRx.Match(core) is { Success: true } dm) return DefinedCardsAmount(core, dm, ctx);
         if (!core.StartsWith("Count$", StringComparison.Ordinal))
         {
@@ -420,7 +423,7 @@ public static class Defined
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
     {
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
-        "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
+        "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "RememberedCard", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
     };
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
@@ -460,7 +463,7 @@ public static class Defined
             "Self" => new() { x.Item.SourceId },
             "Targeted" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value).ToList(),
             "ParentTarget" => x.ParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value).ToList(),
-            "Remembered" or "RememberedLKI" => x.Host.Remembered?.ToList() ?? new(),
+            "Remembered" or "RememberedLKI" or "RememberedCard" => x.Host.Remembered?.ToList() ?? new(),
             "DelayTriggerRemembered" or "DelayTriggerRememberedLKI" => x.Item.DelayRemembered?.ToList() ?? new(),
             "TriggeredCard" or "TriggeredCardLKICopy" or "TriggeredNewCardLKICopy" =>
                 x.Item.TriggeredCardId is { } id ? new() { id } : new(),

@@ -58,7 +58,7 @@ public static class Effects
         new ManaReflectedEffect(), new FlipCoinEffect(), new RepeatEffect(), new StoreSVarEffect(),
         new EffectEffect(), new ChooseColorEffect(), new ChooseTypeEffect(), new ChoosePlayerEffect(),
         new CopyPermanentEffect(), new CloneEffect(), new AnimateEffect(), new ProliferateEffect(),
-        new DelayedTriggerEffect(), new RepeatEachEffect(),
+        new DelayedTriggerEffect(), new RepeatEachEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -650,7 +650,7 @@ sealed class SacrificeEffect : Effect
         var valid = x.Ability["SacValid"] ?? "Self";
         if (valid == "Self")
         {
-            if (x.Host.Zone == Zone.Battlefield) x.Game.MoveTo(x.Host, Zone.Graveyard);
+            x.Game.Sacrifice(x.Host);
             return;
         }
         var filter = FilterFor(x.SVarFace, valid);
@@ -660,7 +660,7 @@ sealed class SacrificeEffect : Effect
             var candidates = x.S.BattlefieldCards.Where(c => c.Controller == p && filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
             var n = Math.Min(Amount(x, x.Ability["Amount"], 1), candidates.Count);
             foreach (var id in x.Game.Decider.ChooseCards(x.Game, p, Choice.Sacrifice, x.Host, candidates, n, n))
-                x.Game.MoveTo(x.S[id], Zone.Graveyard);
+                x.Game.Sacrifice(x.S[id]);
         }
     }
 }
