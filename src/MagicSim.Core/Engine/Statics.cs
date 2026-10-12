@@ -15,8 +15,30 @@ public static class Presence
 
     private static readonly HashSet<string> KnownConditions = new(StringComparer.Ordinal)
     {
-        "PlayerTurn", "NotPlayerTurn", "Threshold", "Hellbent", "Metalcraft", "Delirium",
+        "PlayerTurn", "NotPlayerTurn", "Threshold", "Hellbent", "Metalcraft", "Delirium", "Kicked", "Bargain",
     };
+
+    public static bool IsKnownCondition(string cond) => KnownConditions.Contains(cond);
+
+    /// <summary>A named condition (Condition$, Activation$): Metalcraft, Threshold, "if it was kicked", …</summary>
+    public static bool ConditionHolds(string cond, EffectContext x)
+    {
+        var g = x.Game;
+        var you = x.Controller;
+        var me = g.State.Players[you];
+        return cond switch
+        {
+            "PlayerTurn" => g.State.ActivePlayer == you,
+            "NotPlayerTurn" => g.State.ActivePlayer != you,
+            "Threshold" => me.Graveyard.Count >= 7,
+            "Hellbent" => me.Hand.Count == 0,
+            "Metalcraft" => g.State.BattlefieldCards.Count(c => c.Controller == you && c.Types.Is(CardType.Artifact)) >= 3,
+            "Delirium" => CardTypesIn(g, me.Graveyard) >= 4,
+            "Kicked" => x.Host.PaidOptional?.Contains("Kicker") ?? false,
+            "Bargain" => x.Host.PaidOptional?.Contains("Bargain") ?? false,
+            _ => false,
+        };
+    }
 
     public static void Validate(ForgeParams p, CompileContext ctx)
     {
@@ -53,21 +75,7 @@ public static class Presence
             if (!CompareTo(count, p["PresentCompare"] ?? "GE1", x)) return false;
         }
         if (p["CheckSVar"] is { } sv && !CompareTo(Effect.EvalAmount(x, sv), p["SVarCompare"] ?? "GE1", x)) return false;
-        if (p["Condition"] is { } cond)
-        {
-            var me = g.State.Players[you];
-            var ok = cond switch
-            {
-                "PlayerTurn" => g.State.ActivePlayer == you,
-                "NotPlayerTurn" => g.State.ActivePlayer != you,
-                "Threshold" => me.Graveyard.Count >= 7,
-                "Hellbent" => me.Hand.Count == 0,
-                "Metalcraft" => g.State.BattlefieldCards.Count(c => c.Controller == you && c.Types.Is(CardType.Artifact)) >= 3,
-                "Delirium" => CardTypesIn(g, me.Graveyard) >= 4,
-                _ => false,
-            };
-            if (!ok) return false;
-        }
+        if (p["Condition"] is { } cond && !ConditionHolds(cond, x)) return false;
         return true;
     }
 
@@ -105,7 +113,7 @@ public static class Statics
         "Affected", "AffectedDefined", "AddPower", "AddToughness", "AddKeyword", "SetPower", "SetToughness",
         "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize", "MayPlay", "MayPlayWithoutManaCost",
         "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
-        "RemoveType", "RemoveAllAbilities",
+        "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
         "AddSVar",
         // Goaded creatures must attack someone else: only opponents' creatures get goaded, and they never attack.
@@ -201,8 +209,14 @@ public static class Statics
             if (mp != "True") ctx.Need("MayPlay:" + mp);
             if (s["AffectedZone"] is not ("Exile" or "Graveyard" or "Library" or "Command")) ctx.Need("MayPlay.AffectedZone:" + s["AffectedZone"]);
             if (s.P.Values.Keys.Any(k => k is "AddPower" or "AddToughness" or "AddKeyword" or "SetPower" or "SetToughness")) ctx.Need("MayPlay+Modify");
+            // "If you cast a spell this way, pay life equal to its mana value rather than pay its mana cost" (Bolas's Citadel).
+            if (s["MayPlayAltManaCost"] is { } alt) CardCompiler.ParseCost(alt.Replace("ConvertedManaCost", "1"), ctx);
         }
-        else if (s["AffectedZone"] is { } az && az != "Battlefield") ctx.Need("AffectedZone:" + az);
+        else if (s["MayPlayAltManaCost"] is not null) ctx.Need("MayPlayAltManaCost+NoMayPlay");
+        if (s["MayLookAt"] is { } look && (look != "You" || s["AffectedZone"] != "Library" || s["MayPlay"] is null && s.P.Values.Keys.Any(k => k is not ("Mode" or "Affected" or "AffectedZone" or "MayLookAt" or "Description"))))
+            ctx.Need("MayLookAt:" + look + "+" + s["AffectedZone"]);
+        if (s["MayPlay"] is null && s["MayLookAt"] is null && s["AffectedZone"] is { } az && az != "Battlefield" && !IsEscapeGrant(s))
+            ctx.Need("AffectedZone:" + az);
         if (s["EffectZone"] is { } ez && ez is not ("Battlefield" or "All" or "Command" or "Graveyard")) ctx.Need("EffectZone:" + ez);
         foreach (var key in new[] { "AddPower", "AddToughness", "SetPower", "SetToughness", "AdjustLandPlays" })
             if (s[key] is { } v && v != "Unlimited") Amount.Parse(v, ctx);
@@ -214,6 +228,40 @@ public static class Statics
         foreach (var key in new[] { "SetColor", "AddColor" })
             if (s[key] is { } col && col != "ChosenColor" && AnimateEffect.ColorsOf(col) is null) ctx.Need($"{key}:{col}");
         s.Grants = Grants.Compile(s.P, ctx, "AddAbility", "AddTrigger", null);
+    }
+
+    /// <summary>"Each nonland card in your graveyard has escape" (Underworld Breach): gives cards in the graveyard an escape cost.</summary>
+    private static bool IsEscapeGrant(StaticDef s) =>
+        s["AffectedZone"] == "Graveyard" && s["AddKeyword"] is { } k && k.StartsWith("Escape:", StringComparison.Ordinal) && !k.Contains('&')
+        && s.P.Values.Keys.All(key => key is "Mode" or "Affected" or "AffectedZone" or "AddKeyword" or "Description" or "EffectZone" || Presence.Params.Contains(key));
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Cost> CostCache = new();
+
+    private static Cost CachedCost(string text, FaceDef face) =>
+        CostCache.GetOrAdd(text, t => CardCompiler.ParseCost(t, new CompileContext { Face = face, Missing = new() }));
+
+    /// <summary>The cost to cast <paramref name="c"/> from its owner's graveyard with escape (its own, or given by a static), or null.</summary>
+    public static Cost? EscapeCost(Game g, Card c)
+    {
+        var text = c.CurrentFace.EscapeCost;
+        if (text is null)
+            foreach (var source in Sources(g))
+            {
+                if (source.Controller != c.Owner) continue;
+                foreach (var st in source.Statics)
+                {
+                    if (st.Mode != "Continuous" || !IsEscapeGrant(st) || !WorksFrom(source, st)) continue;
+                    var x = ContextFor(g, source, st);
+                    if (st["Affected"] is { } a && !Effect.FilterFor(source.CurrentFace, a).MatchesCard(c, x)) continue;
+                    if (!Presence.Hold(st.P, x)) continue;
+                    text = st["AddKeyword"]![7..];
+                    break;
+                }
+                if (text is not null) break;
+            }
+        if (text is null) return null;
+        var cost = CachedCost(text.Replace("CardManaCost", "").Trim(), c.CurrentFace);
+        return text.Contains("CardManaCost", StringComparison.Ordinal) ? new Cost { Mana = c.CurrentFace.ManaCost }.Plus(cost) : cost;
     }
 
     private static EffectContext ContextFor(Game g, Card source, StaticDef? st = null) => new()
@@ -233,7 +281,14 @@ public static class Statics
         var active = new List<(Card Source, StaticDef Static, EffectContext X)>();
         foreach (var c in Sources(g))
             foreach (var st in c.Statics)
-                if (st.Mode == "Continuous" && st["MayPlay"] is null && WorksFrom(c, st)) active.Add((c, st, ContextFor(g, c, st)));
+            {
+                if (st.Mode != "Continuous" || !WorksFrom(c, st)) continue;
+                // "You may look at the top card of your library any time": that card is known.
+                if (st["MayLookAt"] is not null && c.Zone == Zone.Battlefield && s.Players[c.Controller] is { IsGoldfish: false } looker && looker.Library.Count > 0)
+                    looker.KnownTop = Math.Max(looker.KnownTop, 1);
+                // Effects on cards in other zones (may play, escape) are looked up where they matter.
+                if (st["MayPlay"] is null && st["MayLookAt"] is null && st["AffectedZone"] is null or "Battlefield") active.Add((c, st, ContextFor(g, c, st)));
+            }
         var animated = s.BattlefieldCards.Where(c => c.Animations is not null).ToList();
         var leveled = s.BattlefieldCards.Where(c => c.ClassLevel > 1).ToList();
         if (active.Count == 0 && animated.Count == 0 && leveled.Count == 0 && !g.StaticsApplied) return;
@@ -395,10 +450,13 @@ public static class Statics
                 if (g.State[id].IsEffect) yield return g.State[id];
     }
 
-    /// <summary>Cards outside the hand that <paramref name="player"/> may play now, and whether without paying their mana cost.</summary>
-    public static Dictionary<int, bool> MayPlay(Game g, int player)
+    /// <summary>How a card outside the hand may be played: free, or for another cost instead of its mana cost.</summary>
+    public readonly record struct MayPlayGrant(bool Free, string? AltManaCost);
+
+    /// <summary>Cards outside the hand that <paramref name="player"/> may play now, and how.</summary>
+    public static Dictionary<int, MayPlayGrant> MayPlay(Game g, int player)
     {
-        var result = new Dictionary<int, bool>();
+        var result = new Dictionary<int, MayPlayGrant>();
         foreach (var source in Sources(g))
         {
             if (source.Controller != player) continue;
@@ -411,11 +469,19 @@ public static class Statics
                 var filter = st["Affected"] is { } a ? Effect.FilterFor(source.CurrentFace, a) : null;
                 foreach (var c in g.CardsIn(zone))
                     if (c.Owner == player && !c.IsEffect && (filter is null || filter.MatchesCard(c, x)))
-                        result[c.Id] = result.GetValueOrDefault(c.Id) || st["MayPlayWithoutManaCost"] == "True";
+                    {
+                        var grant = new MayPlayGrant(st["MayPlayWithoutManaCost"] == "True", st["MayPlayAltManaCost"]);
+                        // The cheapest way wins: free, then an alternative cost, then the normal cost.
+                        result[c.Id] = result.TryGetValue(c.Id, out var had) && (had.Free || had.AltManaCost is not null && !grant.Free) ? had : grant;
+                    }
             }
         }
         return result;
     }
+
+    /// <summary>The cost of a card played with a "may play … rather than pay its mana cost" grant (e.g. PayLife&lt;ConvertedManaCost&gt;).</summary>
+    public static Cost AltManaCost(Card c, string text) =>
+        CachedCost(text.Replace("ConvertedManaCost", c.CurrentFace.ManaCost.ManaValue.ToString()), c.CurrentFace);
 
     private static IEnumerable<Card> AffectedCards(Game g, Card source, StaticDef st, EffectContext x)
     {

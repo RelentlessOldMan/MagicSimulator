@@ -17,6 +17,12 @@ public sealed class Cost
     public IReadOnlyList<CostPart> Parts { get; init; } = Array.Empty<CostPart>();
     public bool HasNonManaParts => Tap || Untap || Parts.Count > 0;
 
+    /// <summary>This cost and another together (kicker, splice, escape's "plus exile …").</summary>
+    public Cost Plus(Cost other) => new()
+    {
+        Mana = Mana.Plus(other.Mana), Tap = Tap || other.Tap, Untap = Untap || other.Untap, Parts = Parts.Concat(other.Parts).ToList(),
+    };
+
     public static readonly Cost Free = new();
 }
 
@@ -65,6 +71,12 @@ public sealed class AbilityDef
     public Grants? Grants { get; set; }
     /// <summary>The trigger a DelayedTrigger effect sets up.</summary>
     public TriggerDef? Delayed { get; set; }
+    /// <summary>A spell cast paying optional additional costs (kicker, bargain): what it adds, and their names.</summary>
+    public Cost? ExtraCost { get; set; }
+    public string[]? OptionalCosts { get; set; }
+    /// <summary>For one combination of a modal ability whose number of modes is an expression: the expression, and how many modes this is.</summary>
+    public string? CharmNumExpr { get; set; }
+    public int CharmCount { get; set; }
 
     public AbilityDef CloneHead() => (AbilityDef)MemberwiseClone();
     public string Description => ModeDescription ?? P["SpellDescription"] ?? P["StackDescription"] ?? Api;
@@ -124,8 +136,8 @@ public sealed class FaceDef
     public List<AbilityDef> EtbReplacements { get; } = new();
     /// <summary>"Doesn't untap during your untap step."</summary>
     public bool DoesntUntap { get; set; }
-    /// <summary>"Enters with N counters": (counter type, amount expression).</summary>
-    public List<(string Kind, string Amount)> EtbCounters { get; } = new();
+    /// <summary>"Enters with N counters": (counter type, amount expression, condition such as "if it was kicked").</summary>
+    public List<(string Kind, string Amount, ForgeParams? Condition)> EtbCounters { get; } = new();
     /// <summary>Flashback cost, if it has flashback.</summary>
     public Cost? Flashback { get; set; }
     public Dictionary<string, string> SVars { get; init; } = new();
@@ -142,6 +154,12 @@ public sealed class FaceDef
     public AbilityDef? OpeningHand { get; set; }
     /// <summary>A Class's levels 2+: what each level gives (rule 716).</summary>
     public List<(int Level, Grants Grants)> ClassLevels { get; } = new();
+    /// <summary>Optional additional costs (kicker, bargain): each becomes a twin of every spell ability.</summary>
+    public List<(string[] Names, Cost Cost)> OptionalCosts { get; } = new();
+    /// <summary>Its own escape cost, in Forge's form ("CardManaCost" = its mana cost).</summary>
+    public string? EscapeCost { get; set; }
+    /// <summary>"Splice onto [subtype] [cost]" (rule 702.47).</summary>
+    public (string Onto, Cost Cost)? Splice { get; set; }
 
     /// <summary>This face as a copy effect changes it ("except it's an artifact", "except it has haste").</summary>
     public FaceDef CopyWith(TypeLine types, int? power, int? toughness, ColorMask colors, IReadOnlyList<string> extraKeywords)
@@ -150,6 +168,7 @@ public sealed class FaceDef
         {
             Name = Name, ManaCost = ManaCost, Types = types, Power = power, Toughness = toughness, Colors = colors, Loyalty = Loyalty,
             AuraSpell = AuraSpell, DoesntUntap = DoesntUntap, Flashback = Flashback, SVars = SVars, Oracle = Oracle, EtbCopy = EtbCopy,
+            EscapeCost = EscapeCost, Splice = Splice,
         };
         f.KeywordNames.UnionWith(KeywordNames);
         f.RawKeywords.AddRange(RawKeywords);
@@ -213,11 +232,14 @@ public static partial class CardCompiler
         "SorcerySpeed", "ActivationPhases", "InstantSpeed", "PlayerTurn", "AnyPlayer", "TargetType", "MayChooseTarget",
         "Planeswalker", "Ultimate", "AIHintRequired", "AIActivateLast", "ShowCurrentCard", "AICheckSVar", "AISVarCompare",
         "ValidDescription", "ValidCardsDesc", "ValidTgtsDesc", "ChoiceTitle", "AIRespondsToOwnAbility", "TgtPromptInfo",
-        "AIPhyrexianPayment", "NoLooking",
+        "AIPhyrexianPayment", "NoLooking", "UnlessAI", "ValidMessage",
     };
 
     /// <summary>Parameters any ability may have, handled by the engine rather than the effect.</summary>
-    private static readonly HashSet<string> GenericParams = new(StringComparer.Ordinal) { "UnlessCost", "UnlessPayer", "ETB", "ActivationZone", "OptionalDecider" };
+    private static readonly HashSet<string> GenericParams = new(StringComparer.Ordinal)
+    {
+        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "ETB", "ActivationZone", "OptionalDecider", "Activation",
+    };
 
     public static CardDef Compile(ForgeCard source, Func<string, CardDef?>? tokens = null)
     {
@@ -298,6 +320,7 @@ public static partial class CardCompiler
                 alt.ModeDescription = "Evoke";
                 face.SpellAbilities.Add(alt);
             }
+        foreach (var (names, extra) in face.OptionalCosts) AddOptionalCost(face, names, extra, ctx);
         foreach (var r in f.Replacements) CompileReplacement(r, face, ctx);
         // "*" power/toughness needs a characteristic-defining ability to say what it is.
         if (starPT && !face.Statics.Any(st => st.Mode == "Continuous" && st["CharacteristicDefining"] == "True")) ctx.Need("PT:*");
@@ -360,14 +383,20 @@ public static partial class CardCompiler
                 face.Activated[^1].IsCycling = true;
                 return true;
             case "etbCounter":
-                if (Part(1).StartsWith("EACH", StringComparison.Ordinal) || Part(3).Length > 0 && Part(3) != "no Condition")
+            {
+                if (Part(1).StartsWith("EACH", StringComparison.Ordinal)) { ctx.Need("Keyword:etbCounter+EACH"); return true; }
+                // "If it was kicked, it enters with …": K:etbCounter:P1P1:2:CheckSVar$ WasKicked:description
+                ForgeParams? condition = null;
+                if (Part(3).Length > 0 && Part(3) != "no Condition")
                 {
-                    ctx.Need("Keyword:etbCounter+condition");
-                    return true;
+                    condition = new ForgeParams(Part(3));
+                    if (condition.Values.Keys.Any(k => !Presence.Params.Contains(k))) { ctx.Need("Keyword:etbCounter+" + Part(3).Split('$')[0]); return true; }
+                    Presence.Validate(condition, ctx);
                 }
                 Amount.Parse(Part(2), ctx);
-                face.EtbCounters.Add((Part(1), Part(2)));
+                face.EtbCounters.Add((Part(1), Part(2), condition));
                 return true;
+            }
             case "Flashback":
                 face.Flashback = ParseCost(Part(1), ctx);
                 return true;
@@ -469,6 +498,29 @@ public static partial class CardCompiler
                 face.EvokeCost = cost;
                 return true;
             }
+            case "Kicker":
+                // "Kicker {cost}": one optional additional cost. Two different kicker costs aren't supported yet.
+                if (Part(2).Length > 0) { ctx.Need("Keyword:Kicker+Second"); return true; }
+                face.OptionalCosts.Add((new[] { "Kicker" }, ParseCost(Part(1), ctx)));
+                return true;
+            case "Bargain":
+                // "You may sacrifice an artifact, enchantment, or token as you cast this spell."
+                face.OptionalCosts.Add((new[] { "Bargain" }, ParseCost("Sac<1/Artifact;Enchantment;Card.token/artifact, enchantment, or token>", ctx)));
+                return true;
+            case "Escape":
+                // K:Escape:<cost>, e.g. "3 B B ExileFromGrave<4/Card.Other/other>"; cast from the graveyard for it.
+                ParseCost(string.Join(':', parts.Skip(1)).Replace("CardManaCost", "").Trim(), ctx);
+                face.EscapeCost = string.Join(':', parts.Skip(1)).Trim();
+                return true;
+            case "Splice":
+                // K:Splice:Arcane:1 R
+                if (Part(1).Length == 0 || Part(2).Length == 0) { ctx.Need("Keyword:Splice+" + raw); return true; }
+                face.Splice = (Part(1), ParseCost(Part(2), ctx));
+                return true;
+            case "Transmute":
+                // "{cost}, discard this: search for a card with the same mana value. Transmute only as a sorcery."
+                AddGenerated(face, ctx, $"AB$ ChangeZone | Cost$ {Part(1)} Discard<1/CARDNAME> | ActivationZone$ Hand | Origin$ Library | Destination$ Hand | ChangeType$ Card.cmcEQ{face.ManaCost.ManaValue} | ChangeNum$ 1 | SorcerySpeed$ True | SpellDescription$ Transmute");
+                return true;
             case "Changeling":
                 face.Types = new TypeLine { Types = face.Types.Types, Supers = face.Types.Supers, Subtypes = face.Types.Subtypes, AllCreatureTypes = true };
                 return true;
@@ -513,6 +565,24 @@ public static partial class CardCompiler
             alt.AltCostOf = st;
             alt.ModeDescription = (ab.ModeDescription ?? ab.Description) + " (alternative cost)";
             face.SpellAbilities.Add(alt);
+        }
+    }
+
+    /// <summary>"You may pay an additional [cost] as you cast this spell" (kicker, bargain): each way to cast it gets a twin that pays it.</summary>
+    private static void AddOptionalCost(FaceDef face, string[] names, Cost extra, CompileContext ctx)
+    {
+        if (face.SpellAbilities.Count == 0)
+        {
+            if (face.AuraSpell is not null) { ctx.Need("OptionalCost:Aura"); return; }
+            face.SpellAbilities.Add(new AbilityDef { P = new ForgeParams("SP$ PermanentSpell"), Api = "PermanentSpell", Kind = AbilityKind.Spell });
+        }
+        foreach (var ab in face.SpellAbilities.Where(a => a.OptionalCosts is null).ToList())
+        {
+            var twin = ab.CloneHead();
+            twin.ExtraCost = extra;
+            twin.OptionalCosts = names;
+            twin.ModeDescription = (ab.ModeDescription ?? ab.Description) + $" ({string.Join(", ", names).ToLowerInvariant()})";
+            face.SpellAbilities.Add(twin);
         }
     }
 
@@ -574,7 +644,14 @@ public static partial class CardCompiler
     {
         if (ab.Api != "Charm") return new() { ab };
         var choices = (ab["Choices"] ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (!int.TryParse(ab["CharmNum"] ?? "1", out var max)) { ctx.Need("Charm:CharmNum"); return new() { ab }; }
+        // "Choose one. If you control a commander, you may choose both": the limit is worked out as it's cast.
+        string? charmExpr = null;
+        if (!int.TryParse(ab["CharmNum"] ?? "1", out var max))
+        {
+            charmExpr = ab["CharmNum"]!;
+            Amount.Parse(charmExpr, ctx);
+            max = choices.Length;
+        }
         if (!int.TryParse(ab["MinCharmNum"] ?? max.ToString(), out var min)) { ctx.Need("Charm:MinCharmNum"); return new() { ab }; }
         min = Math.Max(1, min);
         max = Math.Min(max, choices.Length);
@@ -588,7 +665,11 @@ public static partial class CardCompiler
         var result = new List<AbilityDef>();
         foreach (var combo in combos)
         {
-            var head = new AbilityDef { P = ab.P, Api = "Charm", Kind = ab.Kind, Cost = ab.Cost, ChainIndex = ab.ChainIndex, Face = ab.Face };
+            var head = new AbilityDef
+            {
+                P = ab.P, Api = "Charm", Kind = ab.Kind, Cost = ab.Cost, ChainIndex = ab.ChainIndex, Face = ab.Face,
+                CharmNumExpr = charmExpr, CharmCount = combo.Length,
+            };
             var tail = head;
             foreach (var i in combo)
             {
@@ -642,6 +723,9 @@ public static partial class CardCompiler
 
         if (p["OptionalDecider"] is { } od && od is not ("You" or "TargetedController" or "Targeted" or "Opponent" or "TriggeredActivator"))
             ctx.Need("OptionalDecider:" + od);
+        // "Activate only if …" (Activation$ Metalcraft).
+        if (p["Activation"] is { } activation && !Presence.IsKnownCondition(activation)) ctx.Need("Activation:" + activation);
+        if (p["UnlessResolveSubs"] is { } urs && urs != "WhenPaid") ctx.Need("UnlessResolveSubs:" + urs);
         if (p["UnlessCost"] is { } unless)
         {
             ab.UnlessCost = ParseCost(unless, ctx);

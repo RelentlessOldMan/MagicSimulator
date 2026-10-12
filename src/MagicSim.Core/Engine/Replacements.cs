@@ -14,6 +14,8 @@ public enum ReplacementKind
     AddTokens,
     /// <summary>Creating tokens creates others instead (Divine Visitation, Academy Manufactor).</summary>
     ReplaceTokens,
+    /// <summary>A step is skipped ("skip your draw step": Necropotence).</summary>
+    SkipStep,
 }
 
 /// <summary>A replacement effect (rule 614) of a permanent or effect object, other than its own "as this enters".</summary>
@@ -66,6 +68,15 @@ public static class Replacements
             if (r[key] is { } ovc && ovc.Split(',').All(t => t.Contains("OppCtrl", StringComparison.Ordinal) || t.Contains("OppOwn", StringComparison.Ordinal)))
                 return true;
 
+        // "Skip your [step]": BeginPhase with Skip$ True.
+        if (evt == "BeginPhase" && r["Skip"] == "True" && r["Phase"] is { } phase && phase.Split(',').All(ph => Enum.GetValues<Step>().Any(st => Conditions.PhaseIs(st, ph.Trim())))
+            && r.Values.Keys.All(k => Common.Contains(k) || k is "ValidPlayer" or "Phase" or "Skip" || Presence.Params.Contains(k)))
+        {
+            if (r["ValidPlayer"] is { } svp) Filter.Parse(svp, ctx);
+            Presence.Validate(r, ctx);
+            face.Replacements.Add(new ReplacementDef { P = r, Event = evt, Kind = ReplacementKind.SkipStep, Face = face });
+            return true;
+        }
         if (!MatchParams.TryGetValue(evt, out var own)) return false;
         if (r.Values.Keys.Any(k => !Common.Contains(k) && !own.Contains(k) && !Presence.Params.Contains(k))) return false;
         if (r["ReplaceWith"] is not { } with || !face.SVars.TryGetValue(with, out var body)) return false;
@@ -268,6 +279,18 @@ public static class Replacements
         return result.Select(t => (t.Item1, Amount(g, "CreateToken", t.Item2,
             targetCard: new Card { Id = g.State.Cards.Count, Def = t.Item1, Owner = owner, Controller = owner, Zone = Zone.Battlefield, IsToken = true },
             targetPlayer: owner))).ToList();
+    }
+
+    /// <summary>Whether <paramref name="player"/> skips <paramref name="step"/> of their turn.</summary>
+    public static bool SkipsStep(Game g, int player, Step step)
+    {
+        foreach (var (host, r) in Active(g, "BeginPhase"))
+        {
+            if (r.Kind != ReplacementKind.SkipStep || !r["Phase"]!.Split(',').Any(ph => Conditions.PhaseIs(step, ph.Trim()))) continue;
+            var x = ContextFor(g, host, r, 0);
+            if (PlayerOk(r, "ValidPlayer", player, x) && Presence.Hold(r.P, x)) return true;
+        }
+        return false;
     }
 
     /// <summary>Where a card moving to <paramref name="to"/> actually goes (Rest in Peace sends graveyard-bound cards to exile).</summary>

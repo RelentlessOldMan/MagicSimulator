@@ -67,6 +67,12 @@ public sealed class Card
     public int LoyaltyActivatedTurn { get; set; }
     /// <summary>Regeneration shields until end of turn (rule 701.15).</summary>
     public int RegenShields { get; set; }
+    /// <summary>Optional additional costs paid when it was last cast ("Kicker", "Bargain"): "if it was kicked".</summary>
+    public string[]? PaidOptional { get; set; }
+    /// <summary>A replacement as it enters sends it somewhere else instead (Mox Diamond without a land to discard).</summary>
+    public Zone? EnterInstead { get; set; }
+    /// <summary>The card whose effect last exiled this one ("exiled with [source]").</summary>
+    public int ExiledWith { get; set; } = -1;
 
     // Results of continuous effects (rule 613), recomputed by Game.ApplyStatics.
     public int? SetPower { get; set; }
@@ -156,7 +162,7 @@ public sealed class Card
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
         NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
-        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
+        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, PaidOptional = PaidOptional, ExiledWith = ExiledWith, LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
         Animations = Animations is null ? null : new List<Animation>(Animations),
@@ -197,6 +203,10 @@ public sealed class Player
     public List<int> Command { get; set; } = new();
 
     public int LibraryCount => IsGoldfish ? AbstractLibrary : Library.Count;
+
+    /// <summary>Goldfish opponents have no real hand; for "cards in an opponent's hand" they're assumed to hold a full grip.</summary>
+    public const int AssumedGoldfishHand = 7;
+    public int HandCount => IsGoldfish ? AssumedGoldfishHand : Hand.Count;
 
     public Player Clone() => new()
     {
@@ -246,10 +256,12 @@ public sealed class StackItem
     public List<int>? DelayRemembered { get; init; }
     /// <summary>The player a RepeatEach is currently on ("Remembered" as a player).</summary>
     public int? IteratedPlayer { get; set; }
+    /// <summary>Cards spliced onto this spell: their effects follow its own (rule 702.47).</summary>
+    public List<int>? Spliced { get; set; }
 
     public StackItem Clone() => new()
     {
-        DelayRemembered = DelayRemembered, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount, Sacrificed = Sacrificed,
+        DelayRemembered = DelayRemembered, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount, Sacrificed = Sacrificed, Spliced = Spliced,
         TriggeredSourceId = TriggeredSourceId,
         Id = Id, SourceId = SourceId, Ability = Ability, Controller = Controller, IsSpell = IsSpell,
         ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, TriggeredPlayer = TriggeredPlayer, Description = Description, ExileAfter = ExileAfter,

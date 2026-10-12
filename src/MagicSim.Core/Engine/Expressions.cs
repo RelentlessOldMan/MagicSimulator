@@ -118,7 +118,8 @@ public sealed class Filter
             "ThisTurnEntered" => (c, pl, x) => c is not null && c.Zone == Zone.Battlefield && c.EnteredTurn == x.S.Turn,
             "Historic" => (c, pl, x) => c is not null && (c.Types.Has(SuperType.Legendary) || c.Types.Is(CardType.Artifact) || c.Types.HasSubtype("Saga")),
             "ChosenColor" => (c, pl, x) => c is not null && x.Host.ChosenColor is { } cc && (c.Colors & cc.Mask()) != 0,
-            "ChosenType" => (c, pl, x) => c is not null && x.Host.ChosenType is { } ct && c.Types.HasSubtype(ct),
+            "ChosenType" => (c, pl, x) => c is not null && x.Host.ChosenType is { } ct
+                && (c.Types.HasSubtype(ct) || CardTypes.TryGetValue(ct, out var chosenCardType) && c.Types.Is(chosenCardType)),
             "IsImprinted" => (c, pl, x) => c is not null && (x.Host.Imprinted?.Contains(c.Id) ?? false),
             "sharesNameWith Remembered" => (c, pl, x) => c is not null && x.Host.Remembered is { } rem
                 && rem.Any(id => id != c.Id && x.S[id].Name == c.Name),
@@ -131,8 +132,16 @@ public sealed class Filter
             "Multicolor" => (c, pl, x) => c is not null && System.Numerics.BitOperations.PopCount((uint)c.Colors) > 1,
             "MonoColor" => (c, pl, x) => c is not null && System.Numerics.BitOperations.PopCount((uint)c.Colors) == 1,
             "Permanent" => (c, pl, x) => c is not null && c.Types.IsPermanent,
+            "ExiledWithSource" => (c, pl, x) => c is not null && c.Zone == Zone.Exile && c.ExiledWith == x.Item.SourceId,
+            "ExiledWithSourceLKI" => (c, pl, x) => c is not null && c.ExiledWith == x.Item.SourceId,
             _ => null,
         };
+        // "namedRite of Flame": cards with that name.
+        if (test is null && p.StartsWith("named", StringComparison.Ordinal) && p.Length > 5)
+        {
+            var name = p[5..];
+            test = (c, pl, x) => c is not null && string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase);
+        }
 
         if (test is null && p.StartsWith("inZone", StringComparison.Ordinal) && Enum.TryParse<Zone>(p[6..], out var zone))
             test = (c, pl, x) => c is not null && c.Zone == zone;
@@ -308,8 +317,15 @@ public sealed class Amount
         if (core is "TriggerCount$DamageAmount" or "TriggerCount$LifeAmount" or "TriggerCount$Amount")
             return new(core, x => x.Item.TriggerAmount);
         if (DefinedCardsRx.Match(core) is { Success: true } dm) return DefinedCardsAmount(core, dm, ctx);
-        if (core == "PlayerCountOpponents$Amount")
-            return new(core, x => x.S.Players.Count(p => p.Index != x.Controller && !p.Lost));
+        if (PlayerCountRx.Match(core) is { Success: true } pm) return PlayerCountAmount(core, pm, ctx);
+        if (DefinedPlayerRx.Match(core) is { Success: true } dp)
+        {
+            var prop = PlayerProperty(dp.Groups[2].Value, ctx);
+            if (prop is null) return Const(0);
+            return dp.Groups[1].Value == "You"
+                ? new(core, x => prop(x.Controller, x))
+                : new(core, x => Defined.Players("Targeted", x) is [var first, ..] ? prop(first, x) : 0);
+        }
         if (!core.StartsWith("Count$", StringComparison.Ordinal))
         {
             ctx.Need("Amount:" + core);
@@ -323,6 +339,14 @@ public sealed class Amount
         if (kind.StartsWith("Threshold.", StringComparison.Ordinal) && kind.Split('.') is [_, var a, var b]
             && int.TryParse(a, out var ifYes) && int.TryParse(b, out var ifNo))
             return new(core, x => x.S.Players[x.Controller].Graveyard.Count >= 7 ? ifYes : ifNo);
+        // "Count$Kicked.2.1": one number if it was kicked (bargained), another if not.
+        if ((kind.StartsWith("Kicked.", StringComparison.Ordinal) || kind.StartsWith("Bargained.", StringComparison.Ordinal)) && kind.Split('.') is [var which, var k1, var k0]
+            && int.TryParse(k1, out var paidValue) && int.TryParse(k0, out var unpaidValue))
+        {
+            var label = which == "Kicked" ? "Kicker" : "Bargain";
+            return new(core, x => x.Host.PaidOptional?.Contains(label) ?? false ? paidValue : unpaidValue);
+        }
+        if (kind == "TimesKicked") return new(core, x => x.Host.PaidOptional?.Count(o => o.StartsWith("Kicker", StringComparison.Ordinal)) ?? 0);
         if (kind == "Compare" && arg.Split(' ') is [var left, var rest] && rest.Length > 2 && rest[2..].Split('.') is [var rhs, var yes, var no])
         {
             var l = Parse(left, ctx, depth + 1);
@@ -389,6 +413,63 @@ public sealed class Amount
         return Const(0);
     }
 
+    private static readonly Regex PlayerCountRx = new(@"^PlayerCount(Players|Opponents)\$(Amount|Highest|Lowest)?(.*)$", RegexOptions.Compiled);
+    private static readonly Regex DefinedPlayerRx = new(@"^(TargetedPlayer|You)\$(.+)$", RegexOptions.Compiled);
+
+    /// <summary>"PlayerCountOpponents$Amount", "PlayerCountPlayers$HighestValidGraveyard Card.YouOwn": over a group of players, how many, the most, the least, or the total.</summary>
+    private static Amount PlayerCountAmount(string core, Match m, CompileContext ctx)
+    {
+        var opponents = m.Groups[1].Value == "Opponents";
+        IEnumerable<int> Players(EffectContext x) => x.S.Players.Where(p => !p.Lost && (!opponents || p.Index != x.Controller)).Select(p => p.Index);
+        if (m.Groups[2].Value == "Amount")
+        {
+            if (m.Groups[3].Value.Length > 0) ctx.Need("Amount:" + core);
+            return new(core, x => Players(x).Count());
+        }
+        var prop = PlayerProperty(m.Groups[3].Value, ctx);
+        if (prop is null) return Const(0);
+        return m.Groups[2].Value switch
+        {
+            "Highest" => new(core, x => Players(x).Select(p => prop(p, x)).DefaultIfEmpty(0).Max()),
+            "Lowest" => new(core, x => Players(x).Select(p => prop(p, x)).DefaultIfEmpty(0).Min()),
+            _ => new(core, x => Players(x).Sum(p => prop(p, x))),
+        };
+    }
+
+    /// <summary>A number about one player: "CardsInHand", "LifeTotal", "ValidGraveyard Card.YouOwn" (with "you" being that player).</summary>
+    private static Func<int, EffectContext, int>? PlayerProperty(string text, CompileContext ctx)
+    {
+        switch (text)
+        {
+            case "CardsInHand": return (p, x) => x.S.Players[p].HandCount;
+            case "CardsInLibrary": return (p, x) => x.S.Players[p].LibraryCount;
+            case "CardsInGraveyard": return (p, x) => x.S.Players[p].Graveyard.Count;
+            case "LifeTotal": return (p, x) => x.S.Players[p].Life;
+            case "PoisonCounters": return (p, x) => x.S.Players[p].Poison;
+        }
+        var space = text.IndexOf(' ');
+        if (text.StartsWith("Valid", StringComparison.Ordinal) && space > 0)
+        {
+            var zones = new List<Zone>();
+            foreach (var w in text[5..space].Split(','))
+                if (w is "" or "Battlefield") zones.Add(Zone.Battlefield);
+                else if (Enum.TryParse<Zone>(w, out var z) && z is Zone.Graveyard or Zone.Hand or Zone.Library or Zone.Exile) zones.Add(z);
+                else { ctx.Need("PlayerProperty:" + text); return null; }
+            var filter = Filter.Parse(text[(space + 1)..], ctx);
+            return (p, x) =>
+            {
+                var asPlayer = x.Controller == p ? x : new EffectContext
+                {
+                    Game = x.Game, Ability = x.Ability, FaceOverride = x.FaceOverride, ReplacedAmount = x.ReplacedAmount,
+                    Item = new StackItem { SourceId = x.Item.SourceId, Ability = x.Item.Ability, Controller = p, X = x.Item.X, IteratedPlayer = x.Item.IteratedPlayer },
+                };
+                return zones.SelectMany(z => x.Game.CardsIn(z)).Count(c => filter.MatchesCard(c, asPlayer));
+            };
+        }
+        ctx.Need("PlayerProperty:" + text);
+        return null;
+    }
+
     private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|TriggeredSpellAbility|Remembered|Imprinted|Sacrificed)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+)(?: (.+))?$", RegexOptions.Compiled);
 
     /// <summary>"Targeted$CardPower", "Remembered$CardManaCost", "Imprinted$Valid Card.X": a property of defined cards (summed), or how many there are.</summary>
@@ -450,6 +531,7 @@ public static class Defined
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
         "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards",
         "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
+        "ReplacedCard", "TopOfLibrary",
     };
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
@@ -504,6 +586,9 @@ public static class Defined
             "Enchanted" or "Equipped" => x.Host.AttachedTo >= 0 ? new() { x.Host.AttachedTo } : new(),
             "Imprinted" => x.Host.Imprinted?.ToList() ?? new(),
             "Sacrificed" or "SacrificedCards" => x.Item.Sacrificed?.ToList() ?? new(),
+            // The card a replacement effect is replacing the event of: its own "as this enters" (Mox Diamond).
+            "ReplacedCard" => new() { x.Item.SourceId },
+            "TopOfLibrary" => x.S.Players[x.Controller].Library.Take(1).ToList(),
             _ => new(),
         };
     }

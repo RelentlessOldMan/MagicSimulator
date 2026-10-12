@@ -42,7 +42,7 @@ sealed class PlayEffect : Effect
     public override string Api => "Play";
     public override IReadOnlySet<string> Params { get; } = P(
         "Defined", "Valid", "ValidZone", "ValidSA", "WithoutManaCost", "Optional", "Amount", "Controller", "ForgetPlayed", "RememberPlayed",
-        "ReplaceGraveyard");
+        "ReplaceGraveyard", "ImprintPlayed");
 
     private static readonly HashSet<string> Zones = new(StringComparer.Ordinal) { "Hand", "Exile", "Graveyard", "Library", "Command" };
 
@@ -52,7 +52,12 @@ sealed class PlayEffect : Effect
         else if (ab["Valid"] is { } v) Filter.Parse(v, ctx);
         else if (ab.TargetFilter is null) ctx.Need("Play:NothingToPlay");
         if (ab["ValidZone"] is { } z && !Zones.Contains(z)) ctx.Need("Play.ValidZone:" + z);
-        if (ab["ValidSA"] is { } sa && sa != "Spell") ctx.Need("Play.ValidSA:" + sa);
+        // "Spell.cmcLE4": a spell with mana value 4 or less.
+        if (ab["ValidSA"] is { } sa && sa != "Spell")
+        {
+            if (sa.StartsWith("Spell.", StringComparison.Ordinal) && !sa.Contains(',')) Filter.Parse(sa, ctx);
+            else ctx.Need("Play.ValidSA:" + sa);
+        }
         if (ab["Controller"] is { } c && c != "You") ctx.Need("Play.Controller:" + c);
         if (ab["Amount"] is { } a && a != "All") ValidateAmount(ab, "Amount", ctx);
         if (ab["ReplaceGraveyard"] is { } rg && rg != "Exile") ctx.Need("Play.ReplaceGraveyard:" + rg);
@@ -71,6 +76,11 @@ sealed class PlayEffect : Effect
         }
         else candidates = Defined.Cards("Targeted", x);
 
+        if (ab["ValidSA"] is { } validSA && validSA != "Spell")
+        {
+            var spellFilter = FilterFor(x.SVarFace, validSA);
+            candidates = candidates.Where(id => spellFilter.MatchesCard(x.S[id], x)).ToList();
+        }
         var free = ab["WithoutManaCost"] == "True";
         var remaining = ab["Amount"] == "All" ? int.MaxValue : Amount(x, ab["Amount"], 1);
         while (remaining-- > 0)
@@ -84,6 +94,7 @@ sealed class PlayEffect : Effect
             candidates.Remove(card.Id);
             x.Game.CastFromEffect(card, free, exileAfter: ab["ReplaceGraveyard"] == "Exile");
             if (ab["RememberPlayed"] == "True") (x.Host.Remembered ??= new()).Add(card.Id);
+            if (ab["ImprintPlayed"] == "True") (x.Host.Imprinted ??= new()).Add(card.Id);
             if (ab["ForgetPlayed"] == "True") x.Host.Remembered?.Remove(card.Id);
         }
     }

@@ -106,6 +106,12 @@ public sealed class ManaCost
         return m;
     }
 
+    /// <summary>Both costs together (an additional cost on top of a spell's cost).</summary>
+    public ManaCost Plus(ManaCost other) => other.IsZero ? this : new ManaCost
+    {
+        Generic = Generic + other.Generic, XCount = XCount + other.XCount, Shards = Shards.Concat(other.Shards).ToList(), NoCost = NoCost,
+    };
+
     public ManaCost WithExtraGeneric(int extra) => extra == 0 ? this : new ManaCost
     {
         Generic = Math.Max(0, Generic + extra), XCount = XCount, Shards = Shards, NoCost = NoCost,

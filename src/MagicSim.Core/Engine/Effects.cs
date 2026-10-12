@@ -64,6 +64,7 @@ public static class Effects
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
         new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
+        new TapOrUntapAllEffect(), new PeekAndRevealEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -197,14 +198,18 @@ sealed class ChangeZoneEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "Origin", "Destination", "ChangeType", "ChangeNum", "Hidden", "Mandatory", "Tapped", "LibraryPosition", "Defined",
         "ChangeTypeDesc", "Shuffle", "Reveal", "SelectPrompt", "Reorder", "Optional", "NoReveal", "ShuffleNonMandatory",
-        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "WithCountersType", "WithCountersAmount", "RememberTargets", "Duration", "TargetsWithDefinedController", "RememberLKI");
+        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "WithCountersType", "WithCountersAmount", "RememberTargets", "Duration", "TargetsWithDefinedController", "RememberLKI",
+        // Face down only hides it from opponents, which goldfish opponents don't care about.
+        "ExileFaceDown");
 
     private static readonly HashSet<string> Zones = new() { "Library", "Hand", "Battlefield", "Graveyard", "Exile" };
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
+        // "From outside the game" (wishes): a Commander deck has no sideboard, so there's nothing to get.
         foreach (var key in new[] { "Origin", "Destination" })
-            if (ab[key] is { } z && !z.Split(',').All(s => Zones.Contains(s.Trim()) || key == "Origin" && s.Trim() is "Stack" or "All" && (ab["Defined"] is not null || ab.TargetFilter is not null)))
+            if (ab[key] is { } z && !z.Split(',').All(s => Zones.Contains(s.Trim()) || key == "Origin" && s.Trim() == "Sideboard"
+                    || key == "Origin" && s.Trim() is "Stack" or "All" && (ab["Defined"] is not null || ab.TargetFilter is not null)))
                 ctx.Need($"ChangeZone.{key}:{z}");
         ValidateAmount(ab, "WithCountersAmount", ctx);
         if (ab["Duration"] is { } dur && dur != "UntilHostLeavesPlay") ctx.Need("ChangeZone.Duration:" + dur);
@@ -226,12 +231,19 @@ sealed class ChangeZoneEffect : Effect
             if (x.S.Stack.FirstOrDefault(s => s.IsSpell && s.SourceId == c.Id) is { } item) x.S.Stack.Remove(item);
             else return;
         }
+        // The card a replacement is replacing its own entering for (Mox Diamond): it enters, or goes elsewhere instead.
+        if (c.Zone == Zone.Battlefield && !x.S.Battlefield.Contains(c.Id))
+        {
+            if (dest != Zone.Battlefield) c.EnterInstead = dest;
+            return;
+        }
         if (dest == Zone.Battlefield && c.Zone != Zone.Battlefield)
         {
             if (ab["GainControl"] == "True") c.Controller = x.Controller;
             if (ab["WithCountersType"] is { } kind) Game.AddCounters(c, kind, Amount(x, ab["WithCountersAmount"], 1));
         }
         x.Game.MoveTo(c, dest, position, tapped);
+        if (dest == Zone.Exile && c.Zone == Zone.Exile) c.ExiledWith = x.Host.Id;
     }
 
     public static void Note(EffectContext x, int id)
@@ -246,7 +258,7 @@ sealed class ChangeZoneEffect : Effect
         var dest = Enum.Parse<Zone>(ab["Destination"]!);
         var origins = ab["Origin"] == "All"
             ? new List<Zone> { Zone.Battlefield, Zone.Graveyard, Zone.Exile, Zone.Hand, Zone.Library, Zone.Stack, Zone.Command }
-            : (ab["Origin"] ?? "Battlefield").Split(',').Select(s => Enum.Parse<Zone>(s.Trim())).ToList();
+            : (ab["Origin"] ?? "Battlefield").Split(',').Select(s => s.Trim()).Where(s => s != "Sideboard").Select(Enum.Parse<Zone>).ToList();
         var position = ab["LibraryPosition"] is { } lp ? int.Parse(lp) : 0;
         var tapped = ab["Tapped"] == "True";
 
@@ -289,12 +301,24 @@ sealed class ChangeZoneEffect : Effect
         var kind = origins.Contains(Zone.Library) ? Choice.Tutor : Choice.Generic;
         var chosen = max == 0 ? new List<int>() : x.Game.Decider.ChooseCards(x.Game, searcher, kind, x.Host, candidates, min, max);
         if (kind == Choice.Tutor) x.Game.Note($"  search: {(chosen.Count == 0 ? "nothing" : string.Join(", ", chosen.Select(id => x.S[id].Name)))}");
+        var shuffle = origins.Contains(Zone.Library) && ab["Shuffle"] != "False" && ab["NoShuffle"] != "True";
+        // "Shuffle and put that card on top" (Vampiric Tutor): the shuffle comes before the card goes back.
+        if (shuffle && dest == Zone.Library)
+        {
+            foreach (var id in chosen)
+            {
+                x.Game.RemoveFromZone(x.S[id]);
+                x.S[id].Zone = Zone.None;
+            }
+            x.Game.Shuffle(searcher);
+            shuffle = false;
+        }
         foreach (var id in chosen)
         {
             Move(x, x.S[id], dest, position, tapped);
             Note(x, id);
         }
-        if (origins.Contains(Zone.Library) && ab["Shuffle"] != "False" && ab["NoShuffle"] != "True") x.Game.Shuffle(searcher);
+        if (shuffle) x.Game.Shuffle(searcher);
     }
 }
 
@@ -337,6 +361,7 @@ sealed class DigEffect : Effect
         foreach (var id in chosen)
         {
             x.Game.MoveTo(x.S[id], dest, pos);
+            if (dest == Zone.Exile) x.S[id].ExiledWith = x.Host.Id;
             ChangeZoneEffect.Note(x, id);
         }
 
@@ -352,7 +377,7 @@ sealed class DigUntilEffect : Effect
 {
     public override string Api => "DigUntil";
     public override IReadOnlySet<string> Params { get; } = P(
-        "Valid", "ValidDescription", "FoundDestination", "RevealedDestination", "Amount", "Defined", "Shuffle");
+        "Valid", "ValidDescription", "FoundDestination", "RevealedDestination", "Amount", "Defined", "Shuffle", "RememberRevealed");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -379,6 +404,8 @@ sealed class DigUntilEffect : Effect
         var revealedDest = Enum.Parse<Zone>(ab["RevealedDestination"] ?? "Graveyard");
         foreach (var id in found) x.Game.MoveTo(x.S[id], foundDest);
         foreach (var id in revealed) x.Game.MoveTo(x.S[id], revealedDest, -1);
+        // The other cards revealed ("lose 1 life for each of the exiled cards").
+        if (ab["RememberRevealed"] == "True") (x.Host.Remembered ??= new()).AddRange(revealed);
         x.Game.Note($"  revealed {revealed.Count}, found {(found.Count == 0 ? "nothing" : string.Join(", ", found.Select(id => x.S[id].Name)))}");
         if (ab["Shuffle"] == "True") x.Game.Shuffle(player);
     }
@@ -405,7 +432,7 @@ sealed class MillEffect : Effect
 sealed class DiscardEffect : Effect
 {
     public override string Api => "Discard";
-    public override IReadOnlySet<string> Params { get; } = P("Mode", "NumCards", "Defined", "DiscardValid");
+    public override IReadOnlySet<string> Params { get; } = P("Mode", "NumCards", "Defined", "DiscardValid", "Optional", "RememberDiscarded");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -422,14 +449,17 @@ sealed class DiscardEffect : Effect
             var hand = x.S.Players[p].Hand;
             if (x.S.Players[p].IsGoldfish) continue;   // goldfish opponents have no real hand
             var mode = x.Ability["Mode"] ?? "TgtChoose";
-            var n = Math.Min(Amount(x, x.Ability["NumCards"], 1), hand.Count);
+            var filter = x.Ability["DiscardValid"] is { } dv ? FilterFor(x.SVarFace, dv) : null;
+            var eligible = hand.Where(id => filter is null || filter.MatchesCard(x.S[id], x)).ToList();
+            var n = Math.Min(Amount(x, x.Ability["NumCards"], 1), eligible.Count);
             List<int> chosen = mode switch
             {
-                "Hand" => hand.ToList(),
-                "Random" => Enumerable.Range(0, n).Select(_ => hand[x.S.Rng.Next(hand.Count)]).Distinct().ToList(),
-                _ => x.Game.Decider.ChooseCards(x.Game, p, Choice.Discard, x.Host, hand.ToList(), n, n),
+                "Hand" => eligible,
+                "Random" => Enumerable.Range(0, n).Select(_ => eligible[x.S.Rng.Next(eligible.Count)]).Distinct().ToList(),
+                _ => x.Game.Decider.ChooseCards(x.Game, p, Choice.Discard, x.Host, eligible, x.Ability["Optional"] == "True" ? 0 : n, n),
             };
             foreach (var id in chosen) x.Game.Discard(x.S[id]);
+            if (x.Ability["RememberDiscarded"] == "True") (x.Host.Remembered ??= new()).AddRange(chosen);
         }
     }
 }
@@ -473,10 +503,11 @@ sealed class RevealHandEffect : Effect
 sealed class CleanupEffect : Effect
 {
     public override string Api => "Cleanup";
-    public override IReadOnlySet<string> Params { get; } = P("ClearRemembered", "ClearNamedCard", "ClearImprinted");
+    public override IReadOnlySet<string> Params { get; } = P("ClearRemembered", "ClearNamedCard", "ClearImprinted", "ClearChosenPlayer");
 
     public override void Resolve(EffectContext x)
     {
+        if (x.Ability["ClearChosenPlayer"] == "True") x.Host.ChosenPlayer = null;
         if (x.Ability["ClearRemembered"] == "True") x.Host.Remembered = null;
         if (x.Ability["ClearImprinted"] == "True") x.Host.Imprinted = null;
         if (x.Ability["ClearNamedCard"] == "True") x.Host.NamedCard = null;
@@ -599,7 +630,7 @@ abstract class CardsEffect : Effect
 sealed class PumpEffect : CardsEffect
 {
     public override string Api => "Pump";
-    public override IReadOnlySet<string> Params { get; } = P("NumAtt", "NumDef", "KW", "Defined", "RememberObjects");
+    public override IReadOnlySet<string> Params { get; } = P("NumAtt", "NumDef", "KW", "Defined", "RememberObjects", "ForgetImprinted");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -608,6 +639,7 @@ sealed class PumpEffect : CardsEffect
         if (ab["NumDef"] != "Double") ValidateAmount(ab, "NumDef", ctx);
         ValidateKeywords(ab["KW"], ctx);
         Defined.ValidateCards(ab["RememberObjects"], ctx);
+        Defined.ValidateCards(ab["ForgetImprinted"], ctx);
     }
 
     public static void ValidateKeywords(string? kw, CompileContext ctx)
@@ -635,7 +667,8 @@ sealed class PumpEffect : CardsEffect
         var def = doubleDef ? 0 : Amount(x, x.Ability["NumDef"], 0);
         // "Pump" with only RememberObjects$ is Forge's way to remember cards on the source.
         if (x.Ability["RememberObjects"] is { } ro) (x.Host.Remembered ??= new()).AddRange(Defined.Cards(ro, x));
-        if (x.Ability["Defined"] is null && x.Ability.TargetFilter is null && x.Ability["RememberObjects"] is not null) return;
+        if (x.Ability["ForgetImprinted"] is { } fi) foreach (var id in Defined.Cards(fi, x)) x.Host.Imprinted?.Remove(id);
+        if (x.Ability["Defined"] is null && x.Ability.TargetFilter is null && (x.Ability["RememberObjects"] ?? x.Ability["ForgetImprinted"]) is not null) return;
         foreach (var c in Cards(x)) Apply(c, doubleAtt ? Math.Max(0, c.Power) : att, doubleDef ? Math.Max(0, c.Toughness) : def, x.Ability["KW"]);
     }
 }
@@ -643,8 +676,29 @@ sealed class PumpEffect : CardsEffect
 sealed class UntapEffect : CardsEffect
 {
     public override string Api => "Untap";
-    public override IReadOnlySet<string> Params { get; } = P("Defined");
-    public override void Resolve(EffectContext x) { foreach (var c in Cards(x)) c.Tapped = false; }
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "UntapType", "Amount", "UntapUpTo");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        base.Validate(ab, ctx);
+        if (ab["UntapType"] is { } ut) Filter.Parse(ut, ctx);
+        ValidateAmount(ab, "Amount", ctx);
+        if ((ab["Amount"] ?? ab["UntapUpTo"]) is not null && ab["UntapType"] is null) ctx.Need("Untap.Amount+NoType");
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        if (x.Ability["UntapType"] is not { } type)
+        {
+            foreach (var c in Cards(x)) c.Tapped = false;
+            return;
+        }
+        // "Untap up to three lands": untapping never hurts against a goldfish, so as many as allowed.
+        var filter = FilterFor(x.SVarFace, type);
+        var tapped = x.S.BattlefieldCards.Where(c => c.Tapped && c.Controller == x.Controller && filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
+        var n = Math.Min(Amount(x, x.Ability["Amount"], 1), tapped.Count);
+        foreach (var id in x.Game.Decider.ChooseCards(x.Game, x.Controller, Choice.Generic, x.Host, tapped, n, n)) x.S[id].Tapped = false;
+    }
 }
 
 sealed class TapEffect : CardsEffect

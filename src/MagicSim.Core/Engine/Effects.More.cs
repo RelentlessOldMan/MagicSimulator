@@ -497,18 +497,20 @@ sealed class ChooseColorEffect : Effect
 sealed class ChooseTypeEffect : Effect
 {
     public override string Api => "ChooseType";
-    public override IReadOnlySet<string> Params { get; } = P("Defined", "Type");
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "Type", "ValidTypes");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         if (ab["Defined"] is { } d && d != "You") ctx.Need("ChooseType.Defined:" + d);
-        if (ab["Type"] is not ("Creature" or "Basic Land")) ctx.Need("ChooseType.Type:" + ab["Type"]);
+        if (ab["Type"] is not ("Creature" or "Basic Land" or "Card")) ctx.Need("ChooseType.Type:" + ab["Type"]);
+        if (ab["Type"] == "Card" && ab["ValidTypes"] is null) ctx.Need("ChooseType.Card:AnyType");
     }
 
     public override void Resolve(EffectContext x)
     {
         List<string> options;
         if (x.Ability["Type"] == "Basic Land") options = TypeLine.BasicLandTypes.ToList();
+        else if (x.Ability["Type"] == "Card") options = x.Ability["ValidTypes"]!.Split(',', StringSplitOptions.TrimEntries).ToList();
         else
             options = x.S.Cards.Where(c => c.Owner == x.Controller && c.Types.Is(CardType.Creature) && !c.IsEffect)
                 .SelectMany(c => c.Types.Subtypes).GroupBy(t => t).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal)
@@ -596,5 +598,53 @@ sealed class ProliferateEffect : Effect
                 if (p.Index != x.Controller && !p.Lost && p.Poison > 0) p.Poison++;
             x.Game.Note("  proliferate");
         }
+    }
+}
+
+/// <summary>"Tap all untapped permanents [of a kind] target player controls, or untap all tapped ones" (Turnabout).</summary>
+sealed class TapOrUntapAllEffect : Effect
+{
+    public override string Api => "TapOrUntapAll";
+    public override IReadOnlySet<string> Params { get; } = P("ValidCards", "Defined");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["ValidCards"] is { } vc) Filter.Parse(vc, ctx); else ctx.Need("TapOrUntapAll:NoValidCards");
+        Defined.ValidatePlayers(ab["Defined"], ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var filter = FilterFor(x.SVarFace, x.Ability["ValidCards"]!);
+        var players = x.Ability.TargetFilter is not null ? Defined.Players("Targeted", x) : Defined.Players(x.Ability["Defined"], x, "Player");
+        var cards = x.S.BattlefieldCards.Where(c => players.Contains(c.Controller) && filter.MatchesCard(c, x)).ToList();
+        var untap = x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, new[] { "untap", "tap" }) == 0;
+        foreach (var c in cards) c.Tapped = !untap;
+        x.Game.Note($"  {(untap ? "untap" : "tap")} {cards.Count}");
+    }
+}
+
+/// <summary>"Look at the top N cards of your library" (PeekAndReveal with NoReveal$): known to you, optionally remembered.</summary>
+sealed class PeekAndRevealEffect : Effect
+{
+    public override string Api => "PeekAndReveal";
+    public override IReadOnlySet<string> Params { get; } = P("PeekAmount", "NoReveal", "RememberPeeked", "Defined", "RevealValid", "RememberRevealed");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        ValidateAmount(ab, "PeekAmount", ctx);
+        if (ab["Defined"] is { } d && d != "You") ctx.Need("PeekAndReveal.Defined:" + d);
+        if (ab["RevealValid"] is { } rv) Filter.Parse(rv, ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var p = x.S.Players[x.Controller];
+        var top = p.Library.Take(Amount(x, x.Ability["PeekAmount"], 1)).ToList();
+        p.KnownTop = Math.Max(p.KnownTop, top.Count);
+        // Revealing to goldfish opponents changes nothing; what matters is what's remembered.
+        var filter = x.Ability["RevealValid"] is { } rv ? FilterFor(x.SVarFace, rv) : null;
+        if (x.Ability["RememberPeeked"] == "True") (x.Host.Remembered ??= new()).AddRange(top);
+        if (x.Ability["RememberRevealed"] == "True") (x.Host.Remembered ??= new()).AddRange(top.Where(id => filter is null || filter.MatchesCard(x.S[id], x)));
     }
 }

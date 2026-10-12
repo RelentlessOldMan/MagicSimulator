@@ -2,13 +2,14 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.6.1** (2026-10-11).
+Status: **draft v0.6.2** (2026-10-11).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
 - v0.5: card behavior comes from Forge scripts (§6), and Cardinator 1.6.32 has shipped (§5).
 - v0.6: the card index gains `edhrec_rank` (§2). It is additive, so older readers are unaffected.
 - v0.6.1: states that turn numbers in results are rounds, so extra turns don't add to them (§3). No field changes.
+- v0.6.2: states what the goldfish opponents are assumed to have for effects that look at them: 7 cards in hand, lands of every color (§3). No field changes.
 - Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
@@ -140,6 +141,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
 **The goldfish table:**
 - 2 opponents, 40 life each, 99-card libraries, no interaction.
 - You start at 40 life.
+- Effects that look at an opponent assume a typical table: each opponent holds 7 cards (Jeska's Will adds 7 mana), and their lands can make every color (Exotic Orchard, Fellwar Stone).
 
 **Mulligans:**
 - London mulligan, and the first mulligan is free.

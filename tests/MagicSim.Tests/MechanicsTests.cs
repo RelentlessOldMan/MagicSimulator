@@ -238,6 +238,67 @@ public class MechanicsTests
         "Name:Watcher\nManaCost:0\nTypes:Creature Human\nPT:2/2\nK:Vigilance\n",
         "Name:Assault\nManaCost:0\nTypes:Sorcery\nA:SP$ AddPhase | ExtraPhase$ Combat | FollowedBy$ Main2\n",
         "Name:Warp\nManaCost:0\nTypes:Sorcery\nA:SP$ AddTurn | Defined$ You | NumTurns$ 1\n",
+        "Name:Deluge\nManaCost:B\nTypes:Sorcery\nA:SP$ PumpAll | Cost$ B PayLife<X> | ValidCards$ Creature | NumAtt$ -X | NumDef$ -X\nSVar:X:Count$xPaid\n",
+        "Name:Seek\nManaCost:0\nTypes:Instant\nA:SP$ ChangeZone | Origin$ Library | Destination$ Library | LibraryPosition$ 0 | ChangeType$ Card | ChangeNum$ 1 | Mandatory$ True\n",
+        "Name:Opal\nManaCost:0\nTypes:Legendary Artifact\nA:AB$ Mana | Cost$ T | Produced$ Any | Activation$ Metalcraft\n",
+        "Name:Rite\nManaCost:0\nTypes:Sorcery\nA:SP$ Mana | Produced$ R | Amount$ 2 | SubAbility$ SubMana\n" +
+        "SVar:SubMana:DB$ Mana | Produced$ R | Amount$ X\nSVar:X:Count$ValidGraveyard Card.namedRite\n",
+        "Name:Frantic\nManaCost:0\nTypes:Instant\nA:SP$ Untap | UntapUpTo$ True | UntapType$ Land | Amount$ 2\n",
+        "Name:Petition\nManaCost:0\nTypes:Sorcery\n" +
+        "A:SP$ Mana | Produced$ B | Amount$ 3 | ConditionPresent$ Instant.YouOwn,Sorcery.YouOwn | ConditionZone$ Graveyard | ConditionCompare$ GE2\n",
+        "Name:Spoils\nManaCost:0\nTypes:Instant\nA:SP$ NameCard | Defined$ You | SubAbility$ DBDig\n" +
+        "SVar:DBDig:DB$ DigUntil | Valid$ Card.NamedCard | FoundDestination$ Hand | RevealedDestination$ Exile | RememberRevealed$ True | SubAbility$ DBLose\n" +
+        "SVar:DBLose:DB$ LoseLife | LifeAmount$ X | SubAbility$ DBClean\nSVar:DBClean:DB$ Cleanup | ClearRemembered$ True\nSVar:X:Remembered$Amount\n",
+        "Name:Diamond\nManaCost:0\nTypes:Artifact\nA:AB$ Mana | Cost$ T | Produced$ Any\n" +
+        "R:Event$ Moved | Destination$ Battlefield | ValidCard$ Card.Self | ReplaceWith$ PayFirst\n" +
+        "SVar:PayFirst:DB$ Discard | DiscardValid$ Land | Mode$ TgtChoose | RememberDiscarded$ True | Optional$ True | SubAbility$ ToGrave\n" +
+        "SVar:ToGrave:DB$ ChangeZone | Origin$ All | Destination$ Graveyard | Defined$ ReplacedCard | ConditionCheckSVar$ X | ConditionSVarCompare$ EQ0 | SubAbility$ ToField\n" +
+        "SVar:ToField:DB$ ChangeZone | Origin$ All | Destination$ Battlefield | Defined$ ReplacedCard | ConditionCheckSVar$ X | ConditionSVarCompare$ EQ1 | SubAbility$ DBClean\n" +
+        "SVar:DBClean:DB$ Cleanup | ClearRemembered$ True\nSVar:X:Remembered$Amount\n",
+        "Name:Necro\nManaCost:0\nTypes:Enchantment\n" +
+        "R:Event$ BeginPhase | ActiveZones$ Battlefield | ValidPlayer$ You | Phase$ Draw | Skip$ True\n" +
+        "A:AB$ ChangeZone | Cost$ PayLife<1> | Defined$ TopOfLibrary | Origin$ Library | Destination$ Exile | ExileFaceDown$ True\n",
+        "Name:Windy\nManaCost:0\nTypes:Sorcery\nA:SP$ Discard | Defined$ Player | Mode$ Hand | RememberDiscarded$ True | SubAbility$ DBDraw\n" +
+        "SVar:DBDraw:DB$ Draw | Defined$ Player | NumCards$ X | SubAbility$ DBClean\nSVar:DBClean:DB$ Cleanup | ClearRemembered$ True\n" +
+        "SVar:X:PlayerCountPlayers$HighestValidGraveyard,Library,Exile Card.IsRemembered+YouOwn\n",
+        "Name:Cruise\nManaCost:6 B\nTypes:Instant\nK:Delve\nA:SP$ Draw | Defined$ You | NumCards$ 1\n",
+        "Name:Breach\nManaCost:0\nTypes:Enchantment\n" +
+        "S:Mode$ Continuous | Affected$ Card.YouOwn+nonLand | AffectedZone$ Graveyard | AddKeyword$ Escape:CardManaCost ExileFromGrave<3/Card.Other/other>\n",
+        "Name:Gift\nManaCost:B\nTypes:Sorcery\nA:SP$ GainLife | Defined$ You | LifeAmount$ 5\n",
+        "Name:Kicky\nManaCost:0\nTypes:Sorcery\nK:Kicker:B\nA:SP$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:Count$Kicked.5.1\n",
+        "Name:Drakelet\nManaCost:0\nTypes:Creature Drake\nPT:1/1\nK:Kicker:B\n" +
+        "K:etbCounter:P1P1:2:CheckSVar$ WasKicked:If it was kicked, it enters with two +1/+1 counters.\nSVar:WasKicked:Count$Kicked.1.0\n",
+        "Name:Haggle\nManaCost:0\nTypes:Sorcery\nK:Bargain\nA:SP$ Draw | Defined$ You | NumCards$ 1 | SubAbility$ DBGain\n" +
+        "SVar:DBGain:DB$ GainLife | Defined$ You | LifeAmount$ 5 | Condition$ Bargain\n",
+        "Name:Rit\nManaCost:0\nTypes:Instant Arcane\nK:Splice:Arcane:B\nA:SP$ Mana | Produced$ R | Amount$ 3\n",
+        "Name:Spirit\nManaCost:0\nTypes:Instant Arcane\nA:SP$ GainLife | Defined$ You | LifeAmount$ 2\n",
+        "Name:Mixer\nManaCost:1 B\nTypes:Instant\nK:Transmute:0\nA:SP$ GainLife | Defined$ You | LifeAmount$ 1\n",
+        "Name:Turn\nManaCost:0\nTypes:Instant\nA:SP$ ChooseType | Type$ Card | ValidTypes$ Artifact,Creature,Land | SubAbility$ DBTap\n" +
+        "SVar:DBTap:DB$ TapOrUntapAll | ValidTgts$ Player | ValidCards$ Card.ChosenType | ValidMessage$ permanents of the chosen type\n",
+        "Name:Jeska\nManaCost:0\nTypes:Sorcery\nA:SP$ Charm | MinCharmNum$ 1 | CharmNum$ Count$Compare Y GE1.2.1 | Choices$ DBMana,DBGain\n" +
+        "SVar:DBMana:DB$ Mana | Defined$ You | ValidTgts$ Opponent | Produced$ R | Amount$ Z | SpellDescription$ Add R per card in hand.\n" +
+        "SVar:DBGain:DB$ GainLife | Defined$ You | LifeAmount$ 3 | SpellDescription$ Gain 3.\n" +
+        "SVar:Y:Count$Valid Creature.YouCtrl\nSVar:Z:TargetedPlayer$CardsInHand\n",
+        "Name:Citadel\nManaCost:0\nTypes:Legendary Artifact\n" +
+        "S:Mode$ Continuous | Affected$ Card.TopLibrary+YouCtrl | AffectedZone$ Library | MayLookAt$ You\n" +
+        "S:Mode$ Continuous | Affected$ Card.TopLibrary+YouCtrl | AffectedZone$ Library | MayPlay$ True | MayPlayAltManaCost$ PayLife<ConvertedManaCost>\n",
+        "Name:Vault2\nManaCost:0\nTypes:Instant\n" +
+        "A:SP$ PeekAndReveal | PeekAmount$ 3 | NoReveal$ True | RememberPeeked$ True | SubAbility$ DBRepeat\n" +
+        "SVar:DBRepeat:DB$ Repeat | RepeatSubAbility$ CheckPaid | RepeatCheckSVar$ Paid | RepeatSVarCompare$ EQ0 | SubAbility$ DBTop\n" +
+        "SVar:CheckPaid:DB$ StoreSVar | SVar$ Paid | Type$ Number | Expression$ 1 | UnlessPayer$ You | UnlessCost$ PayLife<1> | UnlessResolveSubs$ WhenPaid | UnlessAI$ Never | SubAbility$ DBForget\n" +
+        "SVar:DBForget:DB$ Cleanup | ClearRemembered$ True | SubAbility$ DBBottom\n" +
+        "SVar:DBBottom:DB$ Dig | DigNum$ 3 | ChangeNum$ All | DestinationZone$ Library | LibraryPosition$ -1 | NoLooking$ True | SubAbility$ DBLook\n" +
+        "SVar:DBLook:DB$ PeekAndReveal | PeekAmount$ 3 | NoReveal$ True | RememberPeeked$ True\n" +
+        "SVar:DBTop:DB$ ChangeZone | Origin$ Library | Destination$ Library | LibraryPosition$ 0 | ChangeType$ Card.IsRemembered | ChangeNum$ 3 | Hidden$ True | Mandatory$ True | SubAbility$ DBReset\n" +
+        "SVar:DBReset:DB$ StoreSVar | SVar$ Paid | Type$ Number | Expression$ 0 | SubAbility$ DBClean\n" +
+        "SVar:DBClean:DB$ Cleanup | ClearRemembered$ True\nSVar:Paid:Number$0\n",
+        "Name:Banish\nManaCost:0\nTypes:Instant\nA:SP$ ChangeZone | ValidTgts$ Creature | Origin$ Battlefield | Destination$ Exile | SubAbility$ DBGain\n" +
+        "SVar:DBGain:DB$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:Count$ValidExile Card.ExiledWithSource\n",
+        "Name:Beseech\nManaCost:0\nTypes:Sorcery\nK:Bargain\n" +
+        "A:SP$ ChangeZone | ChangeNum$ 1 | ChangeType$ Card | Mandatory$ True | Origin$ Library | Destination$ Exile | ExileFaceDown$ True | RememberChanged$ True | SubAbility$ DBPlay\n" +
+        "SVar:DBPlay:DB$ Play | Defined$ Remembered | ValidSA$ Spell.cmcLE4 | Condition$ Bargain | ImprintPlayed$ True | Controller$ You | WithoutManaCost$ True | Optional$ True | Amount$ All | SubAbility$ DBHand\n" +
+        "SVar:DBHand:DB$ ChangeZone | Origin$ Exile | Destination$ Hand | Defined$ Remembered | ConditionDefined$ Imprinted | ConditionPresent$ Card | ConditionCompare$ EQ0 | SubAbility$ DBClean\n" +
+        "SVar:DBClean:DB$ Cleanup | ClearRemembered$ True | ClearImprinted$ True\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -1538,6 +1599,282 @@ public class MechanicsTests
         Assert.Equal(2, g.State.Turn);
         Assert.Equal(1, g.State.Round);
         Assert.Equal(36, g.State.Players.Where(p => p.Index != Game.Me).Min(p => p.Life));   // the Bear attacked in both turns
+    }
+
+    [Fact]
+    public void PayXLifeAsACost()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.X ? dec.Options.ToList().IndexOf(3) : null };
+        var g = Setup(new[] { "Deluge" }, battlefield: new[] { "Bog", "Bear" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Deluge")], 0);
+        ResolveAll(g);
+        g.CheckStateBasedActions();
+        Assert.Equal(37, g.State.Players[Game.Me].Life);
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Bear").Zone);
+    }
+
+    [Fact]
+    public void TutorShufflesThenPutsTheCardOnTop()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Card ? TestDecider.Named(game, dec, "Bear") : null };
+        var g = Setup(new[] { "Seek" }, library: new[] { "Filler", "Filler", "Filler", "Bear", "Filler", "Filler" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Seek")], 0);
+        ResolveAll(g);
+        Assert.Equal("Bear", g.State[g.State.Players[Game.Me].Library[0]].Name);
+    }
+
+    [Fact]
+    public void ManaAbilityWithAnActivationCondition()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Opal", "Sig" });
+        Assert.DoesNotContain(g.AutoSources(Game.Me, -1), m => g.State[m.CardId].Name == "Opal");
+        g = Setup(Array.Empty<string>(), battlefield: new[] { "Opal", "Sig", "Sig" });
+        Assert.Contains(g.AutoSources(Game.Me, -1), m => g.State[m.CardId].Name == "Opal");
+    }
+
+    [Fact]
+    public void CountsCardsByName()
+    {
+        var g = Setup(new[] { "Rite", "Rite" });
+        g.MoveTo(g.State[InHand(g, "Rite")], Zone.Graveyard);
+        g.CastSpell(g.State[InHand(g, "Rite")], 0);
+        ResolveAll(g);
+        Assert.Equal(3, g.State.Players[Game.Me].Pool[ManaColor.R]);
+    }
+
+    [Fact]
+    public void UntapUpToSomeLands()
+    {
+        var g = Setup(new[] { "Frantic" }, battlefield: new[] { "Bog", "Bog", "Bog" });
+        foreach (var c in g.State.BattlefieldCards) c.Tapped = true;
+        g.CastSpell(g.State[InHand(g, "Frantic")], 0);
+        ResolveAll(g);
+        Assert.Equal(2, g.State.BattlefieldCards.Count(c => !c.Tapped));
+    }
+
+    [Fact]
+    public void ConditionCountsCardsInAZone()
+    {
+        var g = Setup(new[] { "Petition", "Filler", "Filler" });
+        g.CastSpell(g.State[InHand(g, "Petition")], 0);
+        ResolveAll(g);
+        Assert.Equal(0, g.State.Players[Game.Me].Pool.Total);
+        g = Setup(new[] { "Petition", "Filler", "Filler" });
+        foreach (var id in g.State.Players[Game.Me].Hand.Where(id => g.State[id].Name == "Filler").ToList()) g.MoveTo(g.State[id], Zone.Graveyard);
+        g.CastSpell(g.State[InHand(g, "Petition")], 0);
+        ResolveAll(g);
+        Assert.Equal(3, g.State.Players[Game.Me].Pool[ManaColor.B]);
+    }
+
+    [Fact]
+    public void DigUntilRemembersTheOthersRevealed()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Name ? dec.Options.ToList().IndexOf("Bear") : null };
+        var g = Setup(new[] { "Spoils" }, library: new[] { "Filler", "Filler", "Bear" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Spoils")], 0);
+        ResolveAll(g);
+        Assert.Equal(38, g.State.Players[Game.Me].Life);
+        Assert.Equal("Bear", g.State[g.State.Players[Game.Me].Hand.Single()].Name);
+        Assert.Equal(2, g.State.Players[Game.Me].Exile.Count);
+    }
+
+    [Fact]
+    public void EntersOnlyIfALandIsDiscarded()
+    {
+        var g = Setup(new[] { "Diamond", "Bog" });
+        g.CastSpell(g.State[InHand(g, "Diamond")], -1);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, g.State.Cards.First(c => c.Name == "Diamond").Zone);
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Bog").Zone);
+
+        g = Setup(new[] { "Diamond", "Filler" });
+        g.CastSpell(g.State[InHand(g, "Diamond")], -1);
+        ResolveAll(g);
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Diamond").Zone);
+        Assert.Empty(g.State.BattlefieldCards);
+    }
+
+    [Fact]
+    public void SkipYourDrawStepAndExileTheTopCard()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Necro" }, library: new[] { "Bear", "Filler" });
+        Assert.True(Replacements.SkipsStep(g, Game.Me, Step.Draw));
+        Assert.False(Replacements.SkipsStep(g, Game.Me, Step.Upkeep));
+        g.ActivateAbility(OnBattlefield(g, "Necro"), 0);
+        ResolveAll(g);
+        Assert.Equal(39, g.State.Players[Game.Me].Life);
+        Assert.Equal("Bear", g.State[g.State.Players[Game.Me].Exile.Single()].Name);
+    }
+
+    [Fact]
+    public void EachPlayerDrawsTheMostAnyoneDiscarded()
+    {
+        var g = Setup(new[] { "Windy", "Filler", "Filler", "Filler" }, library: new[] { "Bear", "Bear", "Bear", "Bear", "Bear" });
+        g.CastSpell(g.State[InHand(g, "Windy")], 0);
+        ResolveAll(g);
+        var hand = g.State.Players[Game.Me].Hand;
+        Assert.Equal(3, hand.Count);
+        Assert.All(hand, id => Assert.Equal("Bear", g.State[id].Name));
+    }
+
+    [Fact]
+    public void DelveExilesGraveyardCardsToPay()
+    {
+        var g = Setup(new[] { "Cruise", "Filler", "Filler", "Filler", "Filler", "Filler", "Filler" }, battlefield: new[] { "Bog" }, library: new[] { "Bear" });
+        Assert.False(g.CanCast(g.State[InHand(g, "Cruise")], 0));
+        foreach (var id in g.State.Players[Game.Me].Hand.Where(id => g.State[id].Name == "Filler").ToList()) g.MoveTo(g.State[id], Zone.Graveyard);
+        Assert.True(g.CanCast(g.State[InHand(g, "Cruise")], 0));
+        g.CastSpell(g.State[InHand(g, "Cruise")], 0);
+        ResolveAll(g);
+        Assert.Equal(6, g.State.Players[Game.Me].Exile.Count);
+        Assert.Equal("Bear", g.State[g.State.Players[Game.Me].Hand.Single()].Name);
+    }
+
+    [Fact]
+    public void EscapeFromTheGraveyard()
+    {
+        var g = Setup(new[] { "Gift", "Filler", "Filler", "Filler" }, battlefield: new[] { "Breach", "Bog" });
+        foreach (var id in g.State.Players[Game.Me].Hand.ToList()) g.MoveTo(g.State[id], Zone.Graveyard);
+        var gift = g.State.Cards.First(c => c.Name == "Gift");
+        var cast = g.LegalActions(Game.Me).OfType<GameAction.Cast>().Single(a => a.CardId == gift.Id);
+        g.Perform(cast);
+        ResolveAll(g);
+        Assert.Equal(45, g.State.Players[Game.Me].Life);
+        Assert.Equal(3, g.State.Players[Game.Me].Exile.Count);
+        Assert.Equal(Zone.Graveyard, gift.Zone);   // escape doesn't exile the spell afterwards
+    }
+
+    [Fact]
+    public void KickerIsAnOptionalAdditionalCost()
+    {
+        var g = Setup(new[] { "Kicky" }, battlefield: new[] { "Bog" });
+        var kicky = g.State[InHand(g, "Kicky")];
+        Assert.Equal(2, kicky.CurrentFace.SpellAbilities.Count);
+        g.CastSpell(kicky, 1);
+        ResolveAll(g);
+        Assert.Equal(45, g.State.Players[Game.Me].Life);
+        Assert.True(OnBattlefield(g, "Bog").Tapped);
+
+        g = Setup(new[] { "Kicky" });
+        g.CastSpell(g.State[InHand(g, "Kicky")], 0);
+        ResolveAll(g);
+        Assert.Equal(41, g.State.Players[Game.Me].Life);
+
+        g = Setup(new[] { "Drakelet" }, battlefield: new[] { "Bog" });
+        g.CastSpell(g.State[InHand(g, "Drakelet")], 1);
+        ResolveAll(g);
+        Assert.Equal(3, OnBattlefield(g, "Drakelet").Power);
+    }
+
+    [Fact]
+    public void BargainSacrificesAnArtifactForMore()
+    {
+        var g = Setup(new[] { "Haggle" }, battlefield: new[] { "Sig" }, library: new[] { "Filler" });
+        g.CastSpell(g.State[InHand(g, "Haggle")], 1);
+        ResolveAll(g);
+        Assert.Equal(45, g.State.Players[Game.Me].Life);
+        Assert.Empty(g.State.BattlefieldCards);
+    }
+
+    [Fact]
+    public void SpliceAddsTheEffectsOfACardInHand()
+    {
+        var g = Setup(new[] { "Spirit", "Rit" }, battlefield: new[] { "Bog" });
+        g.CastSpell(g.State[InHand(g, "Spirit")], 0);
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+        Assert.Equal(3, g.State.Players[Game.Me].Pool[ManaColor.R]);
+        Assert.Equal(Zone.Hand, g.State.Cards.First(c => c.Name == "Rit").Zone);
+    }
+
+    [Fact]
+    public void TransmuteFindsTheSameManaValue()
+    {
+        var g = Setup(new[] { "Mixer" }, library: new[] { "Filler", "Bear" });
+        var mixer = g.State[InHand(g, "Mixer")];
+        g.Perform(g.LegalActions(Game.Me).OfType<GameAction.Activate>().Single(a => a.CardId == mixer.Id));
+        ResolveAll(g);
+        Assert.Equal("Bear", g.State[g.State.Players[Game.Me].Hand.Single()].Name);
+        Assert.Equal(Zone.Graveyard, mixer.Zone);
+    }
+
+    [Fact]
+    public void UntapAllOfAChosenCardType()
+    {
+        var d = new TestDecider
+        {
+            Choose = (game, dec) => dec.Kind == DecisionKind.Option && dec.Options.Contains("Land") ? dec.Options.ToList().IndexOf("Land")
+                : dec.Kind == DecisionKind.Target ? dec.Options.ToList().FindIndex(o => o is TargetRef { Player: Game.Me }) : null,
+        };
+        var g = Setup(new[] { "Turn" }, battlefield: new[] { "Bog", "Bog", "Sig" }, decider: d);
+        foreach (var c in g.State.BattlefieldCards) c.Tapped = true;
+        g.CastSpell(g.State[InHand(g, "Turn")], 0);
+        ResolveAll(g);
+        Assert.Equal(2, g.State.BattlefieldCards.Count(c => !c.Tapped));
+        Assert.True(OnBattlefield(g, "Sig").Tapped);
+    }
+
+    [Fact]
+    public void ModeCountWorkedOutAsItIsCast()
+    {
+        var g = Setup(new[] { "Jeska" });
+        var jeska = g.State[InHand(g, "Jeska")];
+        var both = jeska.CurrentFace.SpellAbilities.FindIndex(a => a.CharmCount == 2);
+        Assert.False(g.CanCast(jeska, both));
+        g = Setup(new[] { "Jeska" }, battlefield: new[] { "Bear" });
+        jeska = g.State[InHand(g, "Jeska")];
+        Assert.True(g.CanCast(jeska, both));
+        g.CastSpell(jeska, both);
+        ResolveAll(g);
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+        Assert.Equal(Player.AssumedGoldfishHand, g.State.Players[Game.Me].Pool[ManaColor.R]);
+    }
+
+    [Fact]
+    public void CastFromTheTopOfTheLibraryPayingLife()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Citadel" }, library: new[] { "Bear", "Filler" });
+        var bear = g.State.Cards.First(c => c.Name == "Bear");
+        g.Perform(g.LegalActions(Game.Me).OfType<GameAction.Cast>().Single(a => a.CardId == bear.Id));
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, bear.Zone);
+        Assert.Equal(38, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void PayToLookAgainThenPutTheLastCardsOnTop()
+    {
+        var answers = new Queue<bool>(new[] { true, false });
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.YesNo ? (answers.Dequeue() ? 0 : 1) : null };
+        var g = Setup(new[] { "Vault2" }, library: new[] { "Filler", "Filler", "Filler", "Bear", "Bear", "Bear", "Filler" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Vault2")], 0);
+        ResolveAll(g);
+        Assert.Equal(39, g.State.Players[Game.Me].Life);
+        var lib = g.State.Players[Game.Me].Library;
+        Assert.All(lib.Take(3), id => Assert.Equal("Bear", g.State[id].Name));
+    }
+
+    [Fact]
+    public void ExiledWithThisSource()
+    {
+        var g = Setup(new[] { "Banish" }, battlefield: new[] { "Bear" });
+        g.CastSpell(g.State[InHand(g, "Banish")], 0);
+        ResolveAll(g);
+        Assert.Equal(41, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void BargainedSearchCastsTheCardFree()
+    {
+        var g = Setup(new[] { "Beseech" }, battlefield: new[] { "Sig" }, library: new[] { "Bear" });
+        g.CastSpell(g.State[InHand(g, "Beseech")], 1);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, g.State.Cards.First(c => c.Name == "Bear").Zone);
+
+        g = Setup(new[] { "Beseech" }, library: new[] { "Bear" });
+        g.CastSpell(g.State[InHand(g, "Beseech")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Hand, g.State.Cards.First(c => c.Name == "Bear").Zone);
     }
 
     [Fact]

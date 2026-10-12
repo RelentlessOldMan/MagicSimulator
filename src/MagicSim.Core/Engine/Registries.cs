@@ -14,6 +14,7 @@ public static class Keywords
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
         "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade", "Ninjutsu", "Persist", "Undying",
+        "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute",
     };
 }
 
@@ -214,6 +215,7 @@ public static class Conditions
     {
         "Main1" => step == Step.Main1,
         "Main2" => step == Step.Main2,
+        "Untap" => step == Step.Untap,
         "Upkeep" => step == Step.Upkeep,
         "Draw" => step == Step.Draw,
         "BeginCombat" => step == Step.BeginCombat,
@@ -227,7 +229,7 @@ public static class Conditions
     public static readonly HashSet<string> Params = new(StringComparer.Ordinal)
     {
         "ConditionCheckSVar", "ConditionSVarCompare", "ConditionDefined", "ConditionPresent", "ConditionCompare", "ConditionDescription",
-        "ConditionPhases", "ConditionPlayerTurn", "ConditionFirstCombat",
+        "ConditionPhases", "ConditionPlayerTurn", "ConditionFirstCombat", "ConditionZone", "Condition",
     };
 
     public static void Validate(AbilityDef ab, CompileContext ctx)
@@ -244,6 +246,8 @@ public static class Conditions
         }
         if (ab["ConditionPresent"] is { } present) Filter.Parse(present, ctx);
         if (ab["ConditionDefined"] is { } def) Defined.ValidateCards(def, ctx);
+        if (ab["ConditionZone"] is { } zone && !Enum.TryParse<Zone>(zone, out _)) ctx.Need("ConditionZone:" + zone);
+        if (ab["Condition"] is { } cond && !Presence.IsKnownCondition(cond)) ctx.Need("Condition:" + cond);
     }
 
     public static bool Hold(EffectContext x)
@@ -252,6 +256,7 @@ public static class Conditions
         if (ab["ConditionPhases"] is { } phases && !phases.Split(',').Any(ph => PhaseIs(x.S.Step, ph.Trim()))) return false;
         if (ab["ConditionPlayerTurn"] == "True" && x.S.ActivePlayer != x.Controller) return false;
         if (ab["ConditionFirstCombat"] == "True" && x.S.ThisTurn.Combats > 1) return false;
+        if (ab["Condition"] is { } cond && !Presence.ConditionHolds(cond, x)) return false;
         var ctx = new CompileContext { Face = x.SVarFace, Missing = new() };
         if (ab["ConditionCheckSVar"] is { } sv)
         {
@@ -265,7 +270,7 @@ public static class Conditions
             var filter = Filter.Parse(present, ctx);
             var cards = ab["ConditionDefined"] is { } def
                 ? Defined.Cards(def, x).Select(id => x.S[id])
-                : x.Game.CardsIn(Zone.Battlefield);
+                : x.Game.CardsIn(ab["ConditionZone"] is { } zone ? Enum.Parse<Zone>(zone) : Zone.Battlefield);
             var count = cards.Count(c => filter.MatchesCard(c, x));
             var cmp = ab["ConditionCompare"] ?? "GE1";
             if (!Filter.Compare(count, cmp[..2], int.Parse(cmp[2..]))) return false;

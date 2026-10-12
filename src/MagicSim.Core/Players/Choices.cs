@@ -88,8 +88,10 @@ public abstract class ChoiceDecider : IDecider
     public int ChooseX(Game g, int player, Card source, int maxX)
     {
         if (maxX <= 0) return 0;
-        // Largest first; search rarely needs more than the top few values.
-        var options = Enumerable.Range(0, Math.Min(maxX, 12) + 1).Select(i => (object?)(maxX - i)).ToList();
+        // Largest first, then the smallest: mana X usually wants the most, "pay X life" a little.
+        var values = Enumerable.Range(0, Math.Min(maxX, 6) + 1).Select(i => maxX - i)
+            .Concat(Enumerable.Range(0, Math.Min(maxX, 7)).Reverse()).Distinct();
+        var options = values.Select(v => (object?)v).ToList();
         return (int)options[Pick(g, new Decision { Kind = DecisionKind.X, Options = options, Source = source, Player = player })]!;
     }
 

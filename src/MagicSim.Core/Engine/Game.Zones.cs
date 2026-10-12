@@ -57,6 +57,7 @@ public sealed partial class Game
             c.ClassLevel = 1;
             c.Controller = c.Owner;
             c.RegenShields = 0;
+            c.PaidOptional = null;
             c.ClearStaticEffects();
             State.Attackers.Remove(c.Id);
         }
@@ -79,6 +80,14 @@ public sealed partial class Game
                 c.EnteredTurn = State.Turn;
                 // Replacement effects apply as it enters: it's on the battlefield but not yet counted there.
                 ApplyEntering(c);
+                if (c.EnterInstead is { } instead)
+                {
+                    // It never enters: it goes from where it was to where the replacement sends it.
+                    c.EnterInstead = null;
+                    c.Zone = from == Zone.Library ? Zone.None : from;
+                    MoveTo(c, instead);
+                    return;
+                }
                 State.Battlefield.Add(c.Id);
                 // "As a Saga enters, add a lore counter" (rule 714.3a).
                 if (c.CurrentFace.Chapters.Count > 0) PutCounters(c, "LORE", 1);
@@ -207,9 +216,10 @@ public sealed partial class Game
         if (face.Loyalty is { } loyalty && c.Types.Is(CardType.Planeswalker))
             AddCounters(c, "LOYALTY", Replacements.Amount(this, "AddCounter", loyalty, targetCard: c, counterType: "LOYALTY"));
         if (face.EtbCounters.Count == 0 && face.EtbReplacements.Count == 0) return;
-        foreach (var (kind, amount) in face.EtbCounters)
+        foreach (var (kind, amount, condition) in face.EtbCounters)
         {
             var x = new EffectContext { Game = this, Ability = PermanentSpell, Item = new StackItem { SourceId = c.Id, Ability = PermanentSpell, Controller = c.Controller, X = c.XPaid } };
+            if (condition is not null && !Presence.Hold(condition, x)) continue;
             var n = Effect.EvalAmount(x, amount);
             AddCounters(c, kind, Replacements.Amount(this, "AddCounter", n, targetCard: c, counterType: kind));
         }
@@ -570,7 +580,7 @@ public sealed partial class Game
         if (!ab.IsManaAbility || !ab.Cost.Mana.IsZero || ab.Cost.Untap) return false;
         if (!ab.P.Values.Keys.All(k => k is "AB" or "Cost" or "Produced" or "Amount" or "SpellDescription" or "AILogic"
                 or "AIPreference" or "SubAbility" or "ActivationZone" or "ColorOrType" or "Valid" or "ReflectProperty" or "RestrictValid"
-                or "PrecostDesc" || Presence.Params.Contains(k))) return false;
+                or "PrecostDesc" or "Activation" || Presence.Params.Contains(k))) return false;
         if (ab.Api == "Mana" && ProducedMask(ab["Produced"]) is null && ab["Produced"] is not ("Combo ColorIdentity" or "Chosen")) return false;
         if (ab["Amount"] is not null && !int.TryParse(ab["Amount"], out _)) return false;
         foreach (var part in ab.Cost.Parts)
@@ -651,6 +661,7 @@ public sealed partial class Game
                 if (ab.Cost.Tap && (c.Tapped || IsSick(c))) continue;
                 if (ab["RestrictValid"] is { } rv && !ManaRestriction.Allows(this, c, rv, _payingFor, _payingForSpell)) continue;
                 if (ab.P.Values.Keys.Any(Presence.Params.Contains) && !Presence.Hold(ab.P, ContextFor(c))) continue;
+                if (ab["Activation"] is { } activation && !Presence.ConditionHolds(activation, ContextFor(c))) continue;
                 var mask = ab.Api == "ManaReflected" ? ReflectedMask(this, c, ab)
                     : ab["Produced"] == "Combo ColorIdentity" ? CommanderIdentity(player)
                     : ab["Produced"] == "Chosen" ? c.ChosenColor?.Mask() ?? 0
@@ -676,6 +687,10 @@ public sealed partial class Game
             foreach (var c in State.BattlefieldCards)
                 if (c.Controller == player && c.Types.Is(CardType.Creature) && !c.Tapped && c.Id != excludeId && !list.Any(m => m.CardId == c.Id))
                     list.Add(new ManaSource(c.Id, ConvokeAbility, c.Colors == 0 ? ManaColor.C.Mask() : c.Colors | ManaColor.C.Mask(), 1, 0, 8));
+        // Delve: each card exiled from your graveyard pays for {1} (rule 702.66). Preferred to tapping lands.
+        if (_payingForSpell && _payingFor is { } delver && delver.HasKeyword("Delve"))
+            foreach (var id in p.Graveyard)
+                if (id != excludeId && id != delver.Id) list.Add(new ManaSource(id, DelveAbility, ManaColor.C.Mask(), 1, 0, -1));
         // Cheapest first; among equals, the least flexible so flexible sources stay available.
         list.Sort((a, b) =>
         {
@@ -735,10 +750,23 @@ public sealed partial class Game
         P = new Forge.ForgeParams("AB$ Mana | Cost$ T | Produced$ C"), Api = "Mana", Kind = AbilityKind.Activated, Cost = new Cost { Tap = true },
     };
 
+    /// <summary>Stands for exiling a card from the graveyard to delve.</summary>
+    private static readonly AbilityDef DelveAbility = new()
+    {
+        P = new Forge.ForgeParams("AB$ Mana | Produced$ C"), Api = "Mana", Kind = AbilityKind.Activated,
+    };
+
     private void UseManaSource(ManaSource src, ManaColor color, int player)
     {
         var card = State[src.CardId];
         var ab = src.Ability;
+        if (ab == DelveAbility)
+        {
+            MoveTo(card, Zone.Exile);
+            State.Players[player].Pool.Add(ManaColor.C, 1);
+            Note($"  delve {card.Name}");
+            return;
+        }
         if (ab.Cost.Tap) Tap(card);
         foreach (var part in ab.Cost.Parts)
             switch (part.Kind)
@@ -778,37 +806,37 @@ public sealed partial class Game
             switch (part.Kind)
             {
                 case CostPartKind.PayLife:
-                    lifeNeeded += int.TryParse(part.Amount, out var l) ? l : 0;
+                    lifeNeeded += AmountOf(part, x);
                     break;
                 case CostPartKind.Sacrifice:
                     if (part.Valid == "CARDNAME") { if (source.Zone != Zone.Battlefield) return false; }
-                    else if (CostCandidates(part, source, player).Count < AmountOf(part)) return false;
+                    else if (CostCandidates(part, source, player).Count < AmountOf(part, x)) return false;
                     break;
                 case CostPartKind.Discard:
                     if (part.Valid == "Hand") break;
                     if (part.Valid == "CARDNAME") { if (source.Zone != Zone.Hand) return false; break; }
-                    if (CostCandidates(part, source, player).Count < AmountOf(part)) return false;
+                    if (CostCandidates(part, source, player).Count < AmountOf(part, x)) return false;
                     break;
                 case CostPartKind.ExileFromGraveyard:
                 case CostPartKind.TapUntapped:
                 case CostPartKind.ExileFromHand:
                 case CostPartKind.ReturnToHand:
-                    if (CostCandidates(part, source, player).Count < AmountOf(part)) return false;
+                    if (CostCandidates(part, source, player).Count < AmountOf(part, x)) return false;
                     break;
                 case CostPartKind.ExileSelf:
                     if (source.Zone != Zone.Hand) return false;
                     break;
                 case CostPartKind.RemoveCounter:
-                    if (source.CounterCount(part.Valid) < AmountOf(part)) return false;
+                    if (source.CounterCount(part.Valid) < AmountOf(part, x)) return false;
                     break;
                 case CostPartKind.Reveal:
-                    if (CostCandidates(part, source, player).Count < AmountOf(part)) return false;
+                    if (CostCandidates(part, source, player).Count < AmountOf(part, x)) return false;
                     break;
                 case CostPartKind.ExileSource:
                     if (source.Zone is not (Zone.Battlefield or Zone.Graveyard or Zone.Hand)) return false;
                     break;
                 case CostPartKind.TapPower:
-                    if (CostCandidates(part, source, player).Sum(id => Math.Max(0, State[id].Power)) < AmountOf(part)) return false;
+                    if (CostCandidates(part, source, player).Sum(id => Math.Max(0, State[id].Power)) < AmountOf(part, x)) return false;
                     break;
             }
         // Life can be paid only if the player has at least that much (rule 119.4).
@@ -816,7 +844,8 @@ public sealed partial class Game
         return PlanManaPayment(player, cost.Mana, x, excludeSourceFromMana ? source.Id : -1, Math.Max(0, p.Life - lifeNeeded)) is not null;
     }
 
-    private static int AmountOf(CostPart part) => int.TryParse(part.Amount, out var n) ? n : 1;
+    /// <summary>How many a cost part asks for: its number, or X ("pay X life") once X is chosen.</summary>
+    private static int AmountOf(CostPart part, int x = 1) => int.TryParse(part.Amount, out var n) ? n : part.Amount == "X" ? x : 1;
 
     private List<int> CostCandidates(CostPart part, Card source, int player)
     {
@@ -859,7 +888,7 @@ public sealed partial class Game
     {
         LastSacrificed.Clear();
         var p = State.Players[player];
-        var lifeNeeded = cost.Parts.Where(q => q.Kind == CostPartKind.PayLife).Sum(AmountOf);
+        var lifeNeeded = cost.Parts.Where(q => q.Kind == CostPartKind.PayLife).Sum(q => AmountOf(q, x));
         var plan = PlanManaPayment(player, cost.Mana, x, excludeSourceFromMana ? source.Id : -1, Math.Max(0, p.Life - lifeNeeded));
         if (plan is null) return false;
 
@@ -870,7 +899,7 @@ public sealed partial class Game
         if (cost.Tap) Tap(source);
         foreach (var part in cost.Parts)
         {
-            var n = AmountOf(part);
+            var n = AmountOf(part, x);
             switch (part.Kind)
             {
                 case CostPartKind.PayLife:

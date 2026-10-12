@@ -232,6 +232,12 @@ public sealed partial class Game
     private void ExecuteStep(Step step)
     {
         SetStep(step);
+        // "Skip your draw step" (Necropotence).
+        if (Replacements.SkipsStep(this, State.ActivePlayer, step))
+        {
+            Note($"skip {step}");
+            return;
+        }
         switch (step)
         {
             case Step.Untap:
@@ -485,11 +491,11 @@ public sealed partial class Game
             }
         }
 
-        // Flashback: cast from the graveyard.
+        // Flashback and escape: cast from the graveyard.
         foreach (var id in p.Graveyard)
         {
             var c = State[id];
-            if (c.IsBlank || c.CurrentFace.Flashback is null || !seenNames.Add("graveyard:" + c.Name)) continue;
+            if (c.IsBlank || c.CurrentFace.Flashback is null && Statics.EscapeCost(this, c) is null || !seenNames.Add("graveyard:" + c.Name)) continue;
             if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed)) continue;
             for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
                 if (CanCast(c, i)) result.Add(new GameAction.Cast(id, i));
@@ -546,6 +552,8 @@ public sealed partial class Game
     private bool CanActivate(Card c, AbilityDef ab, bool sorcerySpeed)
     {
         if (ab["SorcerySpeed"] == "True" && !sorcerySpeed) return false;
+        if (ab["Activation"] is { } activation && !Presence.ConditionHolds(activation, ContextFor(c))) return false;
+        if (ab.CharmNumExpr is { } charmNum && ab.CharmCount > Effect.EvalAmount(ContextFor(c), charmNum)) return false;
         // Ninjutsu: only while you have an attacking creature (the goldfish never blocks, so attackers are unblocked).
         if (ab.Api == "Ninjutsu" && State.Step is not (Step.DeclareAttackers or Step.CombatDamage)) return false;
         // A Class gains its levels in order (rule 716.2a).
@@ -583,15 +591,22 @@ public sealed partial class Game
         var spell = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : null;
         if (c.Zone == Zone.Graveyard && c.CurrentFace.Flashback is { } flashback)
             cost = flashback;
+        else if (c.Zone == Zone.Graveyard && Statics.EscapeCost(this, c) is { } escape)
+            cost = escape;
         else if (spell?.AltCost is { } alt)
             cost = alt;
         else if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].Cost is { } abCost && c.CurrentFace.SpellAbilities[spellIndex]["Cost"] is not null)
             cost = abCost;
         else
             cost = new Cost { Mana = c.CurrentFace.ManaCost };
-        // "You may cast it without paying its mana cost" from an effect.
-        if (c.Id == _freeCast || c.Zone is Zone.Exile or Zone.Graveyard or Zone.Library && Statics.MayPlay(this, c.Controller).GetValueOrDefault(c.Id))
+        // "You may cast it without paying its mana cost" from an effect, or for another cost instead (Bolas's Citadel).
+        var grant = c.Zone is Zone.Exile or Zone.Graveyard or Zone.Library ? Statics.MayPlay(this, c.Controller).GetValueOrDefault(c.Id) : default;
+        if (c.Id == _freeCast || grant.Free)
             cost = new Cost { Mana = ManaCost.Zero, Tap = cost.Tap, Untap = cost.Untap, Parts = cost.Parts };
+        else if (grant.AltManaCost is { } alt && c.Zone == Zone.Library)
+            cost = new Cost { Tap = cost.Tap, Untap = cost.Untap, Parts = cost.Parts }.Plus(Statics.AltManaCost(c, alt));
+        // Optional additional costs chosen for this cast (kicker, bargain).
+        if (spell?.ExtraCost is { } extraCost) cost = cost.Plus(extraCost);
         var extra = c.Zone == Zone.Command ? 2 * c.CommandCasts : 0;
         extra -= Statics.CostReduction(this, c, c.Controller);
         // Affinity for [type]: {1} less for each one you control (rule 702.41).
@@ -620,6 +635,9 @@ public sealed partial class Game
         if (cost.Mana.NoCost) return false;
         if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].AltCostOf is { } altStatic && !Presence.Hold(altStatic.P, ContextFor(c)))
             return false;
+        if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex] is { CharmNumExpr: { } charmNum } modal
+            && modal.CharmCount > Effect.EvalAmount(ContextFor(c), charmNum))
+            return false;
         if (!CanPayCost(cost, c, c.Controller, 0, excludeSourceFromMana: true)) return false;
         var ability = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : c.CurrentFace.AuraSpell;
         return ability is null || HasLegalTargets(c, ability);
@@ -633,17 +651,21 @@ public sealed partial class Game
         var ability = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : c.CurrentFace.AuraSpell ?? PermanentSpell;
 
         var x = 0;
-        if (cost.Mana.XCount > 0)
+        if (HasX(cost))
             x = Decider.ChooseX(this, player, c, MaxAffordableX(cost, c, player));
+        var spliced = ChooseSplices(c, player, x, ref cost);
+        var escaped = from == Zone.Graveyard && c.CurrentFace.Flashback is null;
 
         // Move to the stack first (rule 601.2a), then choose targets and pay.
         RemoveFromZone(c);
         c.Zone = Zone.Stack;
+        c.PaidOptional = ability.OptionalCosts;
         var item = new StackItem
         {
             Id = State.NextStackId++, SourceId = c.Id, Ability = ability, Controller = player, IsSpell = true, X = x,
-            ChainTargets = ChooseChainTargets(c, ability, player, x), Description = c.Name + (from == Zone.Graveyard ? " (flashback)" : ""),
-            ExileAfter = from == Zone.Graveyard || _castExileAfter,
+            ChainTargets = ChooseChainTargets(c, ability, player, x),
+            Description = c.Name + (from != Zone.Graveyard ? "" : escaped ? " (escape)" : " (flashback)") + (ability.OptionalCosts is { } oc ? $" ({string.Join(", ", oc).ToLowerInvariant()})" : ""),
+            ExileAfter = from == Zone.Graveyard && !escaped || _castExileAfter, Spliced = spliced,
         };
         _payingForSpell = true;
         var paid = PayCost(cost, c, player, x, excludeSourceFromMana: true);
@@ -669,6 +691,33 @@ public sealed partial class Game
             if (copies > 0) Note($"storm: {copies} cop{(copies == 1 ? "y" : "ies")}");
         }
         Fire(new TriggerEvent(TriggerMode.SpellCast, CardId: c.Id, Player: player));
+    }
+
+    /// <summary>Whether a cost has an X to choose: in its mana ({X}) or another part ("pay X life").</summary>
+    private static bool HasX(Cost cost) => cost.Mana.XCount > 0 || cost.Parts.Any(p => p.Amount == "X");
+
+    /// <summary>
+    /// Splice (rule 702.47): as an Arcane spell is cast, other cards in hand with "splice onto Arcane"
+    /// may be revealed and their splice costs paid to add their effects. Cards whose effects target aren't offered.
+    /// </summary>
+    private List<int>? ChooseSplices(Card spell, int player, int x, ref Cost cost)
+    {
+        List<int>? spliced = null;
+        foreach (var id in State.Players[player].Hand.ToList())
+        {
+            var other = State[id];
+            if (id == spell.Id || other.IsBlank || other.CurrentFace.Splice is not { } splice || !spell.Types.HasSubtype(splice.Onto)) continue;
+            if (other.CurrentFace.SpellAbilities.Count == 0 || other.CurrentFace.SpellAbilities[0].Chain().Any(a => a.TargetFilter is not null)) continue;
+            var withSplice = cost.Plus(splice.Cost);
+            _payingForSpell = true;
+            var affordable = CanPayCost(withSplice, spell, player, x, excludeSourceFromMana: true);
+            _payingForSpell = false;
+            if (!affordable || !Decider.ChooseYesNo(this, player, other, $"splice {other.Name} onto {spell.Name}?")) continue;
+            cost = withSplice;
+            (spliced ??= new()).Add(id);
+            Note($"  splice {other.Name} onto {spell.Name}");
+        }
+        return spliced;
     }
 
     // A cast an effect allows mid-resolution ("cast it without paying its mana cost"): which card, and whether it's exiled afterwards.
@@ -724,7 +773,7 @@ public sealed partial class Game
         var ab = c.Activated[abilityIndex];
         var player = c.Controller;
         var x = 0;
-        if (ab.Cost.Mana.XCount > 0) x = Decider.ChooseX(this, player, c, MaxAffordableX(ab.Cost, c, player));
+        if (HasX(ab.Cost)) x = Decider.ChooseX(this, player, c, MaxAffordableX(ab.Cost, c, player));
         var targets = ChooseChainTargets(c, ab, player, x);
         if (ab["Planeswalker"] == "True") c.LoyaltyActivatedTurn = State.Turn;
         if (ab.IsCycling) Fire(new TriggerEvent(TriggerMode.Cycled, CardId: c.Id, Player: player));
@@ -855,6 +904,9 @@ public sealed partial class Game
             return;
         }
         RunChain(item);
+        // Spliced cards' effects, in the order they were spliced (rule 702.47b).
+        foreach (var id in item.Spliced ?? new List<int>())
+            if (!State.GameOver && State[id].CurrentFace.SpellAbilities.Count > 0) RunLinks(item, State[id].CurrentFace.SpellAbilities[0]);
         if (item.IsSpell && source.Zone == Zone.Stack)
         {
             // An Adventure cast from hand goes on an adventure: exiled, castable later as the creature.
@@ -883,8 +935,19 @@ public sealed partial class Game
             var ctx = new EffectContext { Game = this, Item = item, Ability = ab };
             if (!Conditions.Hold(ctx)) continue;
             if (ab["OptionalDecider"] is not null && !DecidesYes(ctx)) continue;
-            if (ab.UnlessCost is { } unless && PaysUnlessCost(ctx, unless)) continue;
             var handler = Effects.Get(ab.Api) ?? throw new InvalidOperationException($"no handler for {ab.Api}");
+            if (ab.UnlessCost is { } unless)
+            {
+                var paid = PaysUnlessCost(ctx, unless);
+                // UnlessResolveSubs$ WhenPaid: paying skips this effect and goes on; not paying does it and stops.
+                if (ab["UnlessResolveSubs"] == "WhenPaid")
+                {
+                    if (paid) continue;
+                    handler.Resolve(ctx);
+                    break;
+                }
+                if (paid) continue;
+            }
             handler.Resolve(ctx);
         }
     }
@@ -920,7 +983,8 @@ public sealed partial class Game
     {
         if (PlayerFor(x, x.Ability["UnlessPayer"]) is not { } p || State.Players[p].IsGoldfish) return false;
         if (!CanPayCost(cost, x.Host, p, x.X, excludeSourceFromMana: false)) return false;
-        if (!Decider.ChooseYesNo(this, p, x.Host, $"pay {cost.Mana} to avoid {x.Ability.Description}?")) return false;
+        var what = x.Ability["UnlessResolveSubs"] == "WhenPaid" ? "to go on" : "to avoid " + x.Ability.Description;
+        if (!Decider.ChooseYesNo(this, p, x.Host, $"pay {(cost.HasNonManaParts ? string.Join(" ", cost.Parts.Select(q => q.Raw)) : cost.Mana)} {what}?")) return false;
         PayCost(cost, x.Host, p, x.X, excludeSourceFromMana: false);
         Note($"  paid to avoid: {x.Ability.Description}");
         return true;
