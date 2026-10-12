@@ -67,6 +67,7 @@ public sealed class Filter
         ["Tribal"] = CardType.Kindred, ["Kindred"] = CardType.Kindred,
     };
 
+    private static readonly Regex LifeRx = new(@"^life(LE|LT|GE|GT|EQ|NE)(.+)$", RegexOptions.Compiled);
     private static readonly Regex CompareRx = new(@"^(cmc|power|toughness)(LE|LT|GE|GT|EQ|NE)(.+)$", RegexOptions.Compiled);
     private static readonly Regex CountersRx = new(@"^counters_(GE|LE|EQ|GT|LT)(\d+)_([A-Z0-9]+)$", RegexOptions.Compiled);
     private static readonly Regex HasCardsRx = new(@"^HasCardsIn(Hand|Graveyard|Library|Exile)_(.+)_(LE|LT|GE|GT|EQ|NE)(\d+)$", RegexOptions.Compiled);
@@ -249,6 +250,13 @@ public sealed class Filter
                 : (c, pl, x) => c is not null && (c.Colors & color.Mask()) != 0;
         if (test is null && KnownSubtypes.Contains(p))
             test = (c, pl, x) => c is not null && c.Types.HasSubtype(p);
+        // "You.lifeGE1": a player's life total.
+        if (test is null && LifeRx.Match(p) is { Success: true } lm)
+        {
+            var amount = Amount.Parse(lm.Groups[2].Value, ctx);
+            var op = lm.Groups[1].Value;
+            test = (c, pl, x) => c is null && pl is { } who && Compare(x.S.Players[who].Life, op, amount.Eval(x));
+        }
         if (test is null && CompareRx.Match(p) is { Success: true } m)
         {
             var amount = Amount.Parse(m.Groups[3].Value, ctx);

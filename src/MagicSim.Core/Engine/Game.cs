@@ -808,6 +808,22 @@ public sealed partial class Game
                     if (!check || CanCast(c, i)) result.Add(new GameAction.Cast(id, i));
         }
 
+        // Foretold cards: cast from exile for their foretell cost on a later turn (rule 702.143).
+        List<string>? seenForetold = null;
+        foreach (var id in p.Exile)
+        {
+            var c = State[id];
+            if (c.IsBlank || c.ForetoldTurn < 0 || c.ForetoldTurn >= State.Turn || c.CurrentFace.Foretell is null || !AddName(seenForetold ??= new(), c.Name)) continue;
+            if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed)) continue;
+            if (c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0)
+            {
+                if (!check || CanCast(c, -1)) result.Add(new GameAction.Cast(id, -1));
+            }
+            else
+                for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
+                    if (c.CurrentFace.SpellAbilities[i].AltCost is null && (!check || CanCast(c, i))) result.Add(new GameAction.Cast(id, i));
+        }
+
         List<(string Name, bool FaceDown, bool Tapped, bool Sick)>? seenPermanents = null;
         foreach (var c in State.BattlefieldCards)
         {
@@ -930,6 +946,8 @@ public sealed partial class Game
         var spell = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : null;
         if (c.Zone == Zone.Graveyard && c.FlashbackCost is { } flashback)
             cost = flashback;
+        else if (c.Zone == Zone.Exile && c.ForetoldTurn >= 0 && c.CurrentFace.Foretell is { } foretold)
+            cost = foretold;
         else if (c.Zone == Zone.Graveyard && Statics.EscapeCost(this, c) is { } escape)
             cost = escape;
         else if (spell?.AltCost is { } alt)
@@ -1639,6 +1657,7 @@ public sealed partial class Game
 
     private void Lose(Player p, string reason)
     {
+        if (Replacements.CantHappen(this, "GameLoss", p.Index)) return;
         p.Lost = true;
         p.LossReason = reason;
         Note($"player {p.Index} loses ({reason})");

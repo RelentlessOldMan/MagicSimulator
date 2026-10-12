@@ -635,12 +635,24 @@ sealed class AddPhaseEffect : Effect
 sealed class AddTurnEffect : Effect
 {
     public override string Api => "AddTurn";
-    public override IReadOnlySet<string> Params { get; } = P("NumTurns", "Defined");
+    public override IReadOnlySet<string> Params { get; } = P("NumTurns", "Defined", "ExtraTurnDelayedTrigger", "ExtraTurnDelayedTriggerExecute");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         ValidateAmount(ab, "NumTurns", ctx);
         Defined.ValidatePlayers(ab["Defined"], ctx);
+        // "At the beginning of that turn's end step, you lose the game" (Final Fortune): a trigger only during that turn.
+        if (ab["ExtraTurnDelayedTrigger"] is { } del)
+        {
+            if (ab["ExtraTurnDelayedTriggerExecute"] is not { } exec || !ctx.Face.SVars.TryGetValue(del, out var body))
+                ctx.Need("AddTurn.ExtraTurnDelayedTrigger:" + del);
+            else
+            {
+                var p = new Forge.ForgeParams(body);
+                var kept = p.Values.Where(kv => kv.Key != "ThisTurn").Select(kv => $"{kv.Key}$ {kv.Value}");
+                ab.Delayed = CardCompiler.CompileTrigger(new Forge.ForgeParams(string.Join(" | ", kept) + " | Execute$ " + exec), ctx);
+            }
+        }
     }
 
     public override void Resolve(EffectContext x)
@@ -648,7 +660,16 @@ sealed class AddTurnEffect : Effect
         // Only the simulated player's turns are played; extra turns for a goldfish opponent change nothing.
         var players = x.Ability["Defined"] is { } d ? Defined.Players(d, x) : x.Ability.TargetFilter is not null ? Defined.Players("Targeted", x) : new() { x.Controller };
         if (!players.Contains(Game.Me)) return;
-        x.S.ExtraTurns += Amount(x, x.Ability["NumTurns"], 1);
+        var n = Amount(x, x.Ability["NumTurns"], 1);
+        x.S.ExtraTurns += n;
+        // The newest extra turns come first (rule 500.7): any already waiting move back.
+        if (x.Ability.Delayed is { } delayed)
+        {
+            for (var i = 0; i < x.S.Delayed.Count; i++)
+                if (x.S.Delayed[i].OnlyTurn is { } later && later > x.S.Turn) x.S.Delayed[i] = x.S.Delayed[i] with { OnlyTurn = later + n };
+            for (var t = 1; t <= n; t++)
+                x.S.Delayed.Add(new DelayedTrigger(delayed, x.Host.Id, x.Controller, new(), x.S.Turn, ThisTurn: false, NextTurn: false, OnlyTurn: x.S.Turn + t));
+        }
         x.Game.Note($"  extra turn(s): {x.S.ExtraTurns}");
     }
 }

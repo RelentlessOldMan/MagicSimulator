@@ -20,6 +20,8 @@ public enum ReplacementKind
     ShuffleInstead,
     /// <summary>"As you cascade, you may put a land card from among the exiled cards onto the battlefield tapped" (Averna).</summary>
     AsCascade,
+    /// <summary>"You can't lose the game this turn" (Angel's Grace): the event doesn't happen.</summary>
+    CantHappen,
 }
 
 /// <summary>A replacement effect (rule 614) of a permanent or effect object, other than its own "as this enters".</summary>
@@ -52,7 +54,8 @@ public static class Replacements
         ["CreateToken"] = new(StringComparer.Ordinal) { "ValidToken", "ValidPlayer", "EffectOnly" },
         ["AddCounter"] = new(StringComparer.Ordinal) { "ValidCard", "ValidCounterType", "EffectOnly", "ValidObject" },
         ["GainLife"] = new(StringComparer.Ordinal) { "ValidPlayer" },
-        ["LifeReduced"] = new(StringComparer.Ordinal) { "ValidPlayer" },
+        // "Damage that would reduce your life total to less than 1 reduces it to 1 instead" (Angel's Grace).
+        ["LifeReduced"] = new(StringComparer.Ordinal) { "ValidPlayer", "IsDamage", "Result" },
         ["Moved"] = new(StringComparer.Ordinal) { "ValidCard", "Origin", "Destination", "ValidLKI" },
         ["Draw"] = new(StringComparer.Ordinal) { "ValidPlayer", "NotFirstCardInDrawStep" },
     };
@@ -73,6 +76,14 @@ public static class Replacements
             if (r[key] is { } ovc && ovc.Split(',').All(t => t.Contains("OppCtrl", StringComparison.Ordinal) || t.Contains("OppOwn", StringComparison.Ordinal)))
                 return true;
 
+        // "You can't lose the game"; "your opponents can't win the game" (goldfish opponents never win anyway).
+        if (evt is "GameLoss" or "GameWin" && r["Layer"] == "CantHappen" && r.Values.Keys.All(k => Common.Contains(k) || k is "ValidPlayer" or "Layer"))
+        {
+            if (evt == "GameWin") return r["ValidPlayer"] == "Opponent";
+            if (r["ValidPlayer"] is { } lvp) Filter.Parse(lvp, ctx);
+            face.Replacements.Add(new ReplacementDef { P = r, Event = evt, Kind = ReplacementKind.CantHappen, Face = face });
+            return true;
+        }
         // "Skip your [step]": BeginPhase with Skip$ True.
         if (evt == "BeginPhase" && r["Skip"] == "True" && r["Phase"] is { } phase && phase.Split(',').All(ph => Enum.GetValues<Step>().Any(st => Conditions.PhaseIs(st, ph.Trim())))
             && r.Values.Keys.All(k => Common.Contains(k) || k is "ValidPlayer" or "Phase" or "Skip" || Presence.Params.Contains(k)))
@@ -230,12 +241,21 @@ public static class Replacements
     private static bool PlayerOk(ReplacementDef r, string key, int? p, EffectContext x) =>
         r[key] is not { } f || p is { } pl && Effect.FilterFor(r.Face, f).MatchesPlayer(pl, x);
 
+    /// <summary>Whether a "can't happen" replacement stops this event for this player ("you can't lose the game this turn").</summary>
+    public static bool CantHappen(Game g, string evt, int player)
+    {
+        foreach (var (host, r) in Active(g, evt))
+            if (r.Kind == ReplacementKind.CantHappen && PlayerOk(r, "ValidPlayer", player, ContextFor(g, host, r, 0)) && Presence.Hold(r.P, ContextFor(g, host, r, 0)))
+                return true;
+        return false;
+    }
+
     /// <summary>
     /// The amount after every applicable amount replacement. When several apply, the affected
     /// player picks the order (rule 616.1); the engine picks the order that helps the simulated player.
     /// </summary>
     public static int Amount(Game g, string evt, int amount, Card? source = null, Card? targetCard = null, int? targetPlayer = null,
-        bool combat = false, string? counterType = null)
+        bool combat = false, string? counterType = null, bool damage = false)
     {
         if (amount <= 0) return amount;
         var applicable = new List<(Card Host, ReplacementDef R)>();
@@ -252,7 +272,9 @@ public static class Replacements
                 "CreateToken" => CardOk(r, "ValidToken", targetCard, x) && PlayerOk(r, "ValidPlayer", targetPlayer, x),
                 "AddCounter" => CardOk(r, "ValidCard", targetCard, x) && (r["ValidObject"] is null || CardOk(r, "ValidObject", targetCard, x))
                     && (r["ValidCounterType"] is not { } ct || ct == counterType),
-                "GainLife" or "LifeReduced" => PlayerOk(r, "ValidPlayer", targetPlayer, x),
+                "GainLife" => PlayerOk(r, "ValidPlayer", targetPlayer, x),
+                "LifeReduced" => PlayerOk(r, "ValidPlayer", targetPlayer, x) && (r["IsDamage"] != "True" || damage)
+                    && (r["Result"] is not { } res || Filter.Compare(g.State.Players[targetPlayer!.Value].Life - amount, res[..2], int.Parse(res[2..]))),
                 _ => false,
             };
             if (ok) applicable.Add((host, r));

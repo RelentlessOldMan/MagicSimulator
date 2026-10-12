@@ -279,6 +279,41 @@ sealed class ChangeTargetsEffect : Effect
 }
 
 /// <summary>"Choose a card …": each defined player chooses cards from a zone; later effects use them as ChosenCard.</summary>
+/// <summary>Foretell: exile this card from your hand face down; it can be cast on a later turn (rule 702.143).</summary>
+sealed class ForetellEffect : Effect
+{
+    public override string Api => "Foretell";
+    public override IReadOnlySet<string> Params { get; } = P();
+
+    public override void Resolve(EffectContext x)
+    {
+        x.Game.MoveTo(x.Host, Zone.Exile);
+        x.Host.ForetoldTurn = x.S.Turn;
+        x.Game.Note($"  foretell {x.Host.Name}");
+    }
+}
+
+/// <summary>"Choose a source": a card on the battlefield or the stack (prevention shields name it).</summary>
+sealed class ChooseSourceEffect : Effect
+{
+    public override string Api => "ChooseSource";
+    public override IReadOnlySet<string> Params { get; } = P("Choices", "Defined");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Choices"] is { } ch) Filter.Parse(ch, ctx); else ctx.Need("ChooseSource:NoChoices");
+        if (ab["Defined"] is { } d && d != "You") ctx.Need("ChooseSource.Defined:" + d);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var filter = FilterFor(x.SVarFace, x.Ability["Choices"]!);
+        var options = x.S.BattlefieldCards.Concat(x.Game.CardsIn(Zone.Stack)).Where(c => c.Id != x.Host.Id && filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
+        if (options.Count == 0) return;
+        x.Host.ChosenCards = x.Game.Decider.ChooseCards(x.Game, x.Controller, Choice.Generic, x.Host, options, 1, 1);
+    }
+}
+
 sealed class ChooseCardEffect : Effect
 {
     public override string Api => "ChooseCard";

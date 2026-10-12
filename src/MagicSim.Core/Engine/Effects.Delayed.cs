@@ -4,7 +4,7 @@ namespace MagicSim.Core.Engine;
 
 /// <summary>A delayed triggered ability waiting for its event (rule 603.7); it triggers once.</summary>
 public sealed record DelayedTrigger(TriggerDef Trigger, int HostId, int Controller, List<int> Remembered, int Turn, bool ThisTurn, bool NextTurn,
-    List<int>? Players = null, int Number = 0);
+    List<int>? Players = null, int Number = 0, int? OnlyTurn = null);
 
 /// <summary>"At the beginning of the next end step, …", "When you next cast …": sets up a delayed trigger.</summary>
 sealed class DelayedTriggerEffect : Effect

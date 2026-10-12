@@ -76,6 +76,8 @@ public sealed class Card
     public int LoyaltyActivatedTurn { get; set; }
     /// <summary>The turn this creature was last exerted (rule 701.39), or -1.</summary>
     public int ExertedTurn { get; set; } = -1;
+    /// <summary>The turn this card was foretold (exiled face down from hand), or -1.</summary>
+    public int ForetoldTurn { get; set; } = -1;
     /// <summary>Regeneration shields until end of turn (rule 701.15).</summary>
     public int RegenShields { get; set; }
     /// <summary>Optional additional costs paid when it was last cast ("Kicker", "Bargain"): "if it was kicked".</summary>
@@ -205,7 +207,7 @@ public sealed class Card
         RememberedPlayers = RememberedPlayers is null ? null : new List<int>(RememberedPlayers),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
+        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
         TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,

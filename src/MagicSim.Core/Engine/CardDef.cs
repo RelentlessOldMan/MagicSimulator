@@ -198,6 +198,10 @@ public sealed class FaceDef
     public FaceDef? FaceDownFace { get; set; }
     /// <summary>Overload cost: cast it with "each" instead of "target" (rule 702.96).</summary>
     public Cost? Overload { get; set; }
+    /// <summary>Awaken N—cost: cast for this, it also makes a land you control an N/N Elemental creature with haste.</summary>
+    public (int N, Cost Cost)? Awaken { get; set; }
+    /// <summary>Foretell: exiled from hand for {2} on your turn, it can be cast on a later turn for this.</summary>
+    public Cost? Foretell { get; set; }
     /// <summary>Entwine cost: choose all modes of a modal spell for this much more (rule 702.42).</summary>
     public Cost? Entwine { get; set; }
     /// <summary>Rebound: cast from hand, it's exiled and this triggers at your next upkeep (rule 702.88).</summary>
@@ -209,7 +213,7 @@ public sealed class FaceDef
         var f = new FaceDef
         {
             Name = Name, ManaCost = ManaCost, Types = types, Power = power, Toughness = toughness, Colors = colors, Loyalty = Loyalty,
-            AuraSpell = AuraSpell, DoesntUntap = DoesntUntap, AttachedDoesntUntap = AttachedDoesntUntap, Flashback = Flashback, Retrace = Retrace, Strive = Strive, SVars = SVars, Oracle = Oracle, EtbCopy = EtbCopy,
+            AuraSpell = AuraSpell, DoesntUntap = DoesntUntap, AttachedDoesntUntap = AttachedDoesntUntap, Flashback = Flashback, Retrace = Retrace, Strive = Strive, Awaken = Awaken, Foretell = Foretell, SVars = SVars, Oracle = Oracle, EtbCopy = EtbCopy,
             EscapeCost = EscapeCost, Splice = Splice,
         };
         f.KeywordNames.UnionWith(KeywordNames);
@@ -367,6 +371,7 @@ public static partial class CardCompiler
                 if (mode.Kind == AbilityKind.Spell) face.SpellAbilities.Add(mode);
                 else face.Activated.Add(mode);
             if (face.Overload is { } overload && a.AbilityKind == "SP") AddOverload(face, a, overload, ctx);
+            if (face.Awaken is { } awaken && a.AbilityKind == "SP") AddAwaken(face, a, awaken.N, awaken.Cost, ctx);
         }
 
         // Basic land types grant "T: add one mana of that color" (rule 305.6).
@@ -686,6 +691,20 @@ public static partial class CardCompiler
             case "Overload":
                 face.Overload = ParseCost(Part(1), ctx);
                 return true;
+            case "Awaken":
+                if (!int.TryParse(Part(1), out var awakenN)) { ctx.Need("Keyword:Awaken+" + Part(1)); return true; }
+                face.Awaken = (awakenN, ParseCost(Part(2), ctx));
+                return true;
+            case "Foretell":
+            {
+                face.Foretell = ParseCost(Part(1), ctx);
+                if (CompileAbility(new ForgeParams("AB$ Foretell | Cost$ 2 | ActivationZone$ Hand | SpellDescription$ Foretell"), ctx, AbilityKind.Activated, 0) is { } foretell)
+                {
+                    foretell.IsSpecialAction = true;   // rule 702.143a: a special action, any time you have priority on your turn
+                    face.Activated.Add(foretell);
+                }
+                return true;
+            }
             case "Entwine":
                 face.Entwine = ParseCost(Part(1), ctx);
                 return true;
@@ -822,6 +841,22 @@ public static partial class CardCompiler
         each.AltCost = cost;
         each.ModeDescription = "Overload";
         face.SpellAbilities.Add(each);
+    }
+
+    /// <summary>
+    /// Awaken: the spell cast for its awaken cost also puts N +1/+1 counters on target land you control, which becomes a
+    /// 0/0 Elemental creature with haste (rule 702.113).
+    /// </summary>
+    private static void AddAwaken(FaceDef face, ForgeParams spell, int n, Cost cost, CompileContext ctx)
+    {
+        face.SVars["__AwakenSpell"] = $"DB$ {spell.Api} | " + string.Join(" | ", spell.Values.Where(kv => kv.Key is not ("SP" or "SpellDescription"))
+            .Select(kv => $"{kv.Key}$ {kv.Value}"));
+        face.SVars["__AwakenAnimate"] = "DB$ Animate | Defined$ ParentTarget | Power$ 0 | Toughness$ 0 | Types$ Creature,Elemental | Keywords$ Haste | Duration$ Permanent | SubAbility$ __AwakenSpell";
+        if (CompileAbility(new ForgeParams($"SP$ PutCounter | ValidTgts$ Land.YouCtrl | CounterType$ P1P1 | CounterNum$ {n} | SubAbility$ __AwakenAnimate"),
+                ctx, AbilityKind.Spell, 0) is not { } awakened) return;
+        awakened.AltCost = cost;
+        awakened.ModeDescription = "Awaken";
+        face.SpellAbilities.Add(awakened);
     }
 
     /// <summary>Morph: a way to cast it face down for {3}, and its face-down self, which can be turned face up for the morph cost.</summary>

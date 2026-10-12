@@ -44,6 +44,7 @@ public sealed partial class Game
         RemoveFromZone(c);
         // Leaving the stack keeps "it was cast" for the permanent it becomes; any other move forgets it.
         if (from != Zone.Stack) c.CastFrom = null;
+        if (from == Zone.Exile) c.ForetoldTurn = -1;
 
         if (from == Zone.Battlefield)
         {
@@ -313,7 +314,7 @@ public sealed partial class Game
             }
             EndAnimations(c, moment);
         }
-        if (moment == "cleanup") State.Delayed.RemoveAll(d => d.ThisTurn);
+        if (moment == "cleanup") State.Delayed.RemoveAll(d => d.OnlyTurn is { } only ? only <= State.Turn : d.ThisTurn);
         foreach (var p in State.Players)
             foreach (var id in p.Command.ToList())
             {
@@ -506,7 +507,7 @@ public sealed partial class Game
             _damageBatch.Add((source.Id, player, null, amount, combat));
             return amount;
         }
-        LifeLoss(player, Replacements.Amount(this, "LifeReduced", amount, source, targetPlayer: player));
+        LifeLoss(player, Replacements.Amount(this, "LifeReduced", amount, source, targetPlayer: player, damage: true));
         NoteDamageTo(player, amount, source, combat);
         if (source is not null) State.ThisTurn.DamageDealtBy[source.Id] = State.ThisTurn.DamageDealtBy.GetValueOrDefault(source.Id) + amount;
         // Toxic N: combat damage to a player also gives N poison counters (rule 702.164).
@@ -640,6 +641,7 @@ public sealed partial class Game
         {
             var d = State.Delayed[i];
             if (d.NextTurn && d.Turn == State.Turn) continue;
+            if (d.OnlyTurn is { } only && only != State.Turn) continue;
             if (!Triggers.MatchesDelayed(this, d, e)) continue;
             State.Delayed.RemoveAt(i--);
             _pending.Add(new PendingTrigger(d.HostId, d.Trigger, e, d.Controller, d.Remembered, d.Players, d.Number));
