@@ -16,6 +16,7 @@ public sealed partial class Game
             case Zone.Battlefield: State.Battlefield.Remove(c.Id); break;
             case Zone.Stack: break;   // the stack item is removed by whoever resolves/counters it
             case Zone.None: break;
+            case Zone.PhasedOut: State.PhasedOut.Remove(c.Id); break;
             case Zone.Library:
                 var lib = State.Players[c.Owner].Library;
                 var at = lib.IndexOf(c.Id);
@@ -39,6 +40,8 @@ public sealed partial class Game
         to = Replacements.Destination(this, c, from, to, out var shuffleInto);
         if (c.IsCommander && to is Zone.Graveyard or Zone.Exile) to = Zone.Command;
         RemoveFromZone(c);
+        // Leaving the stack keeps "it was cast" for the permanent it becomes; any other move forgets it.
+        if (from != Zone.Stack) c.CastFrom = null;
 
         if (from == Zone.Battlefield)
         {
@@ -526,7 +529,7 @@ public sealed partial class Game
 
     public void PayLife(int player, int amount)
     {
-        if (amount <= 0) return;
+        if (amount <= 0 || Statics.CantChangeLife(this, player)) return;
         LifeLoss(player, amount);
         State.Players[player].LifePaidTotal += amount;
     }
@@ -534,7 +537,7 @@ public sealed partial class Game
     /// <summary>A player loses life (from damage, paying it, or losing it): counted for the turn and "whenever … loses life" triggers.</summary>
     private void LifeLoss(int player, int amount)
     {
-        if (amount <= 0) return;
+        if (amount <= 0 || Statics.CantChangeLife(this, player)) return;
         State.Players[player].Life -= amount;
         State.ThisTurn.LifeLost[player] = State.ThisTurn.LifeLost.GetValueOrDefault(player) + amount;
         Fire(new TriggerEvent(TriggerMode.LifeLost, Player: player, Amount: amount));
@@ -650,7 +653,7 @@ public sealed partial class Game
         if (!ab.IsManaAbility || !ab.Cost.Mana.IsZero || ab.Cost.Untap) return false;
         if (!ab.P.Values.Keys.All(k => k is "AB" or "Cost" or "Produced" or "Amount" or "SpellDescription" or "AILogic"
                 or "AIPreference" or "SubAbility" or "ActivationZone" or "ColorOrType" or "Valid" or "ReflectProperty" or "RestrictValid"
-                or "PrecostDesc" or "Activation" or "AddsKeywords" or "AddsKeywordsValid" || Presence.Params.Contains(k))) return false;
+                or "PrecostDesc" or "Activation" or "AddsKeywords" or "AddsKeywordsValid" or "TriggersWhenSpent" || Presence.Params.Contains(k))) return false;
         if (ab.Api == "Mana" && ProducedMask(ab["Produced"]) is null && ab["Produced"] is not ("Combo ColorIdentity" or "Chosen")) return false;
         if (ab["Amount"] is not null && !int.TryParse(ab["Amount"], out _)) return false;
         foreach (var part in ab.Cost.Parts)
@@ -868,6 +871,11 @@ public sealed partial class Game
             spell.TempKeywords ??= new HashSet<string>(StringComparer.Ordinal);
             foreach (var k in adds.Split('&', StringSplitOptions.TrimEntries)) spell.TempKeywords.Add(k);
         }
+        // "When that mana is spent to cast a creature spell that shares a creature type with your commander": mana made
+        // while paying is spent on that spell.
+        if (ab.WhenSpent is { } spent && _payingForSpell && _payingFor is { } paidFor
+            && (spent["ValidCard"] is not { } spentValid || Effect.FilterFor(spent.Face ?? card.CurrentFace, spentValid).MatchesCard(paidFor, ContextFor(card))))
+            _pending.Add(new PendingTrigger(card.Id, spent, new TriggerEvent(TriggerMode.SpellCast, CardId: paidFor.Id, Player: player), player));
         if (ab.Cost.Tap && ab != ConvokeAbility) Fire(new TriggerEvent(TriggerMode.TapsForMana, CardId: card.Id, Player: player));
         for (var sub = ab.Sub; sub is not null; sub = sub.Sub)
         {
@@ -899,6 +907,8 @@ public sealed partial class Game
             {
                 case CostPartKind.PayLife:
                     lifeNeeded += AmountOf(part, x);
+                    // "Your life total can't change": you can't pay life (rule 119.8).
+                    if (AmountOf(part, x) > 0 && Statics.CantChangeLife(this, player)) return false;
                     break;
                 // "Draw two cards" as a cost (Sylvan Library): not from a library too small to draw from.
                 case CostPartKind.Draw:

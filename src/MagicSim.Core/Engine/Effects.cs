@@ -58,7 +58,7 @@ public static class Effects
         new ManaReflectedEffect(), new FlipCoinEffect(), new RepeatEffect(), new StoreSVarEffect(),
         new EffectEffect(), new ChooseColorEffect(), new ChooseTypeEffect(), new ChoosePlayerEffect(),
         new CopyPermanentEffect(), new CloneEffect(), new AnimateEffect(), new ProliferateEffect(),
-        new DelayedTriggerEffect(), new RepeatEachEffect(), new TwoPilesEffect(), new CumulativeUpkeepEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
+        new DelayedTriggerEffect(), new RepeatEachEffect(), new TwoPilesEffect(), new CumulativeUpkeepEffect(), new PhasesEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
         new AnimateAllEffect(), new FightEffect(), new BranchEffect(), new MultiplyCounterEffect(), new SetStateEffect(),
         new UntapAllEffect(), new RemoveCounterEffect(), new ClassLevelUpEffect(), new ProtectionEffect(), new RollDiceEffect(),
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
@@ -107,10 +107,21 @@ sealed class ManaEffect : Effect
     public override IReadOnlySet<string> Params { get; } =
         P(new[] { "Produced", "Amount", "ActivationZone", "RestrictValid", "Defined",
             // "If that mana is spent on a creature spell, it gains haste": applied when paying (Game.UseManaSource).
-            "AddsKeywords", "AddsKeywordsValid" }.Concat(Presence.Params).ToArray());
+            "AddsKeywords", "AddsKeywordsValid",
+            // "When that mana is spent to cast a creature spell …, scry 1": also when paying.
+            "TriggersWhenSpent" }.Concat(Presence.Params).ToArray());
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
+        if (ab["TriggersWhenSpent"] is { } spent)
+        {
+            if (!ctx.Face.SVars.TryGetValue(spent, out var body)) ctx.Need("SVarMissing:" + spent);
+            else
+            {
+                ab.WhenSpent = CardCompiler.CompileTrigger(new Forge.ForgeParams(body), ctx);
+                if (ab.WhenSpent.Mode != "SpellCast") ctx.Need("TriggersWhenSpent:" + ab.WhenSpent.Mode);
+            }
+        }
         ValidateAmount(ab, "Amount", ctx);
         Defined.ValidatePlayers(ab["Defined"], ctx);
         Presence.Validate(ab.P, ctx);
@@ -226,7 +237,10 @@ sealed class ChangeZoneEffect : Effect
         if (ab["Destination"] is null) ctx.Need("ChangeZone.Destination:none");
         if (ab["AtEOT"] is { } eot && eot is not ("Exile" or "Sacrifice")) ctx.Need("ChangeZone.AtEOT:" + eot);
         if (ab["LeaveBattlefield"] is { } lb && lb != "Exile") ctx.Need("ChangeZone.LeaveBattlefield:" + lb);
-        if (ab["ChangeType"] is { } ct) Filter.Parse(ct, ctx);
+        // "Search your library for a Forest card and a Plains card": EACH Forest & Plains, one of each.
+        if (ab["ChangeType"] is { } each && each.StartsWith("EACH ", StringComparison.Ordinal))
+            foreach (var part in each[5..].Split(" & ")) Filter.Parse(part, ctx);
+        else if (ab["ChangeType"] is { } ct) Filter.Parse(ct, ctx);
         if (ab["ChangeNum"] is { } cn && cn != "All") Engine.Amount.Parse(cn, ctx);
         if (ab["WithTotalCMC"] is { } total) Engine.Amount.Parse(total, ctx);
         Defined.ValidateCards(ab["Defined"], ctx);
@@ -315,6 +329,11 @@ sealed class ChangeZoneEffect : Effect
     private void Search(EffectContext x, int searcher, List<Zone> origins, Zone dest, int position, bool tapped)
     {
         var ab = x.Ability;
+        if (ab["ChangeType"] is { } each && each.StartsWith("EACH ", StringComparison.Ordinal))
+        {
+            SearchEach(x, searcher, origins, dest, position, tapped, each[5..].Split(" & "));
+            return;
+        }
         var filter = ab["ChangeType"] is { } ct ? FilterFor(x.SVarFace, ct) : null;
         var candidates = origins.SelectMany(z => x.S.ZoneList(searcher, z))
             .Where(id => filter is null || filter.MatchesCard(x.S[id], x)).ToList();
@@ -359,6 +378,25 @@ sealed class ChangeZoneEffect : Effect
             Note(x, id);
         }
         if (shuffle) x.Game.Shuffle(searcher);
+    }
+
+    /// <summary>"Search your library for a Forest card and a Plains card": up to one card for each filter.</summary>
+    private static void SearchEach(EffectContext x, int searcher, List<Zone> origins, Zone dest, int position, bool tapped, string[] filters)
+    {
+        var chosen = new List<int>();
+        foreach (var f in filters)
+        {
+            var filter = FilterFor(x.SVarFace, f);
+            var candidates = origins.SelectMany(z => x.S.ZoneList(searcher, z)).Where(id => !chosen.Contains(id) && filter.MatchesCard(x.S[id], x)).ToList();
+            if (candidates.Count > 0) chosen.AddRange(x.Game.Decider.ChooseCards(x.Game, searcher, Choice.Tutor, x.Host, candidates, 0, 1));
+        }
+        x.Game.Note($"  search: {(chosen.Count == 0 ? "nothing" : string.Join(", ", chosen.Select(id => x.S[id].Name)))}");
+        foreach (var id in chosen)
+        {
+            Move(x, x.S[id], dest, position, tapped);
+            Note(x, id);
+        }
+        if (origins.Contains(Zone.Library)) x.Game.Shuffle(searcher);
     }
 }
 
@@ -443,7 +481,7 @@ sealed class DigUntilEffect : Effect
 {
     public override string Api => "DigUntil";
     public override IReadOnlySet<string> Params { get; } = P(
-        "Valid", "ValidDescription", "FoundDestination", "RevealedDestination", "Amount", "Defined", "Shuffle", "RememberRevealed");
+        "Valid", "ValidDescription", "FoundDestination", "RevealedDestination", "Amount", "Defined", "Shuffle", "RememberRevealed", "RevealedLibraryPosition");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -469,7 +507,8 @@ sealed class DigUntilEffect : Effect
         var foundDest = Enum.Parse<Zone>(ab["FoundDestination"] ?? "Hand");
         var revealedDest = Enum.Parse<Zone>(ab["RevealedDestination"] ?? "Graveyard");
         foreach (var id in found) x.Game.MoveTo(x.S[id], foundDest);
-        foreach (var id in revealed) x.Game.MoveTo(x.S[id], revealedDest, -1);
+        var revealedAt = ab["RevealedLibraryPosition"] is { } rlp && int.TryParse(rlp, out var at) ? at : -1;
+        foreach (var id in revealed) x.Game.MoveTo(x.S[id], revealedDest, revealedAt);
         // The other cards revealed ("lose 1 life for each of the exiled cards").
         if (ab["RememberRevealed"] == "True") (x.Host.Remembered ??= new()).AddRange(revealed);
         x.Game.Note($"  revealed {revealed.Count}, found {(found.Count == 0 ? "nothing" : string.Join(", ", found.Select(id => x.S[id].Name)))}");
@@ -624,12 +663,14 @@ sealed class NameCardEffect : Effect
 sealed class DealDamageEffect : Effect
 {
     public override string Api => "DealDamage";
-    public override IReadOnlySet<string> Params { get; } = P("NumDmg", "Defined", "DividedAsYouChoose", "DamageSource");
+    public override IReadOnlySet<string> Params { get; } = P("NumDmg", "Defined", "DividedAsYouChoose", "DamageSource", "RememberDamaged");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         ValidateAmount(ab, "NumDmg", ctx);
-        Defined.ValidatePlayers(ab["Defined"], ctx);
+        // Defined$ players, or cards ("deals 2 damage to it": TriggeredCardLKICopy).
+        if (ab["Defined"] is { } d && !Defined.IsPlayerRef(d)) Defined.ValidateCards(d, ctx);
+        else Defined.ValidatePlayers(ab["Defined"], ctx);
         Defined.ValidateCards(ab["DamageSource"], ctx);
     }
 
@@ -637,7 +678,7 @@ sealed class DealDamageEffect : Effect
     {
         var n = Amount(x, x.Ability["NumDmg"], 0);
         var targets = x.Ability["Defined"] is { } d
-            ? Defined.Players(d, x).Select(TargetRef.OfPlayer).ToList()
+            ? Defined.IsPlayerRef(d) ? Defined.Players(d, x).Select(TargetRef.OfPlayer).ToList() : Defined.Cards(d, x).Select(TargetRef.OfCard).ToList()
             : x.Targets;
         // "N damage divided as you choose": one to each target, the rest to the first (players first).
         var divided = x.Ability["DividedAsYouChoose"] is not null && targets.Count > 0;
@@ -650,7 +691,11 @@ sealed class DealDamageEffect : Effect
             var dmg = !divided ? n : i == 0 ? n - (order.Count - 1) : 1;
             if (dmg <= 0) continue;
             if (t.Player is { } p) x.Game.DamagePlayer(p, dmg, source);
-            else if (t.CardId is { } id && x.S[id].Zone == Zone.Battlefield) x.Game.DamageCard(x.S[id], dmg, source);
+            else if (t.CardId is { } id && x.S[id].Zone == Zone.Battlefield)
+            {
+                x.Game.DamageCard(x.S[id], dmg, source);
+                if (x.Ability["RememberDamaged"] == "True") (x.Host.Remembered ??= new()).Add(id);
+            }
         }
     }
 }
@@ -730,10 +775,13 @@ abstract class CardsEffect : Effect
 sealed class PumpEffect : CardsEffect
 {
     public override string Api => "Pump";
-    public override IReadOnlySet<string> Params { get; } = P("NumAtt", "NumDef", "KW", "Defined", "RememberObjects", "ForgetImprinted", "PumpZone");
+    public override IReadOnlySet<string> Params { get; } = P("NumAtt", "NumDef", "KW", "Defined", "RememberObjects", "ForgetImprinted", "PumpZone", "Duration");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
+        // A player gaining a keyword ("you gain protection from everything", hexproof): nothing a goldfish opponent tests.
+        if (ab["Defined"] is { } who && Defined.IsPlayerRef(who)) return;
+        if (ab["Duration"] is { } dur) ctx.Need("Pump.Duration:" + dur);
         base.Validate(ab, ctx);
         if (ab["NumAtt"] != "Double") ValidateAmount(ab, "NumAtt", ctx);
         if (ab["NumDef"] != "Double") ValidateAmount(ab, "NumDef", ctx);
@@ -762,6 +810,7 @@ sealed class PumpEffect : CardsEffect
 
     public override void Resolve(EffectContext x)
     {
+        if (x.Ability["Defined"] is { } who && Defined.IsPlayerRef(who)) return;
         // "Double": gets +X/+0 where X is its power ("double its power").
         var doubleAtt = x.Ability["NumAtt"] == "Double";
         var doubleDef = x.Ability["NumDef"] == "Double";
@@ -837,6 +886,25 @@ sealed class DestroyEffect : CardsEffect
     public override void Resolve(EffectContext x)
     {
         foreach (var c in Cards(x)) x.Game.Destroy(c, regenerate: x.Ability["NoRegen"] != "True");
+    }
+}
+
+/// <summary>"All permanents you control phase out" until your next untap step (Teferi's Protection).</summary>
+sealed class PhasesEffect : Effect
+{
+    public override string Api => "Phases";
+    public override IReadOnlySet<string> Params { get; } = P("Defined");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Defined"] is not { } d || ab.TargetFilter is not null) ctx.Need("Phases:" + (ab["Defined"] ?? "Targeted"));
+        else Defined.ValidateCards(d, ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        foreach (var id in Defined.Cards(x.Ability["Defined"], x))
+            if (x.S[id].Controller == Game.Me) x.Game.PhaseOut(x.S[id]);
     }
 }
 

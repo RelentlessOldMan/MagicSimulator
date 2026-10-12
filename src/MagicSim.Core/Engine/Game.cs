@@ -316,6 +316,7 @@ public sealed partial class Game
         switch (step)
         {
             case Step.Untap:
+                PhaseIn();
                 ExpireEffects("untap");
                 HashSet<int>? held = null;
                 foreach (var c in State.BattlefieldCards)
@@ -355,6 +356,31 @@ public sealed partial class Game
             case Step.Cleanup: Cleanup(); return;   // no priority unless something triggers
         }
         if (!State.GameOver) PriorityLoop();
+    }
+
+    /// <summary>Your phased-out permanents phase in before you untap (rule 502.1); nothing enters, so nothing triggers.</summary>
+    private void PhaseIn()
+    {
+        foreach (var id in State.PhasedOut.ToList())
+        {
+            var c = State[id];
+            if (c.Controller != Me) continue;
+            State.PhasedOut.Remove(id);
+            State.Battlefield.Add(id);
+            c.Zone = Zone.Battlefield;
+            Note($"{c.Name} phases in");
+        }
+    }
+
+    /// <summary>Phases a permanent out, with what's attached to it (rule 702.26g).</summary>
+    public void PhaseOut(Card c)
+    {
+        if (c.Zone != Zone.Battlefield) return;
+        foreach (var attached in State.BattlefieldCards.Where(a => a.AttachedTo == c.Id).ToList()) PhaseOut(attached);
+        State.Battlefield.Remove(c.Id);
+        State.PhasedOut.Add(c.Id);
+        c.Zone = Zone.PhasedOut;
+        Note($"{c.Name} phases out");
     }
 
     /// <summary>"At the beginning of the next end step" actions (tokens exiled or sacrificed at end of turn).</summary>
@@ -866,6 +892,7 @@ public sealed partial class Game
             x = Decider.ChooseX(this, player, c, MaxAffordableX(cost, c, player));
         var spliced = ChooseSplices(c, player, x, ref cost);
         var escaped = from == Zone.Graveyard && c.FlashbackCost is null;
+        c.CastFrom = from;
 
         // Move to the stack first (rule 601.2a), then choose targets and pay.
         RemoveFromZone(c);

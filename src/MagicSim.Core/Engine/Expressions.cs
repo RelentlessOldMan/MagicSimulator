@@ -108,6 +108,9 @@ public sealed class Filter
             "ChosenCtrl" => (c, pl, x) => c is not null ? c.Controller == x.Host.ChosenPlayer : pl is not null && pl == x.Host.ChosenPlayer,
             "Chosen" => (c, pl, x) => c is null && pl is not null && pl == x.Host.ChosenPlayer,
             "DrawnThisTurn" => (c, pl, x) => c is not null && x.S.ThisTurn.Drawn.Contains(c.Id),
+            // "If you cast it" (from your hand): the permanent came from a spell. Only you cast spells here.
+            "wasCast" or "wasCastByYou" => (c, pl, x) => c is not null && c.CastFrom is not null && c.Controller == x.Controller,
+            "wasCastFromHand" or "wasCastFromYourHandByYou" => (c, pl, x) => c is not null && c.CastFrom == Zone.Hand && c.Controller == x.Controller,
             "ChosenCard" => (c, pl, x) => c is not null && (x.Host.ChosenCards?.Contains(c.Id) ?? false),
             // The controller of the creature this Aura enchants (Dance of the Dead's upkeep).
             "EnchantedController" => (c, pl, x) => c is null && pl is not null && x.Host.AttachedTo >= 0 && pl == x.S[x.Host.AttachedTo].Controller,
@@ -134,6 +137,8 @@ public sealed class Filter
             "ChosenType" => (c, pl, x) => c is not null && x.Host.ChosenType is { } ct
                 && (c.Types.HasSubtype(ct) || CardTypes.TryGetValue(ct, out var chosenCardType) && c.Types.Is(chosenCardType)),
             "IsImprinted" => (c, pl, x) => c is not null && (x.Host.Imprinted?.Contains(c.Id) ?? false),
+            // "Shares a creature type with your commander" (Path of Ancestry).
+            "sharesCreatureTypeWith Commander" => (c, pl, x) => c is not null && x.S.Cards.Any(k => k.IsCommander && k.Owner == x.Controller && SharesCreatureType(c.Types, k.Types)),
             "sharesNameWith Remembered" => (c, pl, x) => c is not null && x.Host.Remembered is { } rem
                 && rem.Any(id => id != c.Id && x.S[id].Name == c.Name),
             "EquippedBy" or "EnchantedBy" or "AttachedBy" => (c, pl, x) => c is not null && x.Host.AttachedTo == c.Id,
@@ -221,6 +226,10 @@ public sealed class Filter
         };
         return new Prop(neg, test, owner);
     }
+
+    private static bool SharesCreatureType(TypeLine a, TypeLine b) =>
+        a.AllCreatureTypes && (b.AllCreatureTypes || b.Subtypes.Any(TypeLine.IsCreatureType))
+        || a.Subtypes.Any(s => TypeLine.IsCreatureType(s) && b.HasSubtype(s));
 
     public static bool Compare(int a, string op, int b) => op switch
     {
@@ -631,6 +640,10 @@ public static class Defined
         "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
         "ReplacedCard", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard", "Parent", "DirectRemembered",
     };
+
+    /// <summary>Whether a Defined$ names players ("You", "Player.Opponent") rather than cards.</summary>
+    public static bool IsPlayerRef(string text) =>
+        text is not ("Targeted" or "ParentTarget" or "Remembered") && PlayerRefs.Contains(text) || text.StartsWith("Player.", StringComparison.Ordinal);
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
     {

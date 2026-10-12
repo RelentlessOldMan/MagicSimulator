@@ -791,8 +791,8 @@ sealed class PeekAndRevealEffect : Effect
 {
     public override string Api => "PeekAndReveal";
     public override IReadOnlySet<string> Params { get; } = P("PeekAmount", "NoReveal", "RememberPeeked", "Defined", "RevealValid", "RememberRevealed",
-        // "Reveal" without looking first: the same to a goldfish.
-        "NoPeek");
+        // "Reveal" without looking first, or "you may reveal it": the same to a goldfish.
+        "NoPeek", "RevealOptional");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {

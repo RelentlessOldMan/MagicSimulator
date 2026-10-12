@@ -165,7 +165,7 @@ public static class Statics
                 if (s["EffectZone"] is { } fez && fez is not ("Battlefield" or "Command" or "All")) ctx.Need("EffectZone:" + fez);
                 if (s["ValidCard"] is { } fvc) Filter.Parse(fvc, ctx);
                 break;
-            case "CantGainLife":
+            case "CantGainLife" or "CantChangeLife":
                 own = ValidPlayerParams;
                 if (s["ValidPlayer"] is { } gvp) Filter.Parse(gvp, ctx);
                 break;
@@ -573,10 +573,24 @@ public static class Statics
     /// <summary>"[Players] can't gain life" (Erebos).</summary>
     public static bool CantGainLife(Game g, int player)
     {
+        if (CantChangeLife(g, player)) return true;
         foreach (var source in Sources(g))
             foreach (var st in source.Statics)
             {
                 if (st.Mode != "CantGainLife" || !WorksFrom(source, st)) continue;
+                var x = ContextFor(g, source, st);
+                if ((st["ValidPlayer"] is not { } vp || Effect.FilterFor(x.SVarFace, vp).MatchesPlayer(player, x)) && Presence.Hold(st.P, x)) return true;
+            }
+        return false;
+    }
+
+    /// <summary>"Your life total can't change" (Teferi's Protection): no gaining, losing or paying life.</summary>
+    public static bool CantChangeLife(Game g, int player)
+    {
+        foreach (var source in Sources(g))
+            foreach (var st in source.Statics)
+            {
+                if (st.Mode != "CantChangeLife" || !WorksFrom(source, st)) continue;
                 var x = ContextFor(g, source, st);
                 if ((st["ValidPlayer"] is not { } vp || Effect.FilterFor(x.SVarFace, vp).MatchesPlayer(player, x)) && Presence.Hold(st.P, x)) return true;
             }

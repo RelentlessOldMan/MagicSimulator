@@ -58,6 +58,8 @@ public sealed class AbilityDef
     internal bool? AutoMana;
     /// <summary>Position in its chain (0 = the head) — index into StackItem.ChainTargets.</summary>
     public int ChainIndex { get; set; }
+    /// <summary>A mana ability's "when that mana is spent to cast …" trigger (TriggersWhenSpent$, Path of Ancestry).</summary>
+    public TriggerDef? WhenSpent { get; set; }
     /// <summary>"UnlessCost$": the effect doesn't happen if the payer pays this.</summary>
     public Cost? UnlessCost { get; set; }
     /// <summary>The effect object an "Effect" ability creates, compiled with the card.</summary>

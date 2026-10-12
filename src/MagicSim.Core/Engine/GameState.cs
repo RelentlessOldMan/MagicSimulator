@@ -1,6 +1,7 @@
 namespace MagicSim.Core.Engine;
 
-public enum Zone : byte { None, Library, Hand, Battlefield, Graveyard, Exile, Command, Stack }
+/// <summary>PhasedOut: a permanent treated as though it doesn't exist until it phases in (rule 702.26).</summary>
+public enum Zone : byte { None, Library, Hand, Battlefield, Graveyard, Exile, Command, Stack, PhasedOut }
 
 public enum Step : byte
 {
@@ -75,6 +76,8 @@ public sealed class Card
     public Zone? EnterInstead { get; set; }
     /// <summary>"If it would leave the battlefield, exile it instead" (unearth, From the Catacombs).</summary>
     public bool ExileIfLeaves { get; set; }
+    /// <summary>Where it was cast from, while it's that spell or the permanent the spell became ("if you cast it").</summary>
+    public Zone? CastFrom { get; set; }
     /// <summary>The card whose effect last exiled this one ("exiled with [source]").</summary>
     public int ExiledWith { get; set; } = -1;
     /// <summary>Face down (morph, rule 708): a nameless 2/2 creature with no abilities but turning face up.</summary>
@@ -184,7 +187,7 @@ public sealed class Card
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
         NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
-        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PaidOptional = PaidOptional, ExiledWith = ExiledWith, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
+        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
@@ -383,6 +386,8 @@ public sealed class GameState
     public Card this[int id] => Cards[id];
 
     public IEnumerable<Card> BattlefieldCards => Battlefield.Select(id => Cards[id]);
+    /// <summary>Permanents phased out (Teferi's Protection): kept, but outside the battlefield until they phase in.</summary>
+    public List<int> PhasedOut { get; set; } = new();
 
     public List<int> ZoneList(int player, Zone zone) => zone switch
     {
@@ -400,7 +405,7 @@ public sealed class GameState
     {
         Cards = Cards.Select(c => c.Clone()).ToList(),
         Players = Players.Select(p => p.Clone()).ToArray(),
-        Battlefield = new List<int>(Battlefield),
+        Battlefield = new List<int>(Battlefield), PhasedOut = new List<int>(PhasedOut),
         Stack = Stack.Select(s => s.Clone()).ToList(),
         Turn = Turn, ExtraTurns = ExtraTurns, ExtraTurnsTaken = ExtraTurnsTaken, Step = Step, ActivePlayer = ActivePlayer, Rng = Rng,
         GameOver = GameOver, Winner = Winner, WinReason = WinReason, ThisTurn = ThisTurn.Clone(), Attackers = new List<int>(Attackers),

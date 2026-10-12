@@ -31,7 +31,7 @@ public static class Triggers
 
     private static readonly HashSet<string> CommonParams = new(StringComparer.Ordinal)
     {
-        "Mode", "Execute", "TriggerDescription", "TriggerZones", "OptionalDecider", "Secondary", "ValidCard", "Static", "ActivationLimit", "TriggerController",
+        "Mode", "Execute", "TriggerDescription", "TriggerZones", "OptionalDecider", "Secondary", "ValidCard", "Static", "ActivationLimit", "ResolvedLimit", "TriggerController",
         // Conditions aren't checked again on resolution here anyway.
         "NoResolvingCheck",
     };
@@ -225,7 +225,8 @@ public static class Triggers
     /// <summary>"This ability triggers only once each turn" (ActivationLimit$): counts this triggering if allowed.</summary>
     public static bool UnderLimit(Game g, Card source, TriggerDef t)
     {
-        if (t["ActivationLimit"] is not { } lim || !int.TryParse(lim, out var limit)) return true;
+        // "Do this only once each turn" (ResolvedLimit$) is counted the same way, when it triggers.
+        if ((t["ActivationLimit"] ?? t["ResolvedLimit"]) is not { } lim || !int.TryParse(lim, out var limit)) return true;
         source.TriggerUses ??= new();
         var (turn, count) = source.TriggerUses.GetValueOrDefault(t);
         if (turn != g.State.Turn) count = 0;
