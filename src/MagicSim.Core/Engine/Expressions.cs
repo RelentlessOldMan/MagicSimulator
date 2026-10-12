@@ -115,6 +115,7 @@ public sealed class Filter
             "NamedCard" => (c, pl, x) => c is not null && x.Host.NamedCard is { } n && string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase),
             "IsRemembered" => (c, pl, x) => c is not null ? x.Host.Remembered?.Contains(c.Id) ?? false : pl is not null && pl == x.Item.IteratedPlayer,
             "IsTriggerRemembered" => (c, pl, x) => c is not null && (x.Item.DelayRemembered?.Contains(c.Id) ?? false),
+            "ThisTurnEntered" => (c, pl, x) => c is not null && c.Zone == Zone.Battlefield && c.EnteredTurn == x.S.Turn,
             "Historic" => (c, pl, x) => c is not null && (c.Types.Has(SuperType.Legendary) || c.Types.Is(CardType.Artifact) || c.Types.HasSubtype("Saga")),
             "ChosenColor" => (c, pl, x) => c is not null && x.Host.ChosenColor is { } cc && (c.Colors & cc.Mask()) != 0,
             "ChosenType" => (c, pl, x) => c is not null && x.Host.ChosenType is { } ct && c.Types.HasSubtype(ct),
@@ -335,6 +336,9 @@ public sealed class Amount
         {
             case "xPaid": return new(core, x => x.X);
             case "CardPower": return new(core, x => x.Host.LastKnownPower);
+            case var cc when cc.StartsWith("CardCounters.", StringComparison.Ordinal):
+                var counterKind = cc[13..];
+                return new(core, x => x.Host.CounterCount(counterKind));
             case "CardToughness": return new(core, x => x.Host.LastKnownToughness);
             case "LifeYouGainedThisTurn": return new(core, x => x.S.ThisTurn.LifeGained.GetValueOrDefault(x.Controller));
             case "CardsInYourHand": return new(core, x => x.S.Players[x.Controller].Hand.Count);
@@ -354,19 +358,32 @@ public sealed class Amount
             if (mask == 0) { ctx.Need("Amount:" + core); return Const(0); }
             return new(core, x => Devotion(x, mask));
         }
-        Zone? zone = kind switch
+        // "Count$Valid[Zone][,Zone…] Filter[$Aggregate]": how many cards match, or e.g. the greatest power among them.
+        var zones = kind.StartsWith("Valid", StringComparison.Ordinal) ? kind[5..].Split(',').Select(w => w switch
         {
-            "Valid" => Zone.Battlefield,
-            "ValidGraveyard" => Zone.Graveyard,
-            "ValidHand" => Zone.Hand,
-            "ValidLibrary" => Zone.Library,
-            "ValidExile" => Zone.Exile,
-            _ => null,
-        };
-        if (zone is { } z && arg.Length > 0)
+            "" or "Battlefield" => Zone.Battlefield,
+            "Graveyard" => Zone.Graveyard,
+            "Hand" => Zone.Hand,
+            "Library" => Zone.Library,
+            "Exile" => Zone.Exile,
+            _ => Zone.None,
+        }).ToList() : null;
+        if (zones is not null && !zones.Contains(Zone.None) && arg.Length > 0)
         {
-            var filter = Filter.Parse(arg, ctx);
-            return new(core, x => x.Game.CardsIn(z).Count(card => filter.MatchesCard(card, x)));
+            var dollar = arg.IndexOf('$');
+            var filter = Filter.Parse(dollar < 0 ? arg : arg[..dollar], ctx);
+            IEnumerable<Card> Matching(EffectContext x) => zones.SelectMany(z => x.Game.CardsIn(z)).Where(card => filter.MatchesCard(card, x));
+            switch (dollar < 0 ? null : arg[(dollar + 1)..])
+            {
+                case null: return new(core, x => Matching(x).Count());
+                case "GreatestCardPower": return new(core, x => Matching(x).Select(card => card.Power).DefaultIfEmpty(0).Max());
+                case "GreatestCardToughness": return new(core, x => Matching(x).Select(card => card.Toughness).DefaultIfEmpty(0).Max());
+                case "GreatestCMC": return new(core, x => Matching(x).Select(card => card.CurrentFace.ManaCost.ManaValue).DefaultIfEmpty(0).Max());
+                case "CardPower": return new(core, x => Matching(x).Sum(card => card.Power));
+                case "CardToughness": return new(core, x => Matching(x).Sum(card => card.Toughness));
+                case "SumCMC": return new(core, x => Matching(x).Sum(card => card.CurrentFace.ManaCost.ManaValue));
+                default: ctx.Need("Count:" + kind + "$" + arg[(dollar + 1)..]); return Const(0);
+            }
         }
         ctx.Need("Count:" + kind);
         return Const(0);
@@ -424,7 +441,7 @@ public static class Defined
     private static readonly HashSet<string> PlayerRefs = new(StringComparer.Ordinal)
     {
         "You", "Player", "Opponent", "Targeted", "TargetedPlayer", "ParentTarget", "TargetedController", "Player.Opponent",
-        "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner", "ChosenPlayer", "Remembered",
+        "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner", "ChosenPlayer", "Remembered", "TriggeredActivator",
     };
 
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
@@ -458,7 +475,7 @@ public static class Defined
             "ChosenPlayer" => x.Host.ChosenPlayer is { } cp ? new() { cp } : new(),
             "Remembered" => x.Item.IteratedPlayer is { } ip ? new() { ip } : new(),
             "TargetedOwner" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Owner).Take(1).ToList(),
-            "TriggeredTarget" or "TriggeredPlayer" => x.Item.TriggeredPlayer is { } tp ? new() { tp } : new(),
+            "TriggeredTarget" or "TriggeredPlayer" or "TriggeredActivator" => x.Item.TriggeredPlayer is { } tp ? new() { tp } : new(),
             _ => new() { x.Controller },
         };
     }

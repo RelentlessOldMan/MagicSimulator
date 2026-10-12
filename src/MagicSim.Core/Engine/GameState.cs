@@ -55,6 +55,8 @@ public sealed class Card
     public int? TokenToughness { get; init; }
     /// <summary>Triggers with a per-turn limit (ActivationLimit$) and the turn and times each last triggered.</summary>
     public Dictionary<TriggerDef, (int Turn, int Count)>? TriggerUses { get; set; }
+    /// <summary>The turn this permanent last entered the battlefield.</summary>
+    public int EnteredTurn { get; set; } = -1;
     /// <summary>The turn this permanent last activated a loyalty ability: one per turn (rule 606.3).</summary>
     public int LoyaltyActivatedTurn { get; set; }
     /// <summary>Regeneration shields until end of turn (rule 701.15).</summary>
@@ -140,7 +142,7 @@ public sealed class Card
         Remembered = Remembered is null ? null : new List<int>(Remembered),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn,
+        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn,
         TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
@@ -249,9 +251,12 @@ public sealed class TurnInfo
     public List<(int CardId, int Controller)> ControlUntilEot { get; set; } = new();
     /// <summary>Life each player gained this turn.</summary>
     public Dictionary<int, int> LifeGained { get; set; } = new();
+    /// <summary>Cards each player drew this turn.</summary>
+    public Dictionary<int, int> CardsDrawn { get; set; } = new();
     public TurnInfo Clone() => new()
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
+        CardsDrawn = new(CardsDrawn),
     };
 }
 

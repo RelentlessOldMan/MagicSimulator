@@ -363,6 +363,17 @@ public static partial class CardCompiler
                 // "Crew N: tap creatures with total power N or more: this becomes an artifact creature until end of turn."
                 AddGenerated(face, ctx, $"AB$ Animate | Cost$ Crew<{Part(1)}> | Defined$ Self | Types$ Artifact,Creature | SpellDescription$ Crew {Part(1)}");
                 return true;
+            case "Prowess":
+                // "Whenever you cast a noncreature spell, this creature gets +1/+1 until end of turn."
+                face.SVars["__ProwessPump"] = "DB$ Pump | Defined$ Self | NumAtt$ +1 | NumDef$ +1";
+                face.Triggers.Add(CompileTrigger(new ForgeParams(
+                    "Mode$ SpellCast | ValidCard$ Card.nonCreature | ValidActivatingPlayer$ You | TriggerZones$ Battlefield | Execute$ __ProwessPump"), ctx));
+                return true;
+            case "Toxic":
+            case "Affinity":
+                if (name == "Toxic" && !int.TryParse(Part(1), out _)) ctx.Need("Keyword:Toxic+" + Part(1));
+                if (name == "Affinity") Filter.Parse(Part(1), ctx);
+                return true;
             case "Changeling":
                 face.Types = new TypeLine { Types = face.Types.Types, Supers = face.Types.Supers, Subtypes = face.Types.Subtypes, AllCreatureTypes = true };
                 return true;

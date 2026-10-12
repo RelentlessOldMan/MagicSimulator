@@ -13,7 +13,7 @@ public static class Keywords
         // Deck-building only.
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
-        "Devoid", "Changeling", "Infect", "Wither", "Convoke",
+        "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity",
     };
 }
 
@@ -35,14 +35,15 @@ public static class Triggers
     {
         ["ChangesZone"] = new(StringComparer.Ordinal) { "Origin", "Destination" },
         ["Phase"] = new(StringComparer.Ordinal) { "Phase", "ValidPlayer" },
-        ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer" },
+        ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ActivatorThisTurnCast" },
+        ["CounterAddedOnce"] = new(StringComparer.Ordinal) { "CounterType", "ValidSource" },
         ["Attacks"] = new(StringComparer.Ordinal) { },
         ["Sacrificed"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["ChangesZoneAll"] = new(StringComparer.Ordinal) { "ValidCards", "Origin", "Destination" },
         ["DamageDoneOnce"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer" },
-        ["Drawn"] = new(StringComparer.Ordinal) { },
+        ["Drawn"] = new(StringComparer.Ordinal) { "Number" },
         ["LandPlayed"] = new(StringComparer.Ordinal) { },
         ["Discarded"] = new(StringComparer.Ordinal) { },
         ["LifeGained"] = new(StringComparer.Ordinal) { "ValidPlayer" },
@@ -63,6 +64,9 @@ public static class Triggers
         if (t["ValidTarget"] is { } vt) Filter.Parse(vt, ctx);
         if (t["AttackingPlayer"] is { } ap && ap != "You") ctx.Need("AttackingPlayer:" + ap);
         if (t["ValidPlayer"] is { } vp && vp is not ("You" or "Player" or "Opponent")) ctx.Need("TriggerValidPlayer:" + vp);
+        if (t["Number"] is { } num && !int.TryParse(num, out _)) ctx.Need("TriggerNumber:" + num);
+        if (t["ActivatorThisTurnCast"] is { } atc && (atc.Length < 3 || !int.TryParse(atc[2..], out _))) ctx.Need("ActivatorThisTurnCast:" + atc);
+        if (t["ValidSource"] is { } vsr && t.Mode == "CounterAddedOnce" && vsr != "You") ctx.Need("CounterAddedOnce.ValidSource:" + vsr);
         if (t["TriggerZones"] is { } tz && tz is not ("Battlefield" or "Command")) ctx.Need("TriggerZones:" + tz);
         if (t["Phase"] is { } ph && ph is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "End Of Turn" or "BeginCombat" or "EndCombat"))
             ctx.Need("TriggerPhase:" + ph);
@@ -112,6 +116,14 @@ public static class Triggers
             case "Phase" when e.Mode == TriggerMode.Phase:
                 if (!string.Equals(t["Phase"], e.Phase, StringComparison.OrdinalIgnoreCase)) return false;
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
+            case "SpellCast" when e.Mode == TriggerMode.SpellCast && t["ActivatorThisTurnCast"] is { } nth:
+                // "Whenever you cast your second spell each turn": this is that spell.
+                if (!Filter.Compare(g.State.ThisTurn.SpellsCast, nth[..2], int.Parse(nth[2..]))) return false;
+                return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
+            case "CounterAddedOnce" when e.Mode == TriggerMode.CounterAddedOnce:
+                if (t["CounterType"] is { } ct && ct != e.CounterType) return false;
+                if (t["ValidSource"] is { } vsrc && vsrc != "You") return false;
+                return CardMatches(g, t, e.CardId, x, source);
             case "SpellCast" when e.Mode == TriggerMode.SpellCast:
                 return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
             case "Attacks" when e.Mode == TriggerMode.Attacks:
@@ -127,6 +139,8 @@ public static class Triggers
                 return true;
             case "AttackersDeclared" when e.Mode == TriggerMode.AttackersDeclared:
                 return e.Player == source.Controller;
+            case "Drawn" when e.Mode == TriggerMode.Drawn && t["Number"] is { } number:
+                return int.TryParse(number, out var nthCard) && e.Amount == nthCard && CardMatches(g, t, e.CardId, x, source);
             case "Drawn" when e.Mode == TriggerMode.Drawn:
             case "LandPlayed" when e.Mode == TriggerMode.LandPlayed:
             case "Discarded" when e.Mode == TriggerMode.Discarded:

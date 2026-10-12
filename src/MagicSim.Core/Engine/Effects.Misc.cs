@@ -115,3 +115,53 @@ sealed class SetStateEffect : CardsEffect
         }
     }
 }
+
+/// <summary>Untaps every permanent matching ValidCards$ (Defined$ players' permanents if given).</summary>
+sealed class UntapAllEffect : Effect
+{
+    public override string Api => "UntapAll";
+    public override IReadOnlySet<string> Params { get; } = P("ValidCards", "Defined");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        Filter.Parse(ab["ValidCards"] ?? "Permanent", ctx);
+        Defined.ValidatePlayers(ab["Defined"], ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var filter = FilterFor(x.SVarFace, x.Ability["ValidCards"] ?? "Permanent");
+        var players = x.Ability["Defined"] is { } d ? Defined.Players(d, x) : null;
+        foreach (var c in x.S.BattlefieldCards)
+            if ((players is null || players.Contains(c.Controller)) && filter.MatchesCard(c, x)) c.Tapped = false;
+    }
+}
+
+/// <summary>Removes counters from permanents ("remove a +1/+1 counter", "remove all counters").</summary>
+sealed class RemoveCounterEffect : CardsEffect
+{
+    public override string Api => "RemoveCounter";
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "CounterType", "CounterNum");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        base.Validate(ab, ctx);
+        if (ab["CounterNum"] is { } n && n != "All") ValidateAmount(ab, "CounterNum", ctx);
+        if (ab["CounterType"] is null) ctx.Need("RemoveCounter.CounterType:none");
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var kind = x.Ability["CounterType"]!;
+        foreach (var c in Cards(x))
+        {
+            if (c.Counters is null) continue;
+            var kinds = kind == "Any" || kind == "All" ? c.Counters.Keys.ToList() : new List<string> { kind };
+            foreach (var k in kinds)
+            {
+                var n = x.Ability["CounterNum"] == "All" ? c.CounterCount(k) : Amount(x, x.Ability["CounterNum"], 1);
+                if (c.Counters.ContainsKey(k)) c.Counters[k] = Math.Max(0, c.CounterCount(k) - n);
+            }
+        }
+    }
+}

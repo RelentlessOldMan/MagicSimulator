@@ -166,6 +166,23 @@ public class MechanicsTests
         "Name:Day\nManaCost:0\nTypes:Creature Human\nPT:1/1\nA:AB$ SetState | Cost$ 0 | Defined$ Self | Mode$ Transform\nAlternateMode:DoubleFaced\n" +
         "ALTERNATE\nName:Night\nManaCost:no cost\nTypes:Creature Werewolf\nPT:5/5\n",
         "Name:Pit\nManaCost:0\nTypes:Artifact\nA:AB$ GainLife | Cost$ Sac<1/Creature> | Defined$ You | LifeAmount$ X\nSVar:X:Sacrificed$CardPower\n",
+        "Name:Monk\nManaCost:0\nTypes:Creature Monk\nPT:1/1\nK:Prowess\n",
+        "Name:Stinger\nManaCost:0\nTypes:Creature Insect\nPT:1/1\nK:Haste\nK:Toxic:2\n",
+        "Name:Frog\nManaCost:4\nTypes:Artifact Creature Frog\nPT:2/2\nK:Affinity:Artifact\n",
+        "Name:Twice\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ SpellCast | ValidActivatingPlayer$ You | ActivatorThisTurnCast$ EQ2 | TriggerZones$ Battlefield | Execute$ TrigGain\n" +
+        "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 5\n",
+        "Name:Bookworm\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ Drawn | ValidCard$ Card.YouCtrl | Number$ 2 | TriggerZones$ Battlefield | Execute$ TrigGain\nSVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 3\n",
+        "Name:Tracker\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ CounterAddedOnce | ValidCard$ Creature.YouCtrl | CounterType$ P1P1 | TriggerZones$ Battlefield | Execute$ TrigGain\n" +
+        "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 1\n",
+        "Name:Measure\nManaCost:0\nTypes:Sorcery\nA:SP$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:Count$Valid Creature.YouCtrl$GreatestCardPower\n",
+        "Name:Raise\nManaCost:0\nTypes:Sorcery\n" +
+        "A:SP$ ChangeZone | Origin$ Graveyard | Destination$ Battlefield | ValidTgts$ Creature | TgtZone$ Graveyard | GainControl$ True | WithCountersType$ P1P1 | WithCountersAmount$ 2\n",
+        "Name:Wake\nManaCost:0\nTypes:Instant\nA:SP$ UntapAll | ValidCards$ Land.YouCtrl\n",
+        "Name:Drain\nManaCost:0\nTypes:Instant\nA:SP$ RemoveCounter | ValidTgts$ Creature | CounterType$ P1P1 | CounterNum$ All\n",
+        "Name:Bounce\nManaCost:0\nTypes:Instant\nA:SP$ ChangeZone | Origin$ Stack | Destination$ Hand | ValidTgts$ Card | TgtZone$ Stack | TargetType$ Spell\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -967,6 +984,108 @@ public class MechanicsTests
         g.ActivateAbility(OnBattlefield(g, "Pit"), 0);
         ResolveAll(g);
         Assert.Equal(42, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void ProwessPumpsOnNoncreatureSpells()
+    {
+        var g = Setup(new[] { "Toll" }, battlefield: new[] { "Monk" });
+        g.CastSpell(g.State[InHand(g, "Toll")], 0);
+        ResolveAll(g);
+        Assert.Equal(2, OnBattlefield(g, "Monk").Power);
+    }
+
+    [Fact]
+    public void ToxicAddsPoisonWithCombatDamage()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Stinger" }, library: new[] { "Filler", "Filler" });
+        g.ResumeTurn();
+        var hit = g.State.Players.Single(p => p.Poison > 0);
+        Assert.Equal(2, hit.Poison);
+        Assert.Equal(39, hit.Life);
+    }
+
+    [Fact]
+    public void AffinityReducesTheCostForEachArtifact()
+    {
+        var g = Setup(new[] { "Frog" }, battlefield: new[] { "Mirror", "Glass", "Lantern", "Harmony" });
+        Assert.True(g.CanCast(g.State[InHand(g, "Frog")], -1));
+    }
+
+    [Fact]
+    public void SecondSpellEachTurnTriggers()
+    {
+        var g = Setup(new[] { "Spread", "Spread" }, battlefield: new[] { "Twice" });
+        g.CastSpell(g.State[InHand(g, "Spread")], 0);
+        ResolveAll(g);
+        Assert.Equal(40, g.State.Players[Game.Me].Life);
+        g.CastSpell(g.State[InHand(g, "Spread")], 0);
+        ResolveAll(g);
+        Assert.Equal(45, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void SecondCardDrawnEachTurnTriggers()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Bookworm" }, library: new[] { "Filler", "Filler", "Filler" });
+        g.Draw(Game.Me, 3);
+        ResolveAll(g);
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void CountersPutOnceTriggerOnce()
+    {
+        var g = Setup(new[] { "Feed" }, battlefield: new[] { "Tracker", "Season", "Bear" });
+        g.CastSpell(g.State[InHand(g, "Feed")], 0);
+        ResolveAll(g);
+        Assert.Equal(2, OnBattlefield(g, "Bear").CounterCount("P1P1"));
+        Assert.Equal(41, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void GreatestPowerAmongMatchingCards()
+    {
+        var g = Setup(new[] { "Measure" }, battlefield: new[] { "Bear", "Brute" });
+        g.CastSpell(g.State[InHand(g, "Measure")], 0);
+        ResolveAll(g);
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void ReturnToBattlefieldWithCounters()
+    {
+        var g = Setup(new[] { "Raise" }, battlefield: new[] { "Bear" });
+        var bear = OnBattlefield(g, "Bear");
+        g.MoveTo(bear, Zone.Graveyard);
+        g.CastSpell(g.State[InHand(g, "Raise")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, bear.Zone);
+        Assert.Equal(4, bear.Power);
+    }
+
+    [Fact]
+    public void UntapAllAndRemoveCounters()
+    {
+        var g = Setup(new[] { "Wake", "Drain" }, battlefield: new[] { "Bog", "Bog", "Bear" });
+        foreach (var c in g.State.BattlefieldCards) c.Tapped = true;
+        Game.AddCounters(OnBattlefield(g, "Bear"), "P1P1", 3);
+        g.CastSpell(g.State[InHand(g, "Wake")], 0);
+        g.CastSpell(g.State[InHand(g, "Drain")], 0);
+        ResolveAll(g);
+        Assert.All(g.State.BattlefieldCards.Where(c => c.Name == "Bog"), c => Assert.False(c.Tapped));
+        Assert.Equal(0, OnBattlefield(g, "Bear").CounterCount("P1P1"));
+    }
+
+    [Fact]
+    public void ReturnTargetSpellToHand()
+    {
+        var g = Setup(new[] { "Toll", "Bounce" });
+        g.CastSpell(g.State[InHand(g, "Toll")], 0);
+        g.CastSpell(g.State[InHand(g, "Bounce")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Hand, g.State.Cards.First(c => c.Name == "Toll").Zone);
+        Assert.All(g.State.Players, p => Assert.Equal(40, p.Life));
     }
 
     [Fact]

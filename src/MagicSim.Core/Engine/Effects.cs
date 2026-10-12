@@ -60,6 +60,7 @@ public static class Effects
         new CopyPermanentEffect(), new CloneEffect(), new AnimateEffect(), new ProliferateEffect(),
         new DelayedTriggerEffect(), new RepeatEachEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
         new AnimateAllEffect(), new FightEffect(), new BranchEffect(), new MultiplyCounterEffect(), new SetStateEffect(),
+        new UntapAllEffect(), new RemoveCounterEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -185,14 +186,16 @@ sealed class ChangeZoneEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "Origin", "Destination", "ChangeType", "ChangeNum", "Hidden", "Mandatory", "Tapped", "LibraryPosition", "Defined",
         "ChangeTypeDesc", "Shuffle", "Reveal", "SelectPrompt", "Reorder", "Optional", "NoReveal", "ShuffleNonMandatory",
-        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint");
+        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "WithCountersType", "WithCountersAmount");
 
     private static readonly HashSet<string> Zones = new() { "Library", "Hand", "Battlefield", "Graveyard", "Exile" };
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         foreach (var key in new[] { "Origin", "Destination" })
-            if (ab[key] is { } z && !z.Split(',').All(s => Zones.Contains(s.Trim()))) ctx.Need($"ChangeZone.{key}:{z}");
+            if (ab[key] is { } z && !z.Split(',').All(s => Zones.Contains(s.Trim()) || key == "Origin" && s.Trim() == "Stack" && (ab["Defined"] is not null || ab.TargetFilter is not null)))
+                ctx.Need($"ChangeZone.{key}:{z}");
+        ValidateAmount(ab, "WithCountersAmount", ctx);
         if (ab["Destination"] is null) ctx.Need("ChangeZone.Destination:none");
         if (ab["ChangeType"] is { } ct) Filter.Parse(ct, ctx);
         if (ab["ChangeNum"] is { } cn && cn != "All") Engine.Amount.Parse(cn, ctx);
@@ -201,6 +204,24 @@ sealed class ChangeZoneEffect : Effect
     }
 
     /// <summary>RememberChanged$ / Imprint$: note the moved card on the source.</summary>
+    /// <summary>Moves a card for this ability: under the ability's controller (GainControl$), with counters (WithCountersType$).</summary>
+    private static void Move(EffectContext x, Card c, Zone dest, int position, bool tapped)
+    {
+        var ab = x.Ability;
+        if (c.Zone == Zone.Stack)
+        {
+            // A spell leaves the stack (it isn't countered, but it won't resolve either).
+            if (x.S.Stack.FirstOrDefault(s => s.IsSpell && s.SourceId == c.Id) is { } item) x.S.Stack.Remove(item);
+            else return;
+        }
+        if (dest == Zone.Battlefield && c.Zone != Zone.Battlefield)
+        {
+            if (ab["GainControl"] == "True") c.Controller = x.Controller;
+            if (ab["WithCountersType"] is { } kind) Game.AddCounters(c, kind, Amount(x, ab["WithCountersAmount"], 1));
+        }
+        x.Game.MoveTo(c, dest, position, tapped);
+    }
+
     public static void Note(EffectContext x, int id)
     {
         if (x.Ability["RememberChanged"] == "True") (x.Host.Remembered ??= new()).Add(id);
@@ -224,7 +245,7 @@ sealed class ChangeZoneEffect : Effect
                 var c = x.S[id];
                 if (!origins.Contains(c.Zone)) continue;
                 if (ab["Optional"] == "True" && !x.Game.Decider.ChooseYesNo(x.Game, x.Controller, x.Host, $"move {c.Name}?")) continue;
-                x.Game.MoveTo(c, dest, position, tapped);
+                Move(x, c, dest, position, tapped);
                 Note(x, id);
             }
             return;
@@ -251,7 +272,7 @@ sealed class ChangeZoneEffect : Effect
         if (kind == Choice.Tutor) x.Game.Note($"  search: {(chosen.Count == 0 ? "nothing" : string.Join(", ", chosen.Select(id => x.S[id].Name)))}");
         foreach (var id in chosen)
         {
-            x.Game.MoveTo(x.S[id], dest, position, tapped);
+            Move(x, x.S[id], dest, position, tapped);
             Note(x, id);
         }
         if (origins.Contains(Zone.Library) && ab["Shuffle"] != "False" && ab["NoShuffle"] != "True") x.Game.Shuffle(searcher);

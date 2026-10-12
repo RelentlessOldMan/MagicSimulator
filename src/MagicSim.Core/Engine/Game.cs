@@ -503,6 +503,14 @@ public sealed partial class Game
             cost = new Cost { Mana = ManaCost.Zero, Tap = cost.Tap, Untap = cost.Untap, Parts = cost.Parts };
         var extra = c.Zone == Zone.Command ? 2 * c.CommandCasts : 0;
         extra -= Statics.CostReduction(this, c, c.Controller);
+        // Affinity for [type]: {1} less for each one you control (rule 702.41).
+        foreach (var k in c.CurrentFace.RawKeywords)
+            if (k.StartsWith("Affinity:", StringComparison.Ordinal))
+            {
+                var filter = Effect.FilterFor(c.CurrentFace, k[9..]);
+                var x = ContextFor(c);
+                extra -= State.BattlefieldCards.Count(p => p.Controller == c.Controller && filter.MatchesCard(p, x));
+            }
         if (extra != 0)
             cost = new Cost { Mana = cost.Mana.WithExtraGeneric(extra), Tap = cost.Tap, Untap = cost.Untap, Parts = cost.Parts };
         return cost;
@@ -901,6 +909,7 @@ public sealed partial class Game
         n = Replacements.Amount(this, "AddCounter", n, targetCard: c, counterType: kind);
         var before = c.CounterCount(kind);
         AddCounters(c, kind, n);
+        if (n > 0) Fire(new TriggerEvent(TriggerMode.CounterAddedOnce, CardId: c.Id, Player: c.Controller, Amount: n, CounterType: kind));
         if (kind != "LORE" || c.Zone != Zone.Battlefield) return;
         var chapters = c.CurrentFace.Chapters;
         for (var k = before + 1; k <= Math.Min(c.CounterCount(kind), chapters.Count); k++)

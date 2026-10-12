@@ -73,6 +73,7 @@ public sealed partial class Game
             case Zone.Battlefield:
                 c.Tapped = tapped;
                 c.ControlledSinceTurn = State.Turn;
+                c.EnteredTurn = State.Turn;
                 // Replacement effects apply as it enters: it's on the battlefield but not yet counted there.
                 ApplyEntering(c);
                 State.Battlefield.Add(c.Id);
@@ -318,8 +319,9 @@ public sealed partial class Game
             if (p.Library.Count == 0) { p.DrewFromEmpty = true; continue; }
             var c = State[p.Library[0]];
             MoveTo(c, Zone.Hand);
+            var nth = State.ThisTurn.CardsDrawn[player] = State.ThisTurn.CardsDrawn.GetValueOrDefault(player) + 1;
             if (record) Note($"draw {c.Name}");
-            if (record) Fire(new TriggerEvent(TriggerMode.Drawn, CardId: c.Id, Player: player));
+            if (record) Fire(new TriggerEvent(TriggerMode.Drawn, CardId: c.Id, Player: player, Amount: nth));
         }
     }
 
@@ -376,6 +378,10 @@ public sealed partial class Game
             return amount;
         }
         State.Players[player].Life -= amount;
+        // Toxic N: combat damage to a player also gives N poison counters (rule 702.164).
+        if (combat && source is not null)
+            foreach (var k in source.CurrentFace.RawKeywords)
+                if (k.StartsWith("Toxic:", StringComparison.Ordinal) && int.TryParse(k[6..], out var toxic)) State.Players[player].Poison += toxic;
         Note($"{source?.Name ?? "damage"} deals {amount} to player {player} (life {State.Players[player].Life})");
         if (source is null) return amount;
         if (player != Me) RememberWinCard(source);
@@ -434,10 +440,10 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
-    int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false);
+    int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);
 
 public readonly record struct PendingTrigger(int SourceId, TriggerDef Trigger, TriggerEvent Event, int Controller, List<int>? DelayRemembered = null);
 
