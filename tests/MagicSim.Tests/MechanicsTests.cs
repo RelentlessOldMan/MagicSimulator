@@ -101,6 +101,25 @@ public class MechanicsTests
         "Name:Grove\nManaCost:no cost\nTypes:Land\nA:AB$ Mana | Cost$ T | Produced$ G | IsPresent$ Creature.YouCtrl\n",
         "Name:Spell Side\nManaCost:1\nTypes:Sorcery\nA:SP$ GainLife | Defined$ You | LifeAmount$ 3\nAlternateMode:Modal\n" +
         "ALTERNATE\nName:Land Side\nManaCost:no cost\nTypes:Land\nA:AB$ Mana | Cost$ T | Produced$ W\n",
+        "Name:Thane\nManaCost:0\nTypes:Enchantment\n" +
+        "R:Event$ DamageDone | ActiveZones$ Battlefield | ValidSource$ Card.YouCtrl | ValidTarget$ Player.Opponent,Permanent.OppCtrl | ReplaceWith$ DmgPlus2\n" +
+        "SVar:DmgPlus2:DB$ ReplaceEffect | VarName$ DamageAmount | VarValue$ X\nSVar:X:ReplaceCount$DamageAmount/Plus.2\n",
+        "Name:Triple\nManaCost:0\nTypes:Enchantment\n" +
+        "R:Event$ DamageDone | ActiveZones$ Battlefield | ValidSource$ Card.YouCtrl,Emblem.YouCtrl | ValidTarget$ Permanent,Player | ReplaceWith$ Dmg3\n" +
+        "SVar:Dmg3:DB$ ReplaceEffect | VarName$ DamageAmount | VarValue$ X\nSVar:X:ReplaceCount$DamageAmount/Thrice\n",
+        "Name:Season\nManaCost:0\nTypes:Enchantment\n" +
+        "R:Event$ CreateToken | ActiveZones$ Battlefield | ValidToken$ Card.YouCtrl | ReplaceWith$ DoubleToken | EffectOnly$ True\n" +
+        "SVar:DoubleToken:DB$ ReplaceToken | Type$ Amount\n" +
+        "R:Event$ AddCounter | ActiveZones$ Battlefield | ValidCard$ Permanent.YouCtrl+inZoneBattlefield | EffectOnly$ True | ReplaceWith$ DoubleCounters\n" +
+        "SVar:DoubleCounters:DB$ ReplaceCounter | Amount$ Y\nSVar:Y:ReplaceCount$CounterNum/Twice\n",
+        "Name:Scales\nManaCost:0\nTypes:Enchantment\n" +
+        "R:Event$ AddCounter | ActiveZones$ Battlefield | ValidCard$ Creature.YouCtrl+inZoneBattlefield | ValidCounterType$ P1P1 | ReplaceWith$ AddOne\n" +
+        "SVar:AddOne:DB$ ReplaceCounter | ValidCounterType$ P1P1 | ChooseCounter$ True | Amount$ X\nSVar:X:ReplaceCount$CounterNum/Plus.1\n",
+        "Name:Feed\nManaCost:0\nTypes:Sorcery\nA:SP$ PutCounter | ValidTgts$ Creature | CounterType$ P1P1 | CounterNum$ 1\n",
+        "Name:Peace\nManaCost:0\nTypes:Enchantment\n" +
+        "R:Event$ Moved | ActiveZones$ Battlefield | Destination$ Graveyard | ValidCard$ Card | ReplaceWith$ Exile\n" +
+        "SVar:Exile:DB$ ChangeZone | Hidden$ True | Origin$ All | Destination$ Exile | Defined$ ReplacedCard\n",
+        "Name:Sure\nManaCost:0\nTypes:Sorcery\nR:Event$ Counter | ValidCard$ Card.Self | ValidSA$ Spell | Layer$ CantHappen\nA:SP$ Draw | NumCards$ 1\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -616,6 +635,48 @@ public class MechanicsTests
         Assert.Equal(43, g.State.Players[Game.Me].Life);
         Assert.Equal(Zone.Graveyard, card.Zone);
         Assert.Equal(0, card.Face);
+    }
+
+    [Fact]
+    public void DamageReplacementsApplyInTheBestOrder()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Thane", "Triple", "Bear" }, library: new[] { "Filler", "Filler" });
+        g.ResumeTurn();
+        Assert.Equal(40 - (2 + 2) * 3, g.State.Players.Where(p => p.Index != Game.Me).Min(p => p.Life));
+    }
+
+    [Fact]
+    public void TokenDoublingCreatesTwiceAsMany()
+    {
+        var g = Setup(new[] { "Muster" }, battlefield: new[] { "Season", "Bog" });
+        g.CastSpell(g.State[InHand(g, "Muster")], 0);
+        ResolveAll(g);
+        Assert.Equal(4, g.State.BattlefieldCards.Count(c => c.IsToken));
+    }
+
+    [Fact]
+    public void CounterReplacementsStack()
+    {
+        var g = Setup(new[] { "Feed" }, battlefield: new[] { "Season", "Scales", "Bear" });
+        g.CastSpell(g.State[InHand(g, "Feed")], 0);
+        ResolveAll(g);
+        Assert.Equal((1 + 1) * 2, OnBattlefield(g, "Bear").CounterCount("P1P1"));
+    }
+
+    [Fact]
+    public void GraveyardBoundCardsAreExiledInstead()
+    {
+        var g = Setup(new[] { "Spread" }, battlefield: new[] { "Peace" });
+        g.CastSpell(g.State[InHand(g, "Spread")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Exile, g.State.Cards.First(c => c.Name == "Spread").Zone);
+    }
+
+    [Fact]
+    public void CantBeCounteredIsSupportedAndDoesNothingInGoldfish()
+    {
+        var g = Setup(new[] { "Sure" }, library: new[] { "Filler" });
+        Assert.False(g.State[InHand(g, "Sure")].IsBlank);
     }
 
     [Fact]

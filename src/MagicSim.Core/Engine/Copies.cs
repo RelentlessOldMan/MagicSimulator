@@ -138,7 +138,7 @@ sealed class CopyPermanentEffect : Effect
         foreach (var id in originals)
         {
             var def = Copies.Of(x.S[id], ab);
-            for (var i = 0; i < n; i++)
+            for (var i = x.Game.TokenCount(def, controller, n); i > 0; i--)
             {
                 var token = x.Game.CreateToken(def, controller, ab["TokenTapped"] == "True");
                 if (ab["RememberTokens"] == "True") (x.Host.Remembered ??= new()).Add(token.Id);

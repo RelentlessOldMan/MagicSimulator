@@ -32,8 +32,10 @@ public sealed class EffectContext
     public FaceDef? FaceOverride { get; init; }
     /// <summary>The face whose SVars this ability's expressions refer to: the card that defined it.</summary>
     public FaceDef SVarFace => Ability.Face ?? FaceOverride ?? Host.CurrentFace;
+    /// <summary>For a replacement effect: the amount being replaced (ReplaceCount$…).</summary>
+    public int ReplacedAmount { get; init; }
 
-    public EffectContext For(AbilityDef sub) => new() { Game = Game, Item = Item, Ability = sub, FaceOverride = FaceOverride };
+    public EffectContext For(AbilityDef sub) => new() { Game = Game, Item = Item, Ability = sub, FaceOverride = FaceOverride, ReplacedAmount = ReplacedAmount };
 }
 
 /// <summary>
@@ -259,7 +261,7 @@ public sealed class Amount
         return ParseExpression(text, ctx, depth);
     }
 
-    private static readonly Regex MathRx = new(@"/(Plus|Minus|Times|Twice|HalfUp|HalfDown|Negative|LimitMax|LimitMin)(?:\.(\-?\w+))?", RegexOptions.Compiled);
+    private static readonly Regex MathRx = new(@"/(Plus|Minus|Times|Twice|Thrice|HalfUp|HalfDown|Negative|LimitMax|LimitMin)(?:\.(\-?\w+))?", RegexOptions.Compiled);
 
     private static Amount ParseExpression(string body, CompileContext ctx, int depth)
     {
@@ -280,6 +282,7 @@ public sealed class Amount
                 "Minus" => new(body, x => prev.Eval(x) - arg.Eval(x)),
                 "Times" => new(body, x => prev.Eval(x) * arg.Eval(x)),
                 "Twice" => new(body, x => prev.Eval(x) * 2),
+                "Thrice" => new(body, x => prev.Eval(x) * 3),
                 "HalfUp" => new(body, x => (prev.Eval(x) + 1) / 2),
                 "HalfDown" => new(body, x => prev.Eval(x) / 2),
                 "Negative" => new(body, x => -prev.Eval(x)),
@@ -295,6 +298,9 @@ public sealed class Amount
     {
         if (core.StartsWith("Number$", StringComparison.Ordinal) && int.TryParse(core[7..], out var num)) return Const(num);
         if (core.StartsWith("SVar$", StringComparison.Ordinal)) return Parse(core[5..], ctx, depth + 1);
+        // The amount a replacement effect is replacing: damage, tokens, counters, life.
+        if (core is "ReplaceCount$DamageAmount" or "ReplaceCount$CounterNum" or "ReplaceCount$Amount" or "ReplaceCount$LifeGained")
+            return new(core, x => x.ReplacedAmount);
         if (DefinedCardsRx.Match(core) is { Success: true } dm) return DefinedCardsAmount(core, dm, ctx);
         if (!core.StartsWith("Count$", StringComparison.Ordinal))
         {

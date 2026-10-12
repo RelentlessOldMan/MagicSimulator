@@ -54,7 +54,7 @@ sealed class TokenEffect : Effect
         int? toughness = ab["TokenToughness"] is { } tt ? Amount(x, tt, 0) : null;
         foreach (var owner in Defined.Players(ab["TokenOwner"], x))
             foreach (var def in ab.Tokens!)
-                for (var i = 0; i < n; i++)
+                for (var i = x.Game.TokenCount(def, owner, n); i > 0; i--)
                 {
                     var token = x.Game.CreateToken(def, owner, tapped, power, toughness);
                     if (ab["RememberTokens"] == "True") (x.Host.Remembered ??= new()).Add(token.Id);

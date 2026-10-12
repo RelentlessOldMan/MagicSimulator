@@ -123,6 +123,8 @@ public sealed class FaceDef
     public AbilityDef? EtbCopy { get; set; }
     /// <summary>A Saga's chapter abilities, chapter I first (rule 714).</summary>
     public List<TriggerDef> Chapters { get; } = new();
+    /// <summary>Replacement effects that modify events (damage, tokens, counters, zone changes).</summary>
+    public List<ReplacementDef> Replacements { get; } = new();
 
     /// <summary>This face as a copy effect changes it ("except it's an artifact", "except it has haste").</summary>
     public FaceDef CopyWith(TypeLine types, int? power, int? toughness, ColorMask colors, IReadOnlyList<string> extraKeywords)
@@ -146,6 +148,7 @@ public sealed class FaceDef
         f.EtbReplacements.AddRange(EtbReplacements);
         f.EtbCounters.AddRange(EtbCounters);
         f.Chapters.AddRange(Chapters);
+        f.Replacements.AddRange(Replacements);
         return f;
     }
 }
@@ -418,23 +421,29 @@ public static partial class CardCompiler
     {
         var evt = r["Event"] ?? "?";
         var keys = r.Values.Keys.Where(k => k is not ("Event" or "Description" or "ValidCard" or "ReplacementResult")).ToList();
-        if (r["ValidCard"] != "Card.Self") { ctx.Need("Replacement:" + evt); return; }
+        if (r["ValidCard"] == "Card.Self" && CompileSelfReplacement(r, evt, keys, face, ctx)) return;
+        if (Engine.Replacements.TryCompile(r, face, ctx)) return;
+        ctx.Need("Replacement:" + evt);
+    }
+
+    /// <summary>A card's replacement effects on itself: "as this enters", "doesn't untap". False if not one of these.</summary>
+    private static bool CompileSelfReplacement(ForgeParams r, string evt, List<string> keys, FaceDef face, CompileContext ctx)
+    {
         switch (evt)
         {
             // "Enters tapped", shocklands, checklands: an effect applied as the card enters.
             case "Moved" when r["Destination"] == "Battlefield" && r["ReplaceWith"] is { } with
                               && keys.All(k => k is "Destination" or "ReplaceWith"):
-                if (!face.SVars.TryGetValue(with, out var body)) { ctx.Need("SVarMissing:" + with); return; }
+                if (!face.SVars.TryGetValue(with, out var body)) { ctx.Need("SVarMissing:" + with); return true; }
                 if (CompileAbility(new ForgeParams(body), ctx, AbilityKind.Sub, 0) is { } ab) face.EtbReplacements.Add(ab);
-                return;
+                return true;
             // Mana Vault, Grim Monolith: "doesn't untap during your untap step".
             case "Untap" when r["Layer"] == "CantHappen" && r["ValidStepTurnToController"] == "You"
                               && keys.All(k => k is "Layer" or "ValidStepTurnToController"):
                 face.DoesntUntap = true;
-                return;
+                return true;
             default:
-                ctx.Need("Replacement:" + evt);
-                return;
+                return false;
         }
     }
 

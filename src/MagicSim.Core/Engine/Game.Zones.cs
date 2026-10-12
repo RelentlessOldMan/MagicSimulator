@@ -34,6 +34,7 @@ public sealed partial class Game
     public void MoveTo(Card c, Zone to, int position = 0, bool tapped = false)
     {
         var from = c.Zone;
+        to = Replacements.Destination(this, c, from, to);
         if (c.IsCommander && to is Zone.Graveyard or Zone.Exile) to = Zone.Command;
         RemoveFromZone(c);
 
@@ -110,7 +111,8 @@ public sealed partial class Game
         foreach (var (kind, amount) in face.EtbCounters)
         {
             var x = new EffectContext { Game = this, Ability = PermanentSpell, Item = new StackItem { SourceId = c.Id, Ability = PermanentSpell, Controller = c.Controller, X = c.XPaid } };
-            AddCounters(c, kind, Effect.EvalAmount(x, amount));
+            var n = Effect.EvalAmount(x, amount);
+            AddCounters(c, kind, Replacements.Amount(this, "AddCounter", n, targetCard: c, counterType: kind));
         }
         foreach (var r in face.EtbReplacements)
             RunChain(new StackItem { SourceId = c.Id, Ability = r, Controller = c.Controller, X = c.XPaid, Description = c.Name + " enters" });
@@ -252,20 +254,26 @@ public sealed partial class Game
         State.Rng = new Rng(rng.NextULong());   // later shuffles and random picks are unknown too
     }
 
-    public void DamagePlayer(int player, int amount, Card? source, bool combat = false)
+    /// <summary>Deals damage to a player after replacement effects; returns the damage dealt.</summary>
+    public int DamagePlayer(int player, int amount, Card? source, bool combat = false)
     {
-        if (amount <= 0) return;
+        if (amount <= 0) return 0;
+        amount = Replacements.Amount(this, "DamageDone", amount, source, targetPlayer: player, combat: combat);
+        if (amount <= 0) return 0;
         State.Players[player].Life -= amount;
         Note($"{source?.Name ?? "damage"} deals {amount} to player {player} (life {State.Players[player].Life})");
-        if (source is null) return;
+        if (source is null) return amount;
         if (player != Me) RememberWinCard(source);
         if (source.HasKeyword("Lifelink")) GainLife(source.Controller, amount);
         Fire(new TriggerEvent(TriggerMode.DamageDone, CardId: source.Id, Player: player, Amount: amount, Combat: combat));
+        return amount;
     }
 
     public void DamageCard(Card target, int amount, Card? source, bool combat = false)
     {
         if (amount <= 0 || target.Zone != Zone.Battlefield) return;
+        amount = Replacements.Amount(this, "DamageDone", amount, source, targetCard: target, combat: combat);
+        if (amount <= 0) return;
         target.Damage += amount;
         if (source is null) return;
         if (source.HasKeyword("Lifelink")) GainLife(source.Controller, amount);
@@ -283,6 +291,7 @@ public sealed partial class Game
 
     public void GainLife(int player, int amount)
     {
+        amount = Replacements.Amount(this, "GainLife", amount, targetPlayer: player);
         if (amount <= 0) return;
         State.Players[player].Life += amount;
         Fire(new TriggerEvent(TriggerMode.LifeGained, Player: player, Amount: amount));

@@ -271,11 +271,12 @@ public sealed partial class Game
         {
             var a = State[id];
             if (a.Zone != Zone.Battlefield) continue;
-            var dmg = Math.Max(0, a.Power) * (a.HasKeyword("Double Strike") ? 2 : 1);
-            if (dmg == 0) continue;
-            DamagePlayer(defender.Index, dmg, a, combat: true);
-            if (a.IsCommander)
-                defender.CommanderDamageTaken[a.Id] = defender.CommanderDamageTaken.GetValueOrDefault(a.Id) + dmg;
+            // Double strike deals combat damage twice: each is its own damage event.
+            var dealt = 0;
+            for (var hit = a.HasKeyword("Double Strike") ? 2 : 1; hit > 0; hit--)
+                dealt += DamagePlayer(defender.Index, Math.Max(0, a.Power), a, combat: true);
+            if (dealt > 0 && a.IsCommander)
+                defender.CommanderDamageTaken[a.Id] = defender.CommanderDamageTaken.GetValueOrDefault(a.Id) + dealt;
         }
     }
 
@@ -836,12 +837,20 @@ public sealed partial class Game
     /// <summary>Puts counters on a permanent; lore counters on a Saga trigger its chapters (rule 714.2b).</summary>
     public void PutCounters(Card c, string kind, int n)
     {
+        n = Replacements.Amount(this, "AddCounter", n, targetCard: c, counterType: kind);
         var before = c.CounterCount(kind);
         AddCounters(c, kind, n);
         if (kind != "LORE" || c.Zone != Zone.Battlefield) return;
         var chapters = c.CurrentFace.Chapters;
         for (var k = before + 1; k <= Math.Min(c.CounterCount(kind), chapters.Count); k++)
             _pending.Add(new PendingTrigger(c.Id, chapters[k - 1], new TriggerEvent(TriggerMode.Chapter, CardId: c.Id), c.Controller));
+    }
+
+    /// <summary>How many tokens an effect creating <paramref name="n"/> of <paramref name="def"/> creates after replacements (Doubling Season).</summary>
+    public int TokenCount(CardDef def, int owner, int n)
+    {
+        var probe = new Card { Id = State.Cards.Count, Def = def, Owner = owner, Controller = owner, Zone = Zone.Battlefield, IsToken = true };
+        return Replacements.Amount(this, "CreateToken", n, targetCard: probe, targetPlayer: owner);
     }
 
     /// <summary>Creates a token on the battlefield under its owner's control.</summary>
