@@ -61,7 +61,7 @@ public static class Triggers
         if (t["AttackingPlayer"] is { } ap && ap != "You") ctx.Need("AttackingPlayer:" + ap);
         if (t["ValidPlayer"] is { } vp && vp is not ("You" or "Player" or "Opponent")) ctx.Need("TriggerValidPlayer:" + vp);
         if (t["TriggerZones"] is { } tz && tz is not ("Battlefield" or "Command")) ctx.Need("TriggerZones:" + tz);
-        if (t["Phase"] is { } ph && ph is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "BeginCombat"))
+        if (t["Phase"] is { } ph && ph is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "End Of Turn" or "BeginCombat" or "EndCombat"))
             ctx.Need("TriggerPhase:" + ph);
     }
 
@@ -83,6 +83,22 @@ public static class Triggers
         return Presence.Hold(t.P, x);
     }
 
+    /// <summary>Whether a delayed trigger's event has happened. Its source need not be anywhere in particular.</summary>
+    public static bool MatchesDelayed(Game g, DelayedTrigger d, TriggerEvent e)
+    {
+        var t = d.Trigger;
+        var host = g.State[d.HostId];
+        var x = new EffectContext
+        {
+            Game = g, Ability = t.Execute ?? Game.PermanentSpell, FaceOverride = t.Face,
+            Item = new StackItem { SourceId = d.HostId, Ability = t.Execute ?? Game.PermanentSpell, Controller = d.Controller, DelayRemembered = d.Remembered },
+        };
+        if (t.Mode == "Phase" && e.Mode == TriggerMode.Phase)
+            return string.Equals(t["Phase"], e.Phase, StringComparison.OrdinalIgnoreCase) && PlayerMatches(t["ValidPlayer"], e.Player, d.Controller)
+                && Presence.Hold(t.P, x);
+        return ModeMatches(g, t, host, e, x) && Presence.Hold(t.P, x);
+    }
+
     private static bool ModeMatches(Game g, TriggerDef t, Card source, TriggerEvent e, EffectContext x)
     {
         switch (t.Mode)
@@ -91,7 +107,7 @@ public static class Triggers
                 if (!ZoneMatches(t["Origin"], e.From) || !ZoneMatches(t["Destination"], e.To)) return false;
                 return CardMatches(g, t, e.CardId, x, source);
             case "Phase" when e.Mode == TriggerMode.Phase:
-                if (t["Phase"] != e.Phase) return false;
+                if (!string.Equals(t["Phase"], e.Phase, StringComparison.OrdinalIgnoreCase)) return false;
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
             case "SpellCast" when e.Mode == TriggerMode.SpellCast:
                 return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);

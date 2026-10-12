@@ -107,6 +107,8 @@ public sealed partial class Game
         if (c.CurrentFace.EtbCopy is { } copy)
             RunChain(new StackItem { SourceId = c.Id, Ability = copy, Controller = c.Controller, X = c.XPaid, Description = c.Name + " enters" });
         var face = c.CurrentFace;
+        if (face.Loyalty is { } loyalty && c.Types.Is(CardType.Planeswalker))
+            AddCounters(c, "LOYALTY", Replacements.Amount(this, "AddCounter", loyalty, targetCard: c, counterType: "LOYALTY"));
         if (face.EtbCounters.Count == 0 && face.EtbReplacements.Count == 0) return;
         foreach (var (kind, amount) in face.EtbCounters)
         {
@@ -151,6 +153,7 @@ public sealed partial class Game
             }
             EndAnimations(c, moment);
         }
+        if (moment == "cleanup") State.Delayed.RemoveAll(d => d.ThisTurn);
         foreach (var p in State.Players)
             foreach (var id in p.Command.ToList())
             {
@@ -319,7 +322,7 @@ public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, At
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false);
 
-public readonly record struct PendingTrigger(int SourceId, TriggerDef Trigger, TriggerEvent Event, int Controller);
+public readonly record struct PendingTrigger(int SourceId, TriggerDef Trigger, TriggerEvent Event, int Controller, List<int>? DelayRemembered = null);
 
 public sealed partial class Game
 {
@@ -341,6 +344,15 @@ public sealed partial class Game
                 _pending.Add(new PendingTrigger(id, t, e, src.Controller));
             }
         }
+        // Delayed triggers trigger once, then are gone (rule 603.7c).
+        for (var i = 0; i < State.Delayed.Count; i++)
+        {
+            var d = State.Delayed[i];
+            if (d.NextTurn && d.Turn == State.Turn) continue;
+            if (!Triggers.MatchesDelayed(this, d, e)) continue;
+            State.Delayed.RemoveAt(i--);
+            _pending.Add(new PendingTrigger(d.HostId, d.Trigger, e, d.Controller, d.Remembered));
+        }
     }
 
     private void PutTriggersOnStack()
@@ -359,7 +371,7 @@ public sealed partial class Game
             {
                 Id = State.NextStackId++, SourceId = pt.SourceId, Ability = exec, Controller = pt.Controller,
                 TriggeredCardId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.TargetCardId : pt.Event.CardId,
-                TriggeredPlayer = pt.Event.Player, ChainTargets = ChooseChainTargets(src, exec, pt.Controller),
+                TriggeredPlayer = pt.Event.Player, ChainTargets = ChooseChainTargets(src, exec, pt.Controller), DelayRemembered = pt.DelayRemembered,
                 Description = $"{src.Name} trigger",
             };
             // "Static" triggers (bookkeeping such as forgetting an imprinted card) happen at once, without the stack.

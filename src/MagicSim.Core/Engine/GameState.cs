@@ -53,6 +53,8 @@ public sealed class Card
     /// <summary>A token created with set power/toughness (TokenPower$/TokenToughness$).</summary>
     public int? TokenPower { get; init; }
     public int? TokenToughness { get; init; }
+    /// <summary>The turn this permanent last activated a loyalty ability: one per turn (rule 606.3).</summary>
+    public int LoyaltyActivatedTurn { get; set; }
     /// <summary>Regeneration shields until end of turn (rule 701.15).</summary>
     public int RegenShields { get; set; }
 
@@ -136,7 +138,7 @@ public sealed class Card
         Remembered = Remembered is null ? null : new List<int>(Remembered),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, AttachedTo = AttachedTo, XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness,
+        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
         Animations = Animations is null ? null : new List<Animation>(Animations),
@@ -216,9 +218,14 @@ public sealed class StackItem
     /// <summary>For triggers: the player involved (e.g. the player dealt damage), if any.</summary>
     public int? TriggeredPlayer { get; init; }
     public string Description { get; init; } = "";
+    /// <summary>For a delayed trigger: the objects it remembers (DelayTriggerRemembered).</summary>
+    public List<int>? DelayRemembered { get; init; }
+    /// <summary>The player a RepeatEach is currently on ("Remembered" as a player).</summary>
+    public int? IteratedPlayer { get; set; }
 
     public StackItem Clone() => new()
     {
+        DelayRemembered = DelayRemembered, IteratedPlayer = IteratedPlayer,
         Id = Id, SourceId = SourceId, Ability = Ability, Controller = Controller, IsSpell = IsSpell,
         ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, TriggeredPlayer = TriggeredPlayer, Description = Description, ExileAfter = ExileAfter,
     };
@@ -251,6 +258,8 @@ public sealed class GameState
     public TurnInfo ThisTurn { get; set; } = new();
     public List<int> Attackers { get; set; } = new();
     public int NextStackId { get; set; }
+    /// <summary>Delayed triggers waiting for their event.</summary>
+    public List<DelayedTrigger> Delayed { get; set; } = new();
     /// <summary>Cards seen in the game's main player's hand, cards cast, notes — for per-game output.</summary>
     public GameRecord Record { get; set; } = new();
 
@@ -277,7 +286,7 @@ public sealed class GameState
         Stack = Stack.Select(s => s.Clone()).ToList(),
         Turn = Turn, Step = Step, ActivePlayer = ActivePlayer, Rng = Rng,
         GameOver = GameOver, Winner = Winner, WinReason = WinReason, ThisTurn = ThisTurn.Clone(), Attackers = new List<int>(Attackers),
-        NextStackId = NextStackId, Record = Record.Clone(),
+        NextStackId = NextStackId, Record = Record.Clone(), Delayed = new List<DelayedTrigger>(Delayed),
     };
 }
 

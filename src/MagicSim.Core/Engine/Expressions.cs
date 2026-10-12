@@ -113,7 +113,8 @@ public sealed class Filter
             "untapped" => (c, pl, x) => c is not null && !c.Tapped,
             "IsCommander" => (c, pl, x) => c is not null && c.IsCommander,
             "NamedCard" => (c, pl, x) => c is not null && x.Host.NamedCard is { } n && string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase),
-            "IsRemembered" => (c, pl, x) => c is not null && (x.Host.Remembered?.Contains(c.Id) ?? false),
+            "IsRemembered" => (c, pl, x) => c is not null ? x.Host.Remembered?.Contains(c.Id) ?? false : pl is not null && pl == x.Item.IteratedPlayer,
+            "IsTriggerRemembered" => (c, pl, x) => c is not null && (x.Item.DelayRemembered?.Contains(c.Id) ?? false),
             "ChosenColor" => (c, pl, x) => c is not null && x.Host.ChosenColor is { } cc && (c.Colors & cc.Mask()) != 0,
             "ChosenType" => (c, pl, x) => c is not null && x.Host.ChosenType is { } ct && c.Types.HasSubtype(ct),
             "IsImprinted" => (c, pl, x) => c is not null && (x.Host.Imprinted?.Contains(c.Id) ?? false),
@@ -413,13 +414,13 @@ public static class Defined
     private static readonly HashSet<string> PlayerRefs = new(StringComparer.Ordinal)
     {
         "You", "Player", "Opponent", "Targeted", "TargetedPlayer", "ParentTarget", "TargetedController", "Player.Opponent",
-        "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner", "ChosenPlayer",
+        "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner", "ChosenPlayer", "Remembered",
     };
 
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
     {
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
-        "Enchanted", "Equipped", "Imprinted",
+        "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
     };
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
@@ -445,6 +446,7 @@ public static class Defined
             "TargetedController" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Controller).ToList(),
             "TriggeredCardController" => x.Item.TriggeredCardId is { } tc ? new() { x.S[tc].Controller } : new(),
             "ChosenPlayer" => x.Host.ChosenPlayer is { } cp ? new() { cp } : new(),
+            "Remembered" => x.Item.IteratedPlayer is { } ip ? new() { ip } : new(),
             "TargetedOwner" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Owner).Take(1).ToList(),
             "TriggeredTarget" or "TriggeredPlayer" => x.Item.TriggeredPlayer is { } tp ? new() { tp } : new(),
             _ => new() { x.Controller },
@@ -458,7 +460,8 @@ public static class Defined
             "Self" => new() { x.Item.SourceId },
             "Targeted" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value).ToList(),
             "ParentTarget" => x.ParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value).ToList(),
-            "Remembered" => x.Host.Remembered?.ToList() ?? new(),
+            "Remembered" or "RememberedLKI" => x.Host.Remembered?.ToList() ?? new(),
+            "DelayTriggerRemembered" or "DelayTriggerRememberedLKI" => x.Item.DelayRemembered?.ToList() ?? new(),
             "TriggeredCard" or "TriggeredCardLKICopy" or "TriggeredNewCardLKICopy" =>
                 x.Item.TriggeredCardId is { } id ? new() { id } : new(),
             "Enchanted" or "Equipped" => x.Host.AttachedTo >= 0 ? new() { x.Host.AttachedTo } : new(),

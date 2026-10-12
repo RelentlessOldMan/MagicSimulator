@@ -212,7 +212,10 @@ public sealed partial class Game
             case Step.BeginCombat: FirePhase("BeginCombat"); break;
             case Step.DeclareAttackers: DeclareAttackers(); break;
             case Step.CombatDamage: CombatDamage(); break;
-            case Step.EndCombat: State.Attackers.Clear(); break;
+            case Step.EndCombat:
+                FirePhase("EndCombat");
+                State.Attackers.Clear();
+                break;
             case Step.Main2: FirePhase("Main2"); break;
             case Step.End:
                 AtBeginningOfEndStep();
@@ -453,6 +456,8 @@ public sealed partial class Game
     private bool CanActivate(Card c, AbilityDef ab, bool sorcerySpeed)
     {
         if (ab["SorcerySpeed"] == "True" && !sorcerySpeed) return false;
+        // Loyalty abilities: sorcery speed, one per planeswalker per turn (rule 606.3).
+        if (ab["Planeswalker"] == "True" && (!sorcerySpeed || c.LoyaltyActivatedTurn == State.Turn)) return false;
         if (!CanPayCost(ab.Cost, c, c.Controller, 0, excludeSourceFromMana: ab.Cost.Tap)) return false;
         return HasLegalTargets(c, ab);
     }
@@ -569,6 +574,7 @@ public sealed partial class Game
         var x = 0;
         if (ab.Cost.Mana.XCount > 0) x = Decider.ChooseX(this, player, c, MaxAffordableX(ab.Cost, c, player));
         var targets = ChooseChainTargets(c, ab, player);
+        if (ab["Planeswalker"] == "True") c.LoyaltyActivatedTurn = State.Turn;
         if (!PayCost(ab.Cost, c, player, x, excludeSourceFromMana: ab.Cost.Tap))
             throw new InvalidOperationException($"could not pay for {c.Name}'s ability after checking it was activatable");
         var item = new StackItem
@@ -763,6 +769,7 @@ public sealed partial class Game
                 if (c.Toughness <= 0) MoveTo(c, Zone.Graveyard);
                 else if (c.Damage >= c.Toughness) Destroy(c, regenerate: true);
             }
+            if (c.Zone == Zone.Battlefield && c.Types.Is(CardType.Planeswalker) && c.CounterCount("LOYALTY") <= 0) MoveTo(c, Zone.Graveyard);   // rule 704.5i
             // Auras attached to nothing go to the graveyard; Equipment just falls off (rules 704.5m-n).
             if (c.Zone != Zone.Battlefield) continue;
             var host = c.AttachedTo >= 0 ? State[c.AttachedTo] : null;

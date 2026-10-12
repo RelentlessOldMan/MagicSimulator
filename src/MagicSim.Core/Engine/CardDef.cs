@@ -56,6 +56,8 @@ public sealed class AbilityDef
     public StaticDef? AltCostOf { get; set; }
     /// <summary>Abilities this effect gives (Animate's Abilities$/Triggers$/staticAbilities$).</summary>
     public Grants? Grants { get; set; }
+    /// <summary>The trigger a DelayedTrigger effect sets up.</summary>
+    public TriggerDef? Delayed { get; set; }
 
     public AbilityDef CloneHead() => (AbilityDef)MemberwiseClone();
     public string Description => ModeDescription ?? P["SpellDescription"] ?? P["StackDescription"] ?? Api;
@@ -99,6 +101,8 @@ public sealed class FaceDef
     public required TypeLine Types { get; set; }
     public int? Power { get; init; }
     public int? Toughness { get; init; }
+    /// <summary>A planeswalker's printed loyalty: it enters with that many loyalty counters (rule 306.5b).</summary>
+    public int? Loyalty { get; init; }
     public ColorMask Colors { get; set; }
     public HashSet<string> KeywordNames { get; } = new(StringComparer.Ordinal);
     public List<string> RawKeywords { get; } = new();
@@ -131,7 +135,7 @@ public sealed class FaceDef
     {
         var f = new FaceDef
         {
-            Name = Name, ManaCost = ManaCost, Types = types, Power = power, Toughness = toughness, Colors = colors,
+            Name = Name, ManaCost = ManaCost, Types = types, Power = power, Toughness = toughness, Colors = colors, Loyalty = Loyalty,
             AuraSpell = AuraSpell, DoesntUntap = DoesntUntap, Flashback = Flashback, SVars = SVars, Oracle = Oracle, EtbCopy = EtbCopy,
         };
         f.KeywordNames.UnionWith(KeywordNames);
@@ -238,9 +242,10 @@ public static partial class CardCompiler
             Name = f.Name, ManaCost = cost, Types = types, Oracle = f.Oracle, SVars = f.SVars,
             Power = ParsePT(f.PT, 0), Toughness = ParsePT(f.PT, 1),
             Colors = ParseColors(f.Colors) ?? ColorsOf(cost),
+            Loyalty = int.TryParse(f.Loyalty, out var loyalty) ? loyalty : null,
         };
         var starPT = f.PT is not null && (face.Power is null || face.Toughness is null);
-        if (types.Is(CardType.Planeswalker)) missing.Add("Type:Planeswalker");
+        if (types.Is(CardType.Planeswalker) && face.Loyalty is null) missing.Add("Loyalty:" + f.Loyalty);
         if (types.Is(CardType.Battle)) missing.Add("Type:Battle");
 
         var ctx = new CompileContext { Face = face, Missing = missing, Tokens = tokens };

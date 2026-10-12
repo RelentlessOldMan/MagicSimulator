@@ -120,6 +120,19 @@ public class MechanicsTests
         "R:Event$ Moved | ActiveZones$ Battlefield | Destination$ Graveyard | ValidCard$ Card | ReplaceWith$ Exile\n" +
         "SVar:Exile:DB$ ChangeZone | Hidden$ True | Origin$ All | Destination$ Exile | Defined$ ReplacedCard\n",
         "Name:Sure\nManaCost:0\nTypes:Sorcery\nR:Event$ Counter | ValidCard$ Card.Self | ValidSA$ Spell | Layer$ CantHappen\nA:SP$ Draw | NumCards$ 1\n",
+        "Name:Walker\nManaCost:0\nTypes:Legendary Planeswalker Test\nLoyalty:3\n" +
+        "A:AB$ GainLife | Cost$ AddCounter<1/LOYALTY> | Planeswalker$ True | Defined$ You | LifeAmount$ 2\n" +
+        "A:AB$ Draw | Cost$ SubCounter<3/LOYALTY> | Planeswalker$ True | Defined$ You | NumCards$ 1\n",
+        "Name:Trip\nManaCost:0\nTypes:Instant\nA:SP$ GainLife | Defined$ You | LifeAmount$ 1 | SubAbility$ DelTrig\n" +
+        "SVar:DelTrig:DB$ DelayedTrigger | Mode$ Phase | Phase$ Upkeep | ValidPlayer$ You | NextTurn$ True | Execute$ DrawSlowtrip | TriggerDescription$ Draw a card at the beginning of the next turn's upkeep.\n" +
+        "SVar:DrawSlowtrip:DB$ Draw | NumCards$ 1 | Defined$ You\n",
+        "Name:Fling\nManaCost:0\nTypes:Sorcery\nA:SP$ Pump | ValidTgts$ Creature | NumAtt$ +2 | SubAbility$ DelTrig\n" +
+        "SVar:DelTrig:DB$ DelayedTrigger | Mode$ Phase | Phase$ End of Turn | RememberObjects$ Targeted | Execute$ TrigBye\n" +
+        "SVar:TrigBye:DB$ ChangeZone | Defined$ DelayTriggerRemembered | Origin$ Battlefield | Destination$ Exile\n",
+        "Name:Toll\nManaCost:0\nTypes:Sorcery\nA:SP$ RepeatEach | RepeatPlayers$ Player.Opponent | RepeatSubAbility$ DBLose\n" +
+        "SVar:DBLose:DB$ LoseLife | Defined$ Remembered | LifeAmount$ 2\n",
+        "Name:Census\nManaCost:0\nTypes:Sorcery\nA:SP$ RepeatEach | RepeatCards$ Creature.YouCtrl | RepeatSubAbility$ DBGain\n" +
+        "SVar:DBGain:DB$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:Remembered$CardPower\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -677,6 +690,80 @@ public class MechanicsTests
     {
         var g = Setup(new[] { "Sure" }, library: new[] { "Filler" });
         Assert.False(g.State[InHand(g, "Sure")].IsBlank);
+    }
+
+    [Fact]
+    public void PlaneswalkerEntersWithLoyaltyAndActivatesOncePerTurn()
+    {
+        var g = Setup(new[] { "Walker" });
+        g.CastSpell(g.State[InHand(g, "Walker")], -1);
+        ResolveAll(g);
+        var walker = OnBattlefield(g, "Walker");
+        Assert.Equal(3, walker.CounterCount("LOYALTY"));
+        Assert.Contains(g.LegalActions(Game.Me), a => a is GameAction.Activate act && act.CardId == walker.Id);
+        g.ActivateAbility(walker, 0);
+        ResolveAll(g);
+        Assert.Equal(4, walker.CounterCount("LOYALTY"));
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+        Assert.DoesNotContain(g.LegalActions(Game.Me), a => a is GameAction.Activate act && act.CardId == walker.Id);
+    }
+
+    [Fact]
+    public void PlaneswalkerWithNoLoyaltyIsPutIntoTheGraveyard()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Walker" }, library: new[] { "Filler" });
+        var walker = OnBattlefield(g, "Walker");
+        Game.AddCounters(walker, "LOYALTY", 3);
+        g.ActivateAbility(walker, 1);
+        ResolveAll(g);
+        g.CheckStateBasedActions();
+        Assert.Equal(Zone.Graveyard, walker.Zone);
+        Assert.Single(g.State.Players[Game.Me].Hand);
+    }
+
+    [Fact]
+    public void SlowtripDrawsAtTheNextUpkeep()
+    {
+        var g = Setup(new[] { "Trip" }, library: new[] { "Filler", "Filler", "Filler" });
+        g.CastSpell(g.State[InHand(g, "Trip")], 0);
+        ResolveAll(g);
+        Assert.Empty(g.State.Players[Game.Me].Hand);
+        Assert.Single(g.State.Delayed);
+        g.ResumeTurn();
+        g.RunTurn();
+        Assert.Equal(2, g.State.Players[Game.Me].Hand.Count);   // the slowtrip and the draw step
+        Assert.Empty(g.State.Delayed);
+    }
+
+    [Fact]
+    public void DelayedTriggerRemembersItsTarget()
+    {
+        var g = Setup(new[] { "Fling" }, battlefield: new[] { "Bear" }, library: new[] { "Filler", "Filler" });
+        g.CastSpell(g.State[InHand(g, "Fling")], 0);
+        ResolveAll(g);
+        var bear = g.State.Cards.First(c => c.Name == "Bear");
+        Assert.Equal(Zone.Battlefield, bear.Zone);
+        g.ResumeTurn();
+        Assert.Equal(Zone.Exile, bear.Zone);
+    }
+
+    [Fact]
+    public void RepeatEachOpponentLosesLife()
+    {
+        var g = Setup(new[] { "Toll" });
+        g.CastSpell(g.State[InHand(g, "Toll")], 0);
+        ResolveAll(g);
+        Assert.All(g.State.Players.Where(p => p.Index != Game.Me), p => Assert.Equal(38, p.Life));
+        Assert.Equal(40, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void RepeatEachCardRemembersItInTurn()
+    {
+        var g = Setup(new[] { "Census" }, battlefield: new[] { "Bear", "Sneak" });
+        g.CastSpell(g.State[InHand(g, "Census")], 0);
+        ResolveAll(g);
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
     }
 
     [Fact]
