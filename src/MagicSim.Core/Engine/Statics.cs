@@ -259,19 +259,15 @@ public static class Statics
     {
         var text = c.CurrentFace.EscapeCost;
         if (text is null)
-            foreach (var source in Sources(g))
+            foreach (var (source, st) in Pairs(g))
             {
                 if (source.Controller != c.Owner) continue;
-                foreach (var st in source.Statics)
-                {
-                    if (st.Mode != "Continuous" || !IsEscapeGrant(st) || !WorksFrom(source, st)) continue;
-                    var x = ContextFor(g, source, st);
-                    if (st["Affected"] is { } a && !Effect.FilterFor(source.CurrentFace, a).MatchesCard(c, x)) continue;
-                    if (!Presence.Hold(st.P, x)) continue;
-                    text = st["AddKeyword"]![7..];
-                    break;
-                }
-                if (text is not null) break;
+                if (st.Mode != "Continuous" || !IsEscapeGrant(st) || !WorksFrom(source, st)) continue;
+                var x = ContextFor(g, source, st);
+                if (st["Affected"] is { } a && !Effect.FilterFor(source.CurrentFace, a).MatchesCard(c, x)) continue;
+                if (!Presence.Hold(st.P, x)) continue;
+                text = st["AddKeyword"]![7..];
+                break;
             }
         if (text is null) return null;
         var cost = CachedCost(text.Replace("CardManaCost", "").Trim(), c.CurrentFace);
@@ -281,10 +277,8 @@ public static class Statics
     /// <summary>Whether anything <paramref name="player"/> controls could give cards escape (a cheap check before <see cref="EscapeCost"/>).</summary>
     public static bool GrantsEscape(Game g, int player)
     {
-        foreach (var source in Sources(g))
-            if (source.Controller == player)
-                foreach (var st in source.Statics)
-                    if (st.Mode == "Continuous" && IsEscapeGrant(st)) return true;
+        foreach (var (source, st) in Pairs(g))
+            if (source.Controller == player && st.Mode == "Continuous" && IsEscapeGrant(st)) return true;
         return false;
     }
 
@@ -461,6 +455,21 @@ public static class Statics
         _ => true,
     };
 
+    /// <summary>
+    /// Every static ability of every <see cref="Sources"/> card, in that order. Asked for once per card in hand while
+    /// working out the legal actions, when nothing changes, so it is found once then.
+    /// </summary>
+    internal static List<(Card Source, StaticDef Static)> Pairs(Game g)
+    {
+        if (g.StaticPairs is { } cached) return cached;
+        var pairs = new List<(Card, StaticDef)>();
+        foreach (var source in Sources(g))
+            foreach (var st in source.Statics)
+                pairs.Add((source, st));
+        if (g.CachesStaticPairs) g.StaticPairs = pairs;
+        return pairs;
+    }
+
     /// <summary>Where static abilities work from: the battlefield, effects and emblems in command zones, and cards whose statics work from the graveyard.</summary>
     public static IEnumerable<Card> Sources(Game g)
     {
@@ -481,24 +490,21 @@ public static class Statics
     public static Dictionary<int, MayPlayGrant> MayPlay(Game g, int player)
     {
         var result = new Dictionary<int, MayPlayGrant>();
-        foreach (var source in Sources(g))
+        foreach (var (source, st) in Pairs(g))
         {
             if (source.Controller != player) continue;
-            foreach (var st in source.Statics)
-            {
-                if (st.Mode != "Continuous" || st["MayPlay"] != "True" || !WorksFrom(source, st)) continue;
-                var x = ContextFor(g, source, st);
-                if (!Presence.Hold(st.P, x)) continue;
-                var zone = Enum.Parse<Zone>(st["AffectedZone"]!);
-                var filter = st["Affected"] is { } a ? Effect.FilterFor(source.CurrentFace, a) : null;
-                foreach (var c in g.CardsIn(zone))
-                    if (c.Owner == player && !c.IsEffect && (filter is null || filter.MatchesCard(c, x)))
-                    {
-                        var grant = new MayPlayGrant(st["MayPlayWithoutManaCost"] == "True", st["MayPlayAltManaCost"], st["MayPlayIgnoreType"] == "True");
-                        // The cheapest way wins: free, then an alternative cost, then the normal cost.
-                        result[c.Id] = result.TryGetValue(c.Id, out var had) && (had.Free || had.AltManaCost is not null && !grant.Free) ? had : grant;
-                    }
-            }
+            if (st.Mode != "Continuous" || st["MayPlay"] != "True" || !WorksFrom(source, st)) continue;
+            var x = ContextFor(g, source, st);
+            if (!Presence.Hold(st.P, x)) continue;
+            var zone = Enum.Parse<Zone>(st["AffectedZone"]!);
+            var filter = st["Affected"] is { } a ? Effect.FilterFor(source.CurrentFace, a) : null;
+            foreach (var c in g.CardsIn(zone))
+                if (c.Owner == player && !c.IsEffect && (filter is null || filter.MatchesCard(c, x)))
+                {
+                    var grant = new MayPlayGrant(st["MayPlayWithoutManaCost"] == "True", st["MayPlayAltManaCost"], st["MayPlayIgnoreType"] == "True");
+                    // The cheapest way wins: free, then an alternative cost, then the normal cost.
+                    result[c.Id] = result.TryGetValue(c.Id, out var had) && (had.Free || had.AltManaCost is not null && !grant.Free) ? had : grant;
+                }
         }
         return result;
     }
@@ -578,18 +584,22 @@ public static class Statics
     /// <summary>"You may cast [spells] as though they had flash."</summary>
     public static bool CastWithFlash(Game g, Card spell, int caster)
     {
-        foreach (var source in Sources(g).Append(spell))
-            foreach (var st in source.Statics)
-            {
-                if (st.Mode != "CastWithFlash" || source.Id != spell.Id && !WorksFrom(source, st)) continue;
-                var self = source.Id == spell.Id;
-                if (self != (st["EffectZone"] == "All")) continue;
-                if (st["Caster"] != "Player" && source.Controller != caster) continue;
-                var x = ContextFor(g, source, st);
-                if (st["ValidCard"] is { } vc && !Effect.FilterFor(x.SVarFace, vc).MatchesCard(spell, x)) continue;
-                if (Presence.Hold(st.P, x)) return true;
-            }
+        foreach (var (source, st) in Pairs(g))
+            if (Grants(source, st)) return true;
+        foreach (var st in spell.Statics)
+            if (Grants(spell, st)) return true;
         return false;
+
+        bool Grants(Card source, StaticDef st)
+        {
+            if (st.Mode != "CastWithFlash" || source.Id != spell.Id && !WorksFrom(source, st)) return false;
+            var self = source.Id == spell.Id;
+            if (self != (st["EffectZone"] == "All")) return false;
+            if (st["Caster"] != "Player" && source.Controller != caster) return false;
+            var x = ContextFor(g, source, st);
+            if (st["ValidCard"] is { } vc && !Effect.FilterFor(x.SVarFace, vc).MatchesCard(spell, x)) return false;
+            return Presence.Hold(st.P, x);
+        }
     }
 
     /// <summary>Net generic-cost change for casting <paramref name="spell"/>: "cost {N} less" minus "cost {N} more".</summary>
@@ -597,23 +607,26 @@ public static class Statics
 
     private static int CostChange(Game g, Card spell, int caster, string mode)
     {
+        // Battlefield sources (the only ones with statics are among Pairs), then the spell itself.
         var total = 0;
-        foreach (var source in g.State.BattlefieldCards.Append(spell))
-        {
-            if (source.IsBlank) continue;
-            var self = source.Id == spell.Id;
-            foreach (var st in source.Statics)
-            {
-                if (st.Mode != mode || mode == "RaiseCost" && st["Activator"] == "Opponent") continue;
-                // A card's own "this spell costs less" works from anywhere (EffectZone$ All); others from the battlefield.
-                if (self != (st["EffectZone"] == "All")) continue;
-                if (!self && source.Controller != caster) continue;
-                var x = ContextFor(g, source, st);
-                if (st["ValidCard"] is { } vc && !Effect.FilterFor(source.CurrentFace, vc).MatchesCard(spell, x)) continue;
-                if (!Presence.Hold(st.P, x)) continue;
-                total += Math.Max(0, Effect.EvalAmount(x, st["Amount"] ?? "1"));
-            }
-        }
+        foreach (var (source, st) in Pairs(g))
+            if (source.Zone == Zone.Battlefield) total += Change(source, st);
+        if (!spell.IsBlank)
+            foreach (var st in spell.Statics)
+                total += Change(spell, st);
         return total;
+
+        int Change(Card source, StaticDef st)
+        {
+            if (st.Mode != mode || mode == "RaiseCost" && st["Activator"] == "Opponent") return 0;
+            // A card's own "this spell costs less" works from anywhere (EffectZone$ All); others from the battlefield.
+            var self = source.Id == spell.Id;
+            if (self != (st["EffectZone"] == "All")) return 0;
+            if (!self && source.Controller != caster) return 0;
+            var x = ContextFor(g, source, st);
+            if (st["ValidCard"] is { } vc && !Effect.FilterFor(source.CurrentFace, vc).MatchesCard(spell, x)) return 0;
+            if (!Presence.Hold(st.P, x)) return 0;
+            return Math.Max(0, Effect.EvalAmount(x, st["Amount"] ?? "1"));
+        }
     }
 }

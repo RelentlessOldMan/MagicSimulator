@@ -459,12 +459,23 @@ public sealed partial class Game
     // Mana sources found while working out the legal actions; the game doesn't change during that.
     private Dictionary<int, List<ManaSource>>? _autoSourceCache;
 
+    /// <summary>While working out the legal actions: every static ability in play, found once (see <see cref="Statics.Pairs"/>).</summary>
+    internal List<(Card Source, StaticDef Static)>? StaticPairs;
+    private bool _cacheStaticPairs;
+    internal bool CachesStaticPairs => _cacheStaticPairs;
+
     public List<GameAction> LegalActions(int player)
     {
         var saved = _autoSourceCache;
+        var (savedPairs, savedCaching) = (StaticPairs, _cacheStaticPairs);
         _autoSourceCache = new();
+        (StaticPairs, _cacheStaticPairs) = (null, true);
         try { return LegalActionsCore(player); }
-        finally { _autoSourceCache = saved; }
+        finally
+        {
+            _autoSourceCache = saved;
+            (StaticPairs, _cacheStaticPairs) = (savedPairs, savedCaching);
+        }
     }
 
     private List<GameAction> LegalActionsCore(int player)
