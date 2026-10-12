@@ -171,6 +171,10 @@ public sealed class FaceDef
     public (string Cost, bool Mega)? Morph { get; set; }
     /// <summary>What it is while face down: a nameless colorless 2/2 creature that can be turned face up.</summary>
     public FaceDef? FaceDownFace { get; set; }
+    /// <summary>Overload cost: cast it with "each" instead of "target" (rule 702.96).</summary>
+    public Cost? Overload { get; set; }
+    /// <summary>Entwine cost: choose all modes of a modal spell for this much more (rule 702.42).</summary>
+    public Cost? Entwine { get; set; }
     /// <summary>Rebound: cast from hand, it's exiled and this triggers at your next upkeep (rule 702.88).</summary>
     public TriggerDef? Rebound { get; set; }
 
@@ -314,6 +318,7 @@ public static partial class CardCompiler
             foreach (var mode in ExpandModes(ab, ctx))
                 if (mode.Kind == AbilityKind.Spell) face.SpellAbilities.Add(mode);
                 else face.Activated.Add(mode);
+            if (face.Overload is { } overload && a.AbilityKind == "SP") AddOverload(face, a, overload, ctx);
         }
 
         // Basic land types grant "T: add one mana of that color" (rule 305.6).
@@ -539,6 +544,12 @@ public static partial class CardCompiler
                 // "{cost}, discard this: search for a card with the same mana value. Transmute only as a sorcery."
                 AddGenerated(face, ctx, $"AB$ ChangeZone | Cost$ {Part(1)} Discard<1/CARDNAME> | ActivationZone$ Hand | Origin$ Library | Destination$ Hand | ChangeType$ Card.cmcEQ{face.ManaCost.ManaValue} | ChangeNum$ 1 | SorcerySpeed$ True | SpellDescription$ Transmute");
                 return true;
+            case "Overload":
+                face.Overload = ParseCost(Part(1), ctx);
+                return true;
+            case "Entwine":
+                face.Entwine = ParseCost(Part(1), ctx);
+                return true;
             case "Exploit":
                 // "When this creature enters, you may sacrifice a creature."
                 face.SVars["__Exploit"] = "DB$ Exploit";
@@ -634,6 +645,18 @@ public static partial class CardCompiler
             twin.ModeDescription = (ab.ModeDescription ?? ab.Description) + $" ({string.Join(", ", names).ToLowerInvariant()})";
             face.SpellAbilities.Add(twin);
         }
+    }
+
+    /// <summary>Overload: the same spell with "each" for "target" (its targets become every permanent that could be targeted), for another cost.</summary>
+    private static void AddOverload(FaceDef face, ForgeParams spell, Cost cost, CompileContext ctx)
+    {
+        if (spell["ValidTgts"] is not { } valid) { ctx.Need("Overload:NoTarget"); return; }
+        var kept = spell.Values.Where(kv => kv.Key is not ("ValidTgts" or "TgtPrompt" or "TargetMin" or "TargetMax" or "Defined"))
+            .Select(kv => $"{kv.Key}$ {kv.Value}");
+        if (CompileAbility(new ForgeParams(string.Join(" | ", kept) + $" | Defined$ Valid {valid}"), ctx, AbilityKind.Spell, 0) is not { } each) return;
+        each.AltCost = cost;
+        each.ModeDescription = "Overload";
+        face.SpellAbilities.Add(each);
     }
 
     /// <summary>Morph: a way to cast it face down for {3}, and its face-down self, which can be turned face up for the morph cost.</summary>
@@ -735,6 +758,8 @@ public static partial class CardCompiler
 
         var combos = new List<int[]>();
         for (var k = min; k <= max; k++) Combinations(choices.Length, k, 0, new List<int>(), combos);
+        var entwined = ab.Kind == AbilityKind.Spell && ctx.Face.Entwine is not null && max < choices.Length;
+        if (entwined) combos.Add(Enumerable.Range(0, choices.Length).ToArray());
         if (combos.Count > 40) { ctx.Need("Charm:TooManyModes"); return new() { ab }; }
 
         var result = new List<AbilityDef>();
@@ -756,6 +781,11 @@ public static partial class CardCompiler
             if (ab["SubAbility"] is { } sub && ctx.Face.SVars.TryGetValue(sub, out var subBody))
                 tail.Sub = CompileAbility(new ForgeParams(subBody), ctx, AbilityKind.Sub, tail.ChainIndex + 1);
             head.ModeDescription = string.Join(" + ", combo.Select(i => new ForgeParams(ctx.Face.SVars[choices[i]])["SpellDescription"] ?? choices[i]));
+            if (entwined && combo.Length == choices.Length)
+            {
+                head.ExtraCost = ctx.Face.Entwine;
+                head.ModeDescription += " (entwined)";
+            }
             result.Add(head);
         }
         return result;

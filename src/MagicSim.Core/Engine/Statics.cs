@@ -15,7 +15,7 @@ public static class Presence
 
     private static readonly HashSet<string> KnownConditions = new(StringComparer.Ordinal)
     {
-        "PlayerTurn", "NotPlayerTurn", "Threshold", "Hellbent", "Metalcraft", "Delirium", "Kicked", "Bargain", "Revolt",
+        "PlayerTurn", "NotPlayerTurn", "Threshold", "Hellbent", "Metalcraft", "Delirium", "Kicked", "Bargain", "Revolt", "Blessing",
     };
 
     public static bool IsKnownCondition(string cond) => KnownConditions.Contains(cond);
@@ -38,6 +38,7 @@ public static class Presence
             "Bargain" => x.Host.PaidOptional?.Contains("Bargain") ?? false,
             // "If a permanent you controlled left the battlefield this turn."
             "Revolt" => g.State.ThisTurn.PermanentLeft.Contains(you),
+            "Blessing" => me.CityBlessing,
             _ => false,
         };
     }
@@ -183,7 +184,7 @@ public static class Statics
                 if (s["ValidCard"] is { } pvc) Filter.Parse(pvc, ctx);
                 if (s["ValidCause"] is { } pc) Filter.Parse(pc, ctx);
                 break;
-            case "RaiseCost" when s["Activator"] == "Opponent":
+            case "RaiseCost" when s["Activator"] is "Opponent" or "Player.Opponent":
                 return;   // goldfish opponents cast nothing
             case "RaiseCost":
                 own = ReduceCostParams;
@@ -226,7 +227,7 @@ public static class Statics
             if (s["MayPlayAltManaCost"] is { } alt) CardCompiler.ParseCost(alt.Replace("ConvertedManaCost", "1"), ctx);
         }
         else if (s["MayPlayAltManaCost"] is not null) ctx.Need("MayPlayAltManaCost+NoMayPlay");
-        if (s["MayLookAt"] is { } look && (look != "You" || s["AffectedZone"] != "Library" || s["MayPlay"] is null && s.P.Values.Keys.Any(k => k is not ("Mode" or "Affected" or "AffectedZone" or "MayLookAt" or "Description"))))
+        if (s["MayLookAt"] is { } look && (look is not ("You" or "Player") || s["AffectedZone"] != "Library" || s["MayPlay"] is null && s.P.Values.Keys.Any(k => k is not ("Mode" or "Affected" or "AffectedZone" or "MayLookAt" or "Description"))))
             ctx.Need("MayLookAt:" + look + "+" + s["AffectedZone"]);
         if (s["MayPlay"] is null && s["MayLookAt"] is null && s["AffectedZone"] is { } az && az != "Battlefield" && !IsEscapeGrant(s))
             ctx.Need("AffectedZone:" + az);

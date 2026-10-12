@@ -107,6 +107,7 @@ public sealed class Filter
             "You" => (c, pl, x) => pl == x.Controller,
             "Self" or "StrictlySelf" => (c, pl, x) => c is not null && c.Id == x.Item.SourceId,
             "escaped" => (c, pl, x) => c is not null && c.Escaped,
+            "TriggeredCard" => (c, pl, x) => c is not null && c.Id == x.Item.TriggeredCardId,
             _ when p.StartsWith("ChosenMode", StringComparison.Ordinal) && p.Length > 10 => (c, pl, x) => c is not null && c.ChosenMode == p[10..],
             "kicked" => (c, pl, x) => c is not null && (c.PaidOptional?.Any(o => o.StartsWith("Kicker", StringComparison.Ordinal)) ?? false),
             "Other" or "StrictlyOther" => (c, pl, x) => c is null || c.Id != x.Item.SourceId,
@@ -356,6 +357,10 @@ public sealed class Amount
         if (kind.StartsWith("Revolt.", StringComparison.Ordinal) && kind.Split('.') is [_, var r1, var r0]
             && int.TryParse(r1, out var revoltValue) && int.TryParse(r0, out var noRevoltValue))
             return new(core, x => x.S.ThisTurn.PermanentLeft.Contains(x.Controller) ? revoltValue : noRevoltValue);
+        // "Count$Blessing.1.0": one number with the city's blessing, another without.
+        if (kind.StartsWith("Blessing.", StringComparison.Ordinal) && kind.Split('.') is [_, var b1, var b0]
+            && int.TryParse(b1, out var blessed) && int.TryParse(b0, out var unblessed))
+            return new(core, x => x.S.Players[x.Controller].CityBlessing ? blessed : unblessed);
         if (kind == "TimesKicked") return new(core, x => x.Host.PaidOptional?.Count(o => o.StartsWith("Kicker", StringComparison.Ordinal)) ?? 0);
         if (kind == "Compare" && arg.Split(' ') is [var left, var rest] && rest.Length > 2 && rest[2..].Split('.') is [var rhs, var yes, var no])
         {
@@ -438,6 +443,7 @@ public sealed class Amount
                 case "CardPower": return new(core, x => Matching(x).Sum(card => card.Power));
                 case "CardToughness": return new(core, x => Matching(x).Sum(card => card.Toughness));
                 case "SumCMC": return new(core, x => Matching(x).Sum(card => card.CurrentFace.ManaCost.ManaValue));
+                case "DifferentCardNames": return new(core, x => Matching(x).Select(card => card.Name).Distinct(StringComparer.Ordinal).Count());
                 default: ctx.Need("Count:" + kind + "$" + arg[(dollar + 1)..]); return Const(0);
             }
         }
@@ -565,7 +571,7 @@ public static class Defined
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
         "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards",
         "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
-        "ReplacedCard", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard",
+        "ReplacedCard", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard", "Parent",
     };
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
@@ -611,7 +617,7 @@ public static class Defined
         }
         return (text ?? fallback) switch
         {
-            "Self" => new() { x.Item.SourceId },
+            "Self" or "Parent" => new() { x.Item.SourceId },
             "Targeted" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value).ToList(),
             "ParentTarget" => x.ParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value).ToList(),
             "Remembered" or "RememberedLKI" or "RememberedCard" => x.Host.Remembered?.ToList() ?? new(),

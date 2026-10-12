@@ -422,6 +422,29 @@ public class MechanicsTests
         "SVar:TrigRaise:DB$ ChangeZone | Origin$ Graveyard | Destination$ Battlefield | GainControl$ True | RememberChanged$ True | ValidTgts$ Creature | SubAbility$ Aurify\n" +
         "SVar:Aurify:DB$ Animate | Types$ Aura | Keywords$ Enchant:Creature.IsRemembered:that creature | Duration$ Permanent | SubAbility$ DBAttach\n" +
         "SVar:DBAttach:DB$ Attach | Defined$ Remembered\n",
+        "Name:Seer\nManaCost:0\nTypes:Creature Elf\nPT:2/2\n" +
+        "S:Mode$ Continuous | Affected$ Card.TopLibrary+YouCtrl | AffectedZone$ Library | MayLookAt$ Player\n" +
+        "S:Mode$ Continuous | Affected$ Land.TopLibrary+YouCtrl | AffectedZone$ Library | MayPlay$ True\n",
+        "Name:Ascender\nManaCost:0\nTypes:Creature Dinosaur\nPT:1/1\nK:Ascend\n" +
+        "S:Mode$ Continuous | AffectedDefined$ Self | AddPower$ X\nSVar:X:Count$Blessing.3.0\n",
+        "Name:Surge\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Creature.YouCtrl | TriggerZones$ Battlefield | Execute$ TrigDamage\n" +
+        "SVar:TrigDamage:DB$ DealDamage | ValidTgts$ Any | NumDmg$ X | DamageSource$ TriggeredCard\nSVar:X:TriggeredCard$CardPower\n",
+        "Name:Lifer\nManaCost:0\nTypes:Creature Cleric\nPT:2/2\nK:Lifelink\n",
+        "Name:Zenith\nManaCost:X\nTypes:Sorcery\n" +
+        "A:SP$ ChangeZone | Origin$ Library | Destination$ Battlefield | ChangeType$ Creature.cmcLEX | ChangeNum$ 1 | SubAbility$ DBShuffle | AIXMax$ X\n" +
+        "SVar:X:Count$xPaid\nSVar:DBShuffle:DB$ ChangeZone | Origin$ Stack | Destination$ Library | Shuffle$ True | Defined$ Parent\n",
+        "Name:Blast\nManaCost:0\nTypes:Sorcery\nA:SP$ Destroy | ValidTgts$ Artifact | TgtPrompt$ Select target artifact\nK:Overload:0\n",
+        "Name:Sleuth\nManaCost:0\nTypes:Sorcery\nA:SP$ Investigate\n",
+        "Name:Twine\nManaCost:0\nTypes:Sorcery\nK:Entwine:B\nA:SP$ Charm | Choices$ DBOne,DBTwo\n" +
+        "SVar:DBOne:DB$ GainLife | Defined$ You | LifeAmount$ 1 | SpellDescription$ Gain 1.\n" +
+        "SVar:DBTwo:DB$ GainLife | Defined$ You | LifeAmount$ 2 | SpellDescription$ Gain 2.\n",
+        "Name:Finale\nManaCost:0\nTypes:Sorcery\n" +
+        "A:SP$ ChangeZone | ChangeType$ Creature.YouCtrl | Origin$ Library | OriginAlternative$ Graveyard | Destination$ Battlefield | ShuffleNonMandatory$ True\n",
+        "Name:Pinnacle\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ ChangesZone | ValidCard$ Land.YouCtrl | Origin$ Any | Destination$ Battlefield | Execute$ TrigGain | NoResolvingCheck$ True | TriggerZones$ Battlefield\n" +
+        "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 3 | ConditionPresent$ Land.YouCtrl+!TriggeredCard | ConditionCompare$ GE2\n",
+        "Name:Names\nManaCost:0\nTypes:Sorcery\nA:SP$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:Count$Valid Land.YouCtrl$DifferentCardNames\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -438,6 +461,7 @@ public class MechanicsTests
         ["role_wicked"] = "Name:Wicked Role\nManaCost:no cost\nTypes:Enchantment Aura Role\nK:Enchant:Creature\n" +
             "S:Mode$ Continuous | Affected$ Creature.EnchantedBy | AddPower$ 1 | AddToughness$ 1\n",
         ["marit_lage"] = "Name:Avatar Token\nManaCost:no cost\nColors:black\nTypes:Legendary Creature Avatar\nPT:20/20\nK:Flying\nK:Indestructible\n",
+        ["c_a_clue_draw"] = "Name:Clue Token\nManaCost:no cost\nTypes:Artifact Clue\nA:AB$ Draw | Cost$ 2 Sac<1/CARDNAME> | NumCards$ 1\n",
         ["b_0_1_serf"] = "Name:Serf Token\nManaCost:no cost\nColors:black\nTypes:Creature Serf\nPT:0/1\n",
     };
 
@@ -2539,5 +2563,114 @@ public class MechanicsTests
         g.CastSpell(raiser, -1);
         ResolveAll(g);
         Assert.Contains(g.State.ThisTurn.AtEndStep, e => e.CardId == raiser.Id && e.Action == "Sacrifice");
+    }
+
+    [Fact]
+    public void PlayLandsFromTheRevealedTop()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Seer" }, library: new[] { "Wood", "Filler" });
+        g.CheckStateBasedActions();
+        Assert.Contains(g.LegalActions(Game.Me), a => a is GameAction.PlayLand pl && g.State[pl.CardId].Name == "Wood");
+    }
+
+    [Fact]
+    public void AscendGivesTheCitysBlessing()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Ascender", "Bog", "Bog", "Bog", "Bog", "Bog", "Bog", "Bog", "Bog" });
+        g.CheckStateBasedActions();
+        Assert.False(g.State.Players[Game.Me].CityBlessing);
+        g = Setup(Array.Empty<string>(), battlefield: new[] { "Ascender", "Bog", "Bog", "Bog", "Bog", "Bog", "Bog", "Bog", "Bog", "Bog" });
+        g.CheckStateBasedActions();
+        Assert.True(g.State.Players[Game.Me].CityBlessing);
+        g.MoveTo(OnBattlefield(g, "Bog"), Zone.Graveyard);
+        g.CheckStateBasedActions();
+        Assert.True(g.State.Players[Game.Me].CityBlessing);
+        Assert.Equal(4, OnBattlefield(g, "Ascender").Power);
+    }
+
+    [Fact]
+    public void DamageFromTheEnteringCreature()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Target ? dec.Options.ToList().FindIndex(o => o is TargetRef { Player: 1 }) : null };
+        var g = Setup(new[] { "Lifer" }, battlefield: new[] { "Surge" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Lifer")], -1);
+        ResolveAll(g);
+        Assert.Equal(38, g.State.Players[1].Life);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);   // the creature has lifelink
+    }
+
+    [Fact]
+    public void SpellShufflesItselfIntoTheLibrary()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.X ? dec.Options.ToList().IndexOf(2) : null };
+        var g = Setup(new[] { "Zenith" }, battlefield: new[] { "Bog", "Bog" }, library: new[] { "Bear" }, decider: d);
+        var zenith = g.State[InHand(g, "Zenith")];
+        g.CastSpell(zenith, 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, g.State.Cards.First(c => c.Name == "Bear").Zone);
+        Assert.Equal(Zone.Library, zenith.Zone);
+    }
+
+    [Fact]
+    public void OverloadHitsEach()
+    {
+        var g = Setup(new[] { "Blast" }, battlefield: new[] { "Sig", "Vault" });
+        var blast = g.State[InHand(g, "Blast")];
+        g.CastSpell(blast, blast.CurrentFace.SpellAbilities.FindIndex(a => a.ModeDescription == "Overload"));
+        ResolveAll(g);
+        Assert.DoesNotContain(g.State.BattlefieldCards, c => c.Types.Is(CardType.Artifact));
+    }
+
+    [Fact]
+    public void InvestigateMakesAClue()
+    {
+        var g = Setup(new[] { "Sleuth" });
+        g.CastSpell(g.State[InHand(g, "Sleuth")], 0);
+        ResolveAll(g);
+        Assert.Single(g.State.BattlefieldCards, c => c.Name == "Clue Token");
+    }
+
+    [Fact]
+    public void EntwineChoosesBothModes()
+    {
+        var g = Setup(new[] { "Twine" }, battlefield: new[] { "Bog" });
+        var twine = g.State[InHand(g, "Twine")];
+        Assert.Equal(3, twine.CurrentFace.SpellAbilities.Count);
+        g.CastSpell(twine, twine.CurrentFace.SpellAbilities.FindIndex(a => a.ExtraCost is not null));
+        ResolveAll(g);
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+        Assert.True(OnBattlefield(g, "Bog").Tapped);
+    }
+
+    [Fact]
+    public void SearchLibraryAndGraveyard()
+    {
+        var g = Setup(new[] { "Finale", "Bear" }, library: new[] { "Filler" });
+        g.MoveTo(g.State[InHand(g, "Bear")], Zone.Graveyard);
+        g.CastSpell(g.State[InHand(g, "Finale")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, g.State.Cards.First(c => c.Name == "Bear").Zone);
+    }
+
+    [Fact]
+    public void OtherThanTheTriggeredCard()
+    {
+        var g = Setup(new[] { "Wood" }, battlefield: new[] { "Pinnacle", "Bog", "Bog" });
+        g.PlayLand(g.State[InHand(g, "Wood")]);
+        ResolveAll(g);
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+        g = Setup(new[] { "Wood" }, battlefield: new[] { "Pinnacle", "Bog" });
+        g.PlayLand(g.State[InHand(g, "Wood")]);
+        ResolveAll(g);
+        Assert.Equal(40, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void CountDifferentNames()
+    {
+        var g = Setup(new[] { "Names" }, battlefield: new[] { "Bog", "Bog", "Wood" });
+        g.CastSpell(g.State[InHand(g, "Names")], 0);
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
     }
 }

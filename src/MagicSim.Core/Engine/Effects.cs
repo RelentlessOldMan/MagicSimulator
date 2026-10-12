@@ -64,7 +64,7 @@ public static class Effects
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
         new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
-        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(),
+        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -200,7 +200,7 @@ sealed class ChangeZoneEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "Origin", "Destination", "ChangeType", "ChangeNum", "Hidden", "Mandatory", "Tapped", "LibraryPosition", "Defined",
         "ChangeTypeDesc", "Shuffle", "Reveal", "SelectPrompt", "Reorder", "Optional", "NoReveal", "ShuffleNonMandatory",
-        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "WithCountersType", "WithCountersAmount", "RememberTargets", "Duration", "TargetsWithDefinedController", "RememberLKI",
+        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "OriginAlternative", "AIXMax", "WithCountersType", "WithCountersAmount", "RememberTargets", "Duration", "TargetsWithDefinedController", "RememberLKI",
         // Face down only hides it from opponents, which goldfish opponents don't care about.
         "ExileFaceDown");
 
@@ -209,7 +209,7 @@ sealed class ChangeZoneEffect : Effect
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         // "From outside the game" (wishes): a Commander deck has no sideboard, so there's nothing to get.
-        foreach (var key in new[] { "Origin", "Destination" })
+        foreach (var key in new[] { "Origin", "Destination", "OriginAlternative" })
             if (ab[key] is { } z && !z.Split(',').All(s => Zones.Contains(s.Trim()) || key == "Origin" && s.Trim() == "Sideboard"
                     || key == "Origin" && s.Trim() is "Stack" or "All" && (ab["Defined"] is not null || ab.TargetFilter is not null)))
                 ctx.Need($"ChangeZone.{key}:{z}");
@@ -229,9 +229,10 @@ sealed class ChangeZoneEffect : Effect
         var ab = x.Ability;
         if (c.Zone == Zone.Stack)
         {
-            // A spell leaves the stack (it isn't countered, but it won't resolve either).
+            // A spell leaves the stack (it isn't countered, but it won't resolve either); or the resolving
+            // spell moves itself ("shuffle Green Sun's Zenith into its owner's library").
             if (x.S.Stack.FirstOrDefault(s => s.IsSpell && s.SourceId == c.Id) is { } item) x.S.Stack.Remove(item);
-            else return;
+            else if (!(x.Item.IsSpell && x.Item.SourceId == c.Id)) return;
         }
         // The card a replacement is replacing its own entering for (Mox Diamond): it enters, or goes elsewhere instead.
         if (c.Zone == Zone.Battlefield && !x.S.Battlefield.Contains(c.Id))
@@ -261,6 +262,8 @@ sealed class ChangeZoneEffect : Effect
         var origins = ab["Origin"] == "All"
             ? new List<Zone> { Zone.Battlefield, Zone.Graveyard, Zone.Exile, Zone.Hand, Zone.Library, Zone.Stack, Zone.Command }
             : (ab["Origin"] ?? "Battlefield").Split(',').Select(s => s.Trim()).Where(s => s != "Sideboard").Select(Enum.Parse<Zone>).ToList();
+        // "Search your library and/or graveyard": both are searched.
+        if (ab["OriginAlternative"] is { } alt) origins.AddRange(alt.Split(',').Select(s => Enum.Parse<Zone>(s.Trim())).Where(z => !origins.Contains(z)));
         var position = ab["LibraryPosition"] is { } lp ? int.Parse(lp) : 0;
         var tapped = ab["Tapped"] == "True";
 
@@ -280,6 +283,7 @@ sealed class ChangeZoneEffect : Effect
                 // "… until this leaves the battlefield" (Banisher Priest, Oblivion Ring-style).
                 if (ab["Duration"] == "UntilHostLeavesPlay" && from == Zone.Battlefield && c.Zone == dest)
                     x.S.UntilHostLeaves.Add((c.Id, x.Host.Id));
+                if (dest == Zone.Library && ab["Shuffle"] == "True" && c.Zone == Zone.Library) x.Game.Shuffle(c.Owner);
             }
             return;
         }
@@ -538,8 +542,14 @@ sealed class NameCardEffect : Effect
 sealed class DealDamageEffect : Effect
 {
     public override string Api => "DealDamage";
-    public override IReadOnlySet<string> Params { get; } = P("NumDmg", "Defined", "DividedAsYouChoose");
-    public override void Validate(AbilityDef ab, CompileContext ctx) { ValidateAmount(ab, "NumDmg", ctx); Defined.ValidatePlayers(ab["Defined"], ctx); }
+    public override IReadOnlySet<string> Params { get; } = P("NumDmg", "Defined", "DividedAsYouChoose", "DamageSource");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        ValidateAmount(ab, "NumDmg", ctx);
+        Defined.ValidatePlayers(ab["Defined"], ctx);
+        Defined.ValidateCards(ab["DamageSource"], ctx);
+    }
 
     public override void Resolve(EffectContext x)
     {
@@ -550,13 +560,15 @@ sealed class DealDamageEffect : Effect
         // "N damage divided as you choose": one to each target, the rest to the first (players first).
         var divided = x.Ability["DividedAsYouChoose"] is not null && targets.Count > 0;
         var order = divided ? targets.OrderBy(t => t.Player is null).ToList() : targets;
+        // "It deals damage …" (DamageSource$): another card is the source (its lifelink, infect and triggers count).
+        var source = x.Ability["DamageSource"] is { } ds && Defined.Cards(ds, x).FirstOrDefault(-1) is >= 0 and var sid ? x.S[sid] : x.Host;
         for (var i = 0; i < order.Count; i++)
         {
             var t = order[i];
             var dmg = !divided ? n : i == 0 ? n - (order.Count - 1) : 1;
             if (dmg <= 0) continue;
-            if (t.Player is { } p) x.Game.DamagePlayer(p, dmg, x.Host);
-            else if (t.CardId is { } id && x.S[id].Zone == Zone.Battlefield) x.Game.DamageCard(x.S[id], dmg, x.Host);
+            if (t.Player is { } p) x.Game.DamagePlayer(p, dmg, source);
+            else if (t.CardId is { } id && x.S[id].Zone == Zone.Battlefield) x.Game.DamageCard(x.S[id], dmg, source);
         }
     }
 }

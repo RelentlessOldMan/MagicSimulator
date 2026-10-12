@@ -943,6 +943,8 @@ public sealed partial class Game
             if (item.IsSpell && source.Zone == Zone.Stack) MoveTo(source, afterwards);
             return;
         }
+        // Ascend on an instant or sorcery (rule 702.131a): checked as it resolves.
+        if (item.IsSpell && source.HasKeyword("Ascend")) GrantBlessingIfTen(item.Controller);
         RunChain(item);
         // Spliced cards' effects, in the order they were spliced (rule 702.47b).
         foreach (var id in item.Spliced ?? new List<int>())
@@ -962,6 +964,21 @@ public sealed partial class Game
             MoveTo(source, adventure ? Zone.Exile : afterwards);
             if (adventure && source.Zone == Zone.Exile) source.OnAdventure = true;
         }
+    }
+
+    /// <summary>Ascend on a permanent (rule 702.131b): with ten permanents, its controller gets the city's blessing for good.</summary>
+    private void CheckAscend()
+    {
+        foreach (var p in State.Players)
+            if (!p.CityBlessing && State.BattlefieldCards.Any(c => c.Controller == p.Index && c.HasKeyword("Ascend")))
+                GrantBlessingIfTen(p.Index);
+    }
+
+    private void GrantBlessingIfTen(int player)
+    {
+        if (State.BattlefieldCards.Count(c => c.Controller == player) < 10) return;
+        State.Players[player].CityBlessing = true;
+        Note($"player {player} gets the city's blessing");
     }
 
     /// <summary>
@@ -1110,6 +1127,7 @@ public sealed partial class Game
         }
         CheckEffectLinks();
         CheckStateTriggers();
+        CheckAscend();
         FireZoneBatch();
         FireDamageBatch();
         // A Saga with all its chapters done and none still waiting to resolve is sacrificed (rule 714.4).

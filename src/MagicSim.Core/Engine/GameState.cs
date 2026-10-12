@@ -208,6 +208,8 @@ public sealed class Player
     public Dictionary<int, int> CommanderDamageTaken { get; set; } = new();
     public int LifePaidTotal { get; set; }
     public bool DrewFromEmpty { get; set; }
+    /// <summary>The city's blessing (ascend, rule 702.131): kept for the rest of the game.</summary>
+    public bool CityBlessing { get; set; }
     /// <summary>How many cards on top of the library this player knows (put there or looked at). Search keeps them in place.</summary>
     public int KnownTop { get; set; }
 
@@ -228,7 +230,7 @@ public sealed class Player
         Index = Index, Life = Life, Poison = Poison, Pool = Pool, LandsPlayedThisTurn = LandsPlayedThisTurn,
         LandDropsPerTurn = LandDropsPerTurn, StaticLandDrops = StaticLandDrops, StaticMaxHandSize = StaticMaxHandSize, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary,
         IsGoldfish = IsGoldfish, CommanderDamageTaken = new Dictionary<int, int>(CommanderDamageTaken),
-        LifePaidTotal = LifePaidTotal, DrewFromEmpty = DrewFromEmpty, KnownTop = KnownTop,
+        LifePaidTotal = LifePaidTotal, DrewFromEmpty = DrewFromEmpty, KnownTop = KnownTop, CityBlessing = CityBlessing,
         Library = new List<int>(Library), Hand = new List<int>(Hand), Graveyard = new List<int>(Graveyard),
         Exile = new List<int>(Exile), Command = new List<int>(Command),
     };

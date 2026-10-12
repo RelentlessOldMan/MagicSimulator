@@ -192,6 +192,29 @@ sealed class SacrificeAllEffect : Effect
     }
 }
 
+/// <summary>Investigate: create a Clue token ("{2}, sacrifice this: draw a card").</summary>
+sealed class InvestigateEffect : Effect
+{
+    public override string Api => "Investigate";
+    public override IReadOnlySet<string> Params { get; } = P("Num", "Defined");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        ValidateAmount(ab, "Num", ctx);
+        Defined.ValidatePlayers(ab["Defined"], ctx);
+        if (ctx.Tokens?.Invoke("c_a_clue_draw") is { } clue) ab.Tokens = new() { clue };
+        else ctx.Need("TokenScript:c_a_clue_draw");
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var n = Amount(x, x.Ability["Num"], 1);
+        foreach (var p in Defined.Players(x.Ability["Defined"], x))
+            foreach (var (def, count) in Replacements.Tokens(x.Game, x.Ability.Tokens![0], p, n).ToList())
+                for (var i = 0; i < count; i++) x.Game.CreateToken(def, p, false, null, null);
+    }
+}
+
 /// <summary>Exploit: "you may sacrifice a creature"; then "when this exploits a creature" triggers (rule 702.110).</summary>
 sealed class ExploitEffect : Effect
 {
