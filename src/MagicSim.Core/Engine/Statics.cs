@@ -15,7 +15,7 @@ public static class Presence
 
     private static readonly HashSet<string> KnownConditions = new(StringComparer.Ordinal)
     {
-        "PlayerTurn", "NotPlayerTurn", "Threshold", "Hellbent", "Metalcraft", "Delirium", "Kicked", "Bargain",
+        "PlayerTurn", "NotPlayerTurn", "Threshold", "Hellbent", "Metalcraft", "Delirium", "Kicked", "Bargain", "Revolt",
     };
 
     public static bool IsKnownCondition(string cond) => KnownConditions.Contains(cond);
@@ -36,6 +36,8 @@ public static class Presence
             "Delirium" => CardTypesIn(g, me.Graveyard) >= 4,
             "Kicked" => x.Host.PaidOptional?.Contains("Kicker") ?? false,
             "Bargain" => x.Host.PaidOptional?.Contains("Bargain") ?? false,
+            // "If a permanent you controlled left the battlefield this turn."
+            "Revolt" => g.State.ThisTurn.PermanentLeft.Contains(you),
             _ => false,
         };
     }
@@ -127,7 +129,7 @@ public static class Statics
 
     private static readonly HashSet<string> CantAttackParams = new(StringComparer.Ordinal) { "ValidCard", "EffectZone" };
     private static readonly HashSet<string> CastWithFlashParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Caster" };
-    private static readonly HashSet<string> PanharmoniconParams = new(StringComparer.Ordinal) { "ValidMode", "ValidCard", "ValidCause", "Destination" };
+    private static readonly HashSet<string> PanharmoniconParams = new(StringComparer.Ordinal) { "ValidMode", "ValidCard", "ValidCause", "Origin", "Destination" };
 
     private static readonly HashSet<string> AlternativeCostParams = new(StringComparer.Ordinal)
     {
@@ -166,7 +168,8 @@ public static class Statics
                 break;
             case "Panharmonicon":
                 own = PanharmoniconParams;
-                if (s["Destination"] is { } dest && dest != "Battlefield") ctx.Need("Panharmonicon.Destination:" + dest);
+                foreach (var zk in new[] { "Origin", "Destination" })
+                    if (s[zk] is { } zone && !zone.Split(',').All(z => Enum.TryParse<Zone>(z.Trim(), out _))) ctx.Need($"Panharmonicon.{zk}:" + zone);
                 if (s["ValidCard"] is { } pvc) Filter.Parse(pvc, ctx);
                 if (s["ValidCause"] is { } pc) Filter.Parse(pc, ctx);
                 break;

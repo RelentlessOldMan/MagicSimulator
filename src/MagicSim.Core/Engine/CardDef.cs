@@ -77,6 +77,10 @@ public sealed class AbilityDef
     /// <summary>For one combination of a modal ability whose number of modes is an expression: the expression, and how many modes this is.</summary>
     public string? CharmNumExpr { get; set; }
     public int CharmCount { get; set; }
+    /// <summary>Cast face down as a 2/2 creature (morph, rule 702.37).</summary>
+    public bool CastFaceDown { get; set; }
+    /// <summary>A special action (turning a face-down permanent face up): no stack, any time you have priority (rule 116.2b).</summary>
+    public bool IsSpecialAction { get; set; }
 
     public AbilityDef CloneHead() => (AbilityDef)MemberwiseClone();
     public string Description => ModeDescription ?? P["SpellDescription"] ?? P["StackDescription"] ?? Api;
@@ -160,6 +164,10 @@ public sealed class FaceDef
     public string? EscapeCost { get; set; }
     /// <summary>"Splice onto [subtype] [cost]" (rule 702.47).</summary>
     public (string Onto, Cost Cost)? Splice { get; set; }
+    /// <summary>Morph / megamorph: the cost to turn it face up, and whether it gets a +1/+1 counter then.</summary>
+    public (string Cost, bool Mega)? Morph { get; set; }
+    /// <summary>What it is while face down: a nameless colorless 2/2 creature that can be turned face up.</summary>
+    public FaceDef? FaceDownFace { get; set; }
 
     /// <summary>This face as a copy effect changes it ("except it's an artifact", "except it has haste").</summary>
     public FaceDef CopyWith(TypeLine types, int? power, int? toughness, ColorMask colors, IReadOnlyList<string> extraKeywords)
@@ -238,7 +246,7 @@ public static partial class CardCompiler
     /// <summary>Parameters any ability may have, handled by the engine rather than the effect.</summary>
     private static readonly HashSet<string> GenericParams = new(StringComparer.Ordinal)
     {
-        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "ETB", "ActivationZone", "OptionalDecider", "Activation",
+        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "ETB", "ActivationZone", "OptionalDecider", "Activation", "ActivationGameTypes",
     };
 
     public static CardDef Compile(ForgeCard source, Func<string, CardDef?>? tokens = null)
@@ -321,6 +329,7 @@ public static partial class CardCompiler
                 face.SpellAbilities.Add(alt);
             }
         foreach (var (names, extra) in face.OptionalCosts) AddOptionalCost(face, names, extra, ctx);
+        if (face.Morph is { } morph) AddMorph(face, morph.Cost, morph.Mega, ctx);
         foreach (var r in f.Replacements) CompileReplacement(r, face, ctx);
         // "*" power/toughness needs a characteristic-defining ability to say what it is.
         if (starPT && !face.Statics.Any(st => st.Mode == "Continuous" && st["CharacteristicDefining"] == "True")) ctx.Need("PT:*");
@@ -372,9 +381,11 @@ public static partial class CardCompiler
                 AddGenerated(face, ctx, $"AB$ Attach | Cost$ {Part(1)} | ValidTgts$ {valid} | SorcerySpeed$ True | SpellDescription$ Equip {Part(1)}");
                 return true;
             case "Enchant":
+                // "Enchant creature card in a graveyard" (Animate Dead) targets there.
                 face.AuraSpell = new AbilityDef
                 {
-                    P = new ForgeParams($"SP$ PermanentSpell | ValidTgts$ {Part(1)}"), Api = "PermanentSpell", Kind = AbilityKind.Spell,
+                    P = new ForgeParams($"SP$ PermanentSpell | ValidTgts$ {Part(1)}" + (Part(1).Contains("inZoneGraveyard", StringComparison.Ordinal) ? " | TgtZone$ Graveyard" : "")),
+                    Api = "PermanentSpell", Kind = AbilityKind.Spell,
                     TargetFilter = Filter.Parse(Part(1), ctx), TargetMin = 1, TargetMax = 1,
                 };
                 return true;
@@ -390,8 +401,10 @@ public static partial class CardCompiler
                 if (Part(3).Length > 0 && Part(3) != "no Condition")
                 {
                     condition = new ForgeParams(Part(3));
-                    if (condition.Values.Keys.Any(k => !Presence.Params.Contains(k))) { ctx.Need("Keyword:etbCounter+" + Part(3).Split('$')[0]); return true; }
+                    if (condition.Values.Keys.Any(k => !Presence.Params.Contains(k) && k != "ValidCard")) { ctx.Need("Keyword:etbCounter+" + Part(3).Split('$')[0]); return true; }
                     Presence.Validate(condition, ctx);
+                    // "Escapes with …": ValidCard$ Card.Self+escaped
+                    if (condition["ValidCard"] is { } ecv) Filter.Parse(ecv, ctx);
                 }
                 Amount.Parse(Part(2), ctx);
                 face.EtbCounters.Add((Part(1), Part(2), condition));
@@ -521,6 +534,21 @@ public static partial class CardCompiler
                 // "{cost}, discard this: search for a card with the same mana value. Transmute only as a sorcery."
                 AddGenerated(face, ctx, $"AB$ ChangeZone | Cost$ {Part(1)} Discard<1/CARDNAME> | ActivationZone$ Hand | Origin$ Library | Destination$ Hand | ChangeType$ Card.cmcEQ{face.ManaCost.ManaValue} | ChangeNum$ 1 | SorcerySpeed$ True | SpellDescription$ Transmute");
                 return true;
+            case "Morph":
+            case "Megamorph":
+                // Cast face down for {3}; turn face up any time for the morph cost (rule 702.37).
+                if (Part(1).Length == 0) { ctx.Need("Keyword:" + name + "+NoCost"); return true; }
+                ParseCost(Part(1), ctx);
+                face.Morph = (Part(1), name == "Megamorph");
+                return true;
+            case "Fabricate":
+                // "When this enters, put N +1/+1 counters on it or create N 1/1 colorless Servo artifact creature tokens."
+                if (!int.TryParse(Part(1), out var fab)) { ctx.Need("Keyword:Fabricate+" + Part(1)); return true; }
+                face.SVars["__Fabricate"] = "DB$ GenericChoice | Choices$ __FabricateCounters,__FabricateServos";
+                face.SVars["__FabricateCounters"] = $"DB$ PutCounter | Defined$ Self | CounterType$ P1P1 | CounterNum$ {fab} | SpellDescription$ {fab} +1/+1 counters";
+                face.SVars["__FabricateServos"] = $"DB$ Token | TokenAmount$ {fab} | TokenScript$ c_1_1_a_servo | TokenOwner$ You | SpellDescription$ {fab} Servos";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ __Fabricate"), ctx));
+                return true;
             case "Changeling":
                 face.Types = new TypeLine { Types = face.Types.Types, Supers = face.Types.Supers, Subtypes = face.Types.Subtypes, AllCreatureTypes = true };
                 return true;
@@ -584,6 +612,31 @@ public static partial class CardCompiler
             twin.ModeDescription = (ab.ModeDescription ?? ab.Description) + $" ({string.Join(", ", names).ToLowerInvariant()})";
             face.SpellAbilities.Add(twin);
         }
+    }
+
+    /// <summary>Morph: a way to cast it face down for {3}, and its face-down self, which can be turned face up for the morph cost.</summary>
+    private static void AddMorph(FaceDef face, string cost, bool mega, CompileContext ctx)
+    {
+        if (face.AuraSpell is not null) { ctx.Need("Morph:Aura"); return; }
+        if (face.SpellAbilities.Count == 0)
+            face.SpellAbilities.Add(new AbilityDef { P = new ForgeParams("SP$ PermanentSpell"), Api = "PermanentSpell", Kind = AbilityKind.Spell });
+        face.SpellAbilities.Add(new AbilityDef
+        {
+            P = new ForgeParams("SP$ PermanentSpell"), Api = "PermanentSpell", Kind = AbilityKind.Spell,
+            AltCost = new Cost { Mana = ManaCost.Parse("3")! }, CastFaceDown = true, ModeDescription = "face down (morph)",
+        });
+        var down = new FaceDef
+        {
+            Name = "Face-down creature", ManaCost = ManaCost.None, Types = TypeLine.Parse("Creature"), Power = 2, Toughness = 2, Colors = 0,
+            SVars = face.SVars,
+        };
+        if (CompileAbility(new ForgeParams($"AB$ TurnFaceUp | Cost$ {cost}" + (mega ? " | Megamorph$ True" : "") + " | SpellDescription$ Turn face up"),
+                ctx, AbilityKind.Activated, 0) is { } up)
+        {
+            up.IsSpecialAction = true;
+            down.Activated.Add(up);
+        }
+        face.FaceDownFace = down;
     }
 
     /// <summary>Compiles a chain an effect refers to by name (e.g. FlipCoin's WinSubAbility$). Null if the parameter is absent.</summary>
@@ -730,7 +783,7 @@ public static partial class CardCompiler
         {
             ab.UnlessCost = ParseCost(unless, ctx);
             if (p["UnlessPayer"] is { } payer && payer is not ("You" or "TargetedController" or "Targeted" or "Opponent" or "Player"
-                    or "TriggeredActivator" or "TriggeredCardController"))
+                    or "TriggeredActivator" or "TriggeredCardController" or "Remembered"))
                 ctx.Need("UnlessPayer:" + payer);
         }
 

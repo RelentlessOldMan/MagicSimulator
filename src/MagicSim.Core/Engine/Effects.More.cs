@@ -160,6 +160,50 @@ sealed class DestroyAllEffect : Effect
     }
 }
 
+/// <summary>"Sacrifice all …" / "that creature's controller sacrifices it": each card is sacrificed by its controller.</summary>
+sealed class SacrificeAllEffect : Effect
+{
+    public override string Api => "SacrificeAll";
+    public override IReadOnlySet<string> Params { get; } = P("ValidCards", "Defined", "Controller", "RememberSacrificed");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["ValidCards"] is { } vc) Filter.Parse(vc, ctx);
+        else Defined.ValidateCards(ab["Defined"], ctx);
+        if (ab["Controller"] is { } ctl && ctl != "You") ctx.Need("SacrificeAll.Controller:" + ctl);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        IEnumerable<Card> cards = x.Ability["ValidCards"] is { } vc
+            ? x.S.BattlefieldCards.Where(c => FilterFor(x.SVarFace, vc).MatchesCard(c, x))
+            : Defined.Cards(x.Ability["Defined"], x).Select(id => x.S[id]);
+        foreach (var c in cards.Where(c => c.Zone == Zone.Battlefield && (x.Ability["Controller"] != "You" || c.Controller == x.Controller)).ToList())
+        {
+            x.Game.Sacrifice(c);
+            if (x.Ability["RememberSacrificed"] == "True") (x.Host.Remembered ??= new()).Add(c.Id);
+        }
+    }
+}
+
+/// <summary>Turns a face-down permanent face up (morph, megamorph: rule 702.37e).</summary>
+sealed class TurnFaceUpEffect : Effect
+{
+    public override string Api => "TurnFaceUp";
+    public override IReadOnlySet<string> Params { get; } = P("Megamorph");
+
+    public override void Resolve(EffectContext x)
+    {
+        var c = x.Host;
+        if (!c.FaceDown) return;
+        c.FaceDown = false;
+        x.Game.Note($"  turn {c.Name} face up");
+        if (x.Ability["Megamorph"] == "True") x.Game.PutCounters(c, "P1P1", 1);
+        x.Game.StaticsApplied = true;
+        x.Game.Fire(new TriggerEvent(TriggerMode.TurnFaceUp, CardId: c.Id, Player: c.Controller));
+    }
+}
+
 sealed class DamageAllEffect : Effect
 {
     public override string Api => "DamageAll";

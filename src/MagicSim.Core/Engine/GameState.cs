@@ -73,6 +73,10 @@ public sealed class Card
     public Zone? EnterInstead { get; set; }
     /// <summary>The card whose effect last exiled this one ("exiled with [source]").</summary>
     public int ExiledWith { get; set; } = -1;
+    /// <summary>Face down (morph, rule 708): a nameless 2/2 creature with no abilities but turning face up.</summary>
+    public bool FaceDown { get; set; }
+    /// <summary>It was cast with escape ("escapes with …", rule 702.138).</summary>
+    public bool Escaped { get; set; }
 
     // Results of continuous effects (rule 613), recomputed by Game.ApplyStatics.
     public int? SetPower { get; set; }
@@ -86,7 +90,7 @@ public sealed class Card
     /// <summary>The copy effect ends at cleanup ("until end of turn").</summary>
     public bool CopyUntilCleanup { get; set; }
 
-    public FaceDef CurrentFace => CopyDef?.Front ?? Def.Faces[Face];
+    public FaceDef CurrentFace => FaceDown && Def.Faces[0].FaceDownFace is { } down ? down : CopyDef?.Front ?? Def.Faces[Face];
     /// <summary>The card (or what it copies) is unsupported and plays as a blank.</summary>
     public bool IsBlank => (CopyDef ?? Def).IsBlank;
     public string Name => CurrentFace.Name;
@@ -162,7 +166,7 @@ public sealed class Card
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
         NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
-        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, PaidOptional = PaidOptional, ExiledWith = ExiledWith, LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
+        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, PaidOptional = PaidOptional, ExiledWith = ExiledWith, FaceDown = FaceDown, Escaped = Escaped, LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
         Animations = Animations is null ? null : new List<Animation>(Animations),
@@ -285,11 +289,13 @@ public sealed class TurnInfo
     public Dictionary<int, int> LifeGained { get; set; } = new();
     /// <summary>Cards each player drew this turn.</summary>
     public Dictionary<int, int> CardsDrawn { get; set; } = new();
+    /// <summary>Players who controlled a permanent that left the battlefield this turn (revolt).</summary>
+    public HashSet<int> PermanentLeft { get; set; } = new();
     public TurnInfo Clone() => new()
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
         ExtraPhases = new(ExtraPhases), Combats = Combats,
-        CardsDrawn = new(CardsDrawn),
+        CardsDrawn = new(CardsDrawn), PermanentLeft = new(PermanentLeft),
     };
 }
 

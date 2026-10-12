@@ -497,15 +497,20 @@ public sealed partial class Game
             var c = State[id];
             if (c.IsBlank || c.CurrentFace.Flashback is null && Statics.EscapeCost(this, c) is null || !seenNames.Add("graveyard:" + c.Name)) continue;
             if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed)) continue;
-            for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
-                if (CanCast(c, i)) result.Add(new GameAction.Cast(id, i));
+            if (c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0)
+            {
+                if (CanCast(c, -1)) result.Add(new GameAction.Cast(id, -1));
+            }
+            else
+                for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
+                    if (CanCast(c, i)) result.Add(new GameAction.Cast(id, i));
         }
 
         var seenPermanents = new HashSet<(string, bool, bool)>();
         foreach (var c in State.BattlefieldCards)
         {
             if (c.Controller != player || c.IsBlank) continue;
-            if (c.Counters is null && c.Animations is null && c.StaticActivated is null && !seenPermanents.Add((c.Name, c.Tapped, IsSick(c)))) continue;
+            if (c.Counters is null && c.Animations is null && c.StaticActivated is null && !seenPermanents.Add((c.FaceDown ? "face-down " + c.Def.Name : c.Name, c.Tapped, IsSick(c)))) continue;
             for (var i = 0; i < c.Activated.Count; i++)
             {
                 var ab = c.Activated[i];
@@ -553,6 +558,9 @@ public sealed partial class Game
     {
         if (ab["SorcerySpeed"] == "True" && !sorcerySpeed) return false;
         if (ab["Activation"] is { } activation && !Presence.ConditionHolds(activation, ContextFor(c))) return false;
+        // "Commander only" abilities (War Room): this is a Commander game if the player has a commander.
+        if (ab["ActivationGameTypes"] is { } gameTypes
+            && !(gameTypes.Split(',').Contains("Commander") && State.Cards.Any(k => k.IsCommander && k.Owner == c.Controller))) return false;
         if (ab.CharmNumExpr is { } charmNum && ab.CharmCount > Effect.EvalAmount(ContextFor(c), charmNum)) return false;
         // Ninjutsu: only while you have an attacking creature (the goldfish never blocks, so attackers are unblocked).
         if (ab.Api == "Ninjutsu" && State.Step is not (Step.DeclareAttackers or Step.CombatDamage)) return false;
@@ -677,7 +685,9 @@ public sealed partial class Game
         State.Stack.Add(item);
         State.ThisTurn.SpellsCast++;
         State.Record.Cast.Add(c.Name);
-        Note($"cast {c.Name}" + (x > 0 ? $" (X={x})" : "") + TargetText(item) + $" — pool {State.Players[player].Pool}");
+        Note($"cast {c.Name}" + (ability.CastFaceDown ? " face down" : "") + (x > 0 ? $" (X={x})" : "") + TargetText(item) + $" — pool {State.Players[player].Pool}");
+        c.FaceDown = ability.CastFaceDown;
+        c.Escaped = escaped;
 
         if (c.HasKeyword("Storm"))
         {
@@ -785,7 +795,8 @@ public sealed partial class Game
             Description = $"{c.Name}: {ab.Description}", Sacrificed = LastSacrificed.Count > 0 ? LastSacrificed.ToList() : null,
         };
         Note($"activate {c.Name}: {ab.Description}" + TargetText(item));
-        if (ab.IsManaAbility)
+        if (ab.IsSpecialAction) RunChain(item);   // turning a permanent face up doesn't use the stack (rule 116.2b)
+        else if (ab.IsManaAbility)
         {
             RunChain(item);   // mana abilities don't use the stack (rule 605.3)
             if (ab.Cost.Tap) Fire(new TriggerEvent(TriggerMode.TapsForMana, CardId: c.Id, Player: player));
@@ -829,18 +840,25 @@ public sealed partial class Game
                 if (!p.Lost && f.MatchesPlayer(p.Index, x)) list.Add(TargetRef.OfPlayer(p.Index));
         if (f.CanTargetCards)
         {
-            var zone = ab["TgtZone"] switch
-            {
-                "Graveyard" => Zone.Graveyard,
-                "Stack" => Zone.Stack,
-                "Exile" => Zone.Exile,
-                "Hand" => Zone.Hand,
-                _ => ab["TargetType"] == "Spell" ? Zone.Stack : Zone.Battlefield,
-            };
-            foreach (var c in CardsIn(zone))
-                if (f.MatchesCard(c, x)) list.Add(TargetRef.OfCard(c.Id));
+            foreach (var zone in TargetZones(ab))
+                foreach (var c in CardsIn(zone))
+                    if (f.MatchesCard(c, x)) list.Add(TargetRef.OfCard(c.Id));
         }
         return list;
+    }
+
+    /// <summary>
+    /// Where an ability's target cards are: TgtZone$, or for moving a card from somewhere other than the
+    /// battlefield ("return target creature card from a graveyard"), where it moves from.
+    /// </summary>
+    private static IEnumerable<Zone> TargetZones(AbilityDef ab)
+    {
+        var spec = ab["TgtZone"] ?? (ab.Api == "ChangeZone" ? ab["Origin"] : null);
+        if (spec is null) return new[] { ab["TargetType"] == "Spell" ? Zone.Stack : Zone.Battlefield };
+        var zones = new List<Zone>();
+        foreach (var w in spec.Split(','))
+            if (Enum.TryParse<Zone>(w.Trim(), out var z) && z is Zone.Graveyard or Zone.Exile or Zone.Hand or Zone.Stack or Zone.Battlefield) zones.Add(z);
+        return zones.Count > 0 ? zones : new[] { Zone.Battlefield };
     }
 
     /// <summary>How many targets an ability takes: its TargetMin$/TargetMax$, worked out now if they're expressions.</summary>
@@ -884,7 +902,8 @@ public sealed partial class Game
             if (item.Ability.TargetFilter is not null)   // an Aura: attach to its target, or fizzle
             {
                 var target = item.ChainTargets.FirstOrDefault()?.FirstOrDefault();
-                if (target?.CardId is not { } to || State[to].Zone != Zone.Battlefield)
+                var targetZone = item.Ability["TgtZone"] == "Graveyard" ? Zone.Graveyard : Zone.Battlefield;
+                if (target?.CardId is not { } to || State[to].Zone != targetZone)
                 {
                     Note($"  {item.Description} fizzles (no legal targets)");
                     MoveTo(source, afterwards);
@@ -928,8 +947,21 @@ public sealed partial class Game
     /// <summary>Runs a chain an effect refers to by name (coin flip outcomes, repeated steps) for the same stack item.</summary>
     public void RunSideChain(EffectContext x, AbilityDef head) => RunLinks(x.Item, head);
 
+    /// <summary>A triggered ability whose effect has a cost: "you may pay {B}. If you do, …" (ImmediateTrigger pays its own).</summary>
+    private static bool HasTriggerCost(AbilityDef exec) =>
+        exec.Kind == AbilityKind.TriggerEffect && exec["Cost"] is not null && exec.Api != "ImmediateTrigger";
+
     private void RunLinks(StackItem item, AbilityDef head)
     {
+        // "Whenever …, you may pay {B}. If you do, …": paid as it resolves, or nothing happens.
+        if (HasTriggerCost(head))
+        {
+            var host = State[item.SourceId];
+            if (!CanPayCost(head.Cost, host, item.Controller, item.X, excludeSourceFromMana: false)
+                || !Decider.ChooseYesNo(this, item.Controller, host, $"pay {string.Join(" ", head.Cost.Parts.Select(q => q.Raw).Prepend(head.Cost.Mana.ToString()))} for {host.Name}?")
+                || !PayCost(head.Cost, host, item.Controller, item.X, excludeSourceFromMana: false))
+                return;
+        }
         for (var ab = head; ab is not null && !State.GameOver; ab = ab.Sub)
         {
             var ctx = new EffectContext { Game = this, Item = item, Ability = ab };
@@ -972,6 +1004,7 @@ public sealed partial class Game
         null or "TargetedController" or "Targeted" => x.Targets.Select(t => t.Player ?? State[t.CardId!.Value].Controller).Cast<int?>().FirstOrDefault(),
         "TriggeredActivator" => x.Item.TriggeredPlayer,
         "TriggeredCardController" => x.Item.TriggeredCardId is { } tc ? State[tc].Controller : null,
+        "Remembered" => x.Item.IteratedPlayer,
         _ => null,   // "Opponent"/"Player": only goldfish opponents would act, and they never do
     };
 
@@ -1016,7 +1049,10 @@ public sealed partial class Game
             // Auras attached to nothing go to the graveyard; Equipment just falls off (rules 704.5m-n).
             if (c.Zone != Zone.Battlefield) continue;
             var host = c.AttachedTo >= 0 ? State[c.AttachedTo] : null;
-            var attachedOk = host is not null && host.Zone == Zone.Battlefield;
+            // "Enchant creature card in a graveyard" (Animate Dead) holds until it changes what it enchants.
+            var attachedOk = host is not null && (host.Zone == Zone.Battlefield
+                || host.Zone == Zone.Graveyard && c.CurrentFace.AuraSpell?["TgtZone"] == "Graveyard"
+                   && !(c.Animations?.Any(a => a.Ability["RemoveKeywords"] is not null) ?? false));
             if (c.Types.HasSubtype("Aura") && !attachedOk) MoveTo(c, Zone.Graveyard);
             else if (c.AttachedTo >= 0 && (!attachedOk || c.Types.HasSubtype("Equipment") && !host!.Types.Is(CardType.Creature))) c.AttachedTo = -1;
         }

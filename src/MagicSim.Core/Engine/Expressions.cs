@@ -105,7 +105,9 @@ public sealed class Filter
             "YouDontCtrl" => (c, pl, x) => c is not null && c.Controller != x.Controller,
             "Opponent" => (c, pl, x) => pl is not null && pl != x.Controller,
             "You" => (c, pl, x) => pl == x.Controller,
-            "Self" => (c, pl, x) => c is not null && c.Id == x.Item.SourceId,
+            "Self" or "StrictlySelf" => (c, pl, x) => c is not null && c.Id == x.Item.SourceId,
+            "escaped" => (c, pl, x) => c is not null && c.Escaped,
+            "kicked" => (c, pl, x) => c is not null && (c.PaidOptional?.Any(o => o.StartsWith("Kicker", StringComparison.Ordinal)) ?? false),
             "Other" or "StrictlyOther" => (c, pl, x) => c is null || c.Id != x.Item.SourceId,
             "token" => (c, pl, x) => c is not null && c.IsToken,
             "tapped" => (c, pl, x) => c is not null && c.Tapped,
@@ -346,6 +348,10 @@ public sealed class Amount
             var label = which == "Kicked" ? "Kicker" : "Bargain";
             return new(core, x => x.Host.PaidOptional?.Contains(label) ?? false ? paidValue : unpaidValue);
         }
+        // "Count$Revolt.4.2": one number if a permanent you controlled left the battlefield this turn, another if not.
+        if (kind.StartsWith("Revolt.", StringComparison.Ordinal) && kind.Split('.') is [_, var r1, var r0]
+            && int.TryParse(r1, out var revoltValue) && int.TryParse(r0, out var noRevoltValue))
+            return new(core, x => x.S.ThisTurn.PermanentLeft.Contains(x.Controller) ? revoltValue : noRevoltValue);
         if (kind == "TimesKicked") return new(core, x => x.Host.PaidOptional?.Count(o => o.StartsWith("Kicker", StringComparison.Ordinal)) ?? 0);
         if (kind == "Compare" && arg.Split(' ') is [var left, var rest] && rest.Length > 2 && rest[2..].Split('.') is [var rhs, var yes, var no])
         {
@@ -470,7 +476,7 @@ public sealed class Amount
         return null;
     }
 
-    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|TriggeredSpellAbility|Remembered|Imprinted|Sacrificed)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+)(?: (.+))?$", RegexOptions.Compiled);
+    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|TriggeredSpellAbility|Remembered|RememberedLKI|Imprinted|Sacrificed)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+)(?: (.+))?$", RegexOptions.Compiled);
 
     /// <summary>"Targeted$CardPower", "Remembered$CardManaCost", "Imprinted$Valid Card.X": a property of defined cards (summed), or how many there are.</summary>
     private static Amount DefinedCardsAmount(string core, Match m, CompileContext ctx)
@@ -485,7 +491,7 @@ public sealed class Amount
             {
                 "Targeted" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value),
                 "TriggeredCard" or "TriggeredSpellAbility" => x.Item.TriggeredCardId is { } id ? new[] { id } : Array.Empty<int>(),
-                "Remembered" => x.Host.Remembered ?? new List<int>(),
+                "Remembered" or "RememberedLKI" => x.Host.Remembered ?? new List<int>(),
                 "Sacrificed" => x.Item.Sacrificed ?? new List<int>(),
                 _ => x.Host.Imprinted ?? new List<int>(),
             };

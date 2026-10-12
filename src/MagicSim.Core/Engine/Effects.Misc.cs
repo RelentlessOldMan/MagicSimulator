@@ -421,12 +421,13 @@ sealed class MoveCounterEffect : Effect
 sealed class GenericChoiceEffect : Effect
 {
     public override string Api => "GenericChoice";
-    public override IReadOnlySet<string> Params { get; } = P("Choices", "Defined", "ShowChoice", "AILogic", "FallbackAbility");
+    // FallbackAbility$ is what the AI does when it can't choose; a chooser here always can.
+    public override IReadOnlySet<string> Params { get; } = P("Choices", "Defined", "ShowChoice", "AILogic", "FallbackAbility", "TempRemember");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
-        if (ab["Defined"] is { } d && d != "You") { ctx.Need("GenericChoice.Defined:" + d); return; }
-        if (ab["FallbackAbility"] is not null) ctx.Need("GenericChoice.FallbackAbility");
+        if (ab["Defined"] is { } d && d is not ("You" or "Opponent" or "Player")) { ctx.Need("GenericChoice.Defined:" + d); return; }
+        if (ab["TempRemember"] is { } tr && tr != "Chooser") ctx.Need("GenericChoice.TempRemember:" + tr);
         foreach (var name in (ab["Choices"] ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
         {
             if (!ctx.Face.SVars.TryGetValue(name, out var body)) { ctx.Need("SVarMissing:" + name); continue; }
@@ -439,8 +440,18 @@ sealed class GenericChoiceEffect : Effect
     public override void Resolve(EffectContext x)
     {
         var options = x.Ability.SideChains!.ToList();
-        var pick = options.Count == 1 ? 0 : x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, options.Select(o => o.Value.Description).ToList());
-        x.Game.RunSideChain(x, options[pick].Value);
+        // Each defined player chooses in turn ("each opponent … unless that player …"); TempRemember$ Chooser makes them "Remembered".
+        var saved = x.Item.IteratedPlayer;
+        foreach (var p in Defined.Players(x.Ability["Defined"], x))
+        {
+            if (x.S.GameOver) break;
+            if (x.Ability["TempRemember"] == "Chooser") x.Item.IteratedPlayer = p;
+            // Goldfish opponents make no real choices: they take the first.
+            var pick = options.Count == 1 || x.S.Players[p].IsGoldfish ? 0
+                : x.Game.Decider.ChooseOption(x.Game, p, x.Host, options.Select(o => o.Value.Description).ToList());
+            x.Game.RunSideChain(x, options[pick].Value);
+        }
+        x.Item.IteratedPlayer = saved;
     }
 }
 

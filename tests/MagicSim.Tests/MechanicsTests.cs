@@ -299,6 +299,53 @@ public class MechanicsTests
         "SVar:DBPlay:DB$ Play | Defined$ Remembered | ValidSA$ Spell.cmcLE4 | Condition$ Bargain | ImprintPlayed$ True | Controller$ You | WithoutManaCost$ True | Optional$ True | Amount$ All | SubAbility$ DBHand\n" +
         "SVar:DBHand:DB$ ChangeZone | Origin$ Exile | Destination$ Hand | Defined$ Remembered | ConditionDefined$ Imprinted | ConditionPresent$ Card | ConditionCompare$ EQ0 | SubAbility$ DBClean\n" +
         "SVar:DBClean:DB$ Cleanup | ClearRemembered$ True | ClearImprinted$ True\n",
+        "Name:Wood\nManaCost:no cost\nTypes:Basic Land Forest\n",
+        "Name:Ogre\nManaCost:4\nTypes:Creature Ogre\nPT:4/4\n",
+        "Name:Masked\nManaCost:4 G\nTypes:Creature Beast\nPT:4/4\nK:Megamorph:G\n" +
+        "T:Mode$ TurnFaceUp | ValidCard$ Card.Self | Execute$ TrigGain | TriggerDescription$ When this is turned face up, gain 2 life.\n" +
+        "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 2\n",
+        "Name:Puppet\nManaCost:0\nTypes:Creature Construct\nPT:1/3\nK:Fabricate:2\n",
+        "Name:Teyla\nManaCost:0\nTypes:Creature Advisor\nPT:2/4\n" +
+        "S:Mode$ Panharmonicon | ValidMode$ ChangesZone,ChangesZoneAll | ValidCard$ Permanent.YouCtrl | ValidCause$ Creature | Origin$ Battlefield | Destination$ Graveyard\n",
+        "Name:Mourner\nManaCost:0\nTypes:Creature Cleric\nPT:0/1\n" +
+        "T:Mode$ ChangesZone | Origin$ Battlefield | Destination$ Graveyard | ValidCard$ Creature.Other | TriggerZones$ Battlefield | Execute$ TrigGain\n" +
+        "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 1\n",
+        "Name:Traitor\nManaCost:B B\nTypes:Creature Spirit\nPT:1/1\n" +
+        "T:Mode$ ChangesZone | Origin$ Battlefield | Destination$ Graveyard | ValidCard$ Creature.YouOwn+Other | OptionalDecider$ You | TriggerZones$ Graveyard | Execute$ TrigBack\n" +
+        "SVar:TrigBack:AB$ ChangeZone | Cost$ B | Defined$ Self | Origin$ Graveyard | Destination$ Battlefield\n",
+        "Name:Strider\nManaCost:0\nTypes:Creature Horror\nPT:1/1\nK:Escape:B ExileFromGrave<1/Card.Other/other>\n" +
+        "K:etbCounter:P1P1:2:ValidCard$ Card.Self+escaped:It escapes with two +1/+1 counters.\n",
+        "Name:Revive\nManaCost:0\nTypes:Sorcery\n" +
+        "A:SP$ ChangeZone | Origin$ Graveyard | Destination$ Battlefield | GainControl$ True | ValidTgts$ Creature | RememberLKI$ True | SubAbility$ DBLose\n" +
+        "SVar:DBLose:DB$ LoseLife | Defined$ You | LifeAmount$ X | SubAbility$ DBClean\nSVar:DBClean:DB$ Cleanup | ClearRemembered$ True\n" +
+        "SVar:X:RememberedLKI$CardManaCost\n",
+        "Name:Animator\nManaCost:B\nTypes:Enchantment Aura\nK:Enchant:Creature.inZoneGraveyard:creature card in a graveyard\n" +
+        "T:Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.Self | IsPresent$ Card.StrictlySelf | Execute$ TrigReturn\n" +
+        "SVar:TrigReturn:DB$ ChangeZone | Origin$ Graveyard | Destination$ Battlefield | Defined$ Enchanted | RememberChanged$ True | GainControl$ True | SubAbility$ DBAnimate\n" +
+        "SVar:DBAnimate:DB$ Animate | Defined$ Self | Keywords$ Enchant:Creature.IsRemembered:that creature | RemoveKeywords$ Enchant:Creature.inZoneGraveyard:creature card in a graveyard | Duration$ Permanent | SubAbility$ DBAttach\n" +
+        "SVar:DBAttach:DB$ Attach | Defined$ Remembered | SubAbility$ DBDelay\n" +
+        "SVar:DBDelay:DB$ DelayedTrigger | Mode$ ChangesZone | ValidCard$ Card.Self | Origin$ Battlefield | Execute$ TrigSac | RememberObjects$ RememberedLKI\n" +
+        "SVar:TrigSac:DB$ SacrificeAll | Defined$ DelayTriggerRememberedLKI\n" +
+        "T:Mode$ ChangesZone | Origin$ Battlefield | Destination$ Any | ValidCard$ Card.Self | Execute$ DBClean | Static$ True\n" +
+        "SVar:DBClean:DB$ Cleanup | ClearRemembered$ True\n" +
+        "S:Mode$ Continuous | AffectedDefined$ Enchanted | Affected$ Creature | AddPower$ -1\n",
+        "Name:Shove\nManaCost:0\nTypes:Instant\n" +
+        "A:SP$ Destroy | ValidTgts$ Creature | ConditionDefined$ Targeted | ConditionPresent$ Creature.cmcLEX | ConditionCompare$ EQ1\n" +
+        "SVar:X:Count$Revolt.4.2\n",
+        "Name:Hail\nManaCost:X\nTypes:Sorcery\nA:SP$ Repeat | MaxRepeat$ X | RepeatSubAbility$ DBEach\n" +
+        "SVar:DBEach:DB$ GenericChoice | Defined$ Opponent | TempRemember$ Chooser | Choices$ SacOne,DiscardOne | FallbackAbility$ JustLose\n" +
+        "SVar:SacOne:DB$ LoseLife | Defined$ Remembered | LifeAmount$ 3 | UnlessCost$ Sac<1/Permanent.nonLand/nonland permanent> | UnlessPayer$ Remembered | SpellDescription$ Sacrifice or lose 3.\n" +
+        "SVar:DiscardOne:DB$ LoseLife | Defined$ Remembered | LifeAmount$ 3 | UnlessCost$ Discard<1/Card> | UnlessPayer$ Remembered | SpellDescription$ Discard or lose 3.\n" +
+        "SVar:JustLose:DB$ LoseLife | Defined$ Remembered | LifeAmount$ 3\nSVar:X:Count$xPaid\n",
+        "Name:Leech\nManaCost:0\nTypes:Creature Vampire\nPT:2/4\n" +
+        "R:Event$ LifeReduced | ValidPlayer$ Opponent | PlayerTurn$ True | ReplaceWith$ Twice | ActiveZones$ Battlefield\n" +
+        "SVar:Twice:DB$ ReplaceEffect | VarName$ Amount | VarValue$ ReplaceCount$Amount/Twice\n",
+        "Name:Room\nManaCost:no cost\nTypes:Land\nA:AB$ Draw | Cost$ T | ActivationGameTypes$ Commander,Brawl | NumCards$ 1\n",
+        "Name:Autocrat\nManaCost:0\nTypes:Creature Human\nPT:2/2\n" +
+        "T:Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ TrigSerfs\n" +
+        "SVar:TrigSerfs:DB$ Token | TokenAmount$ 2 | TokenScript$ b_0_1_serf | TokenOwner$ You\n" +
+        "T:Mode$ ChangesZone | Origin$ Battlefield | Destination$ Any | ValidCard$ Card.Self | Execute$ TrigExile\n" +
+        "SVar:TrigExile:DB$ ChangeZoneAll | ChangeType$ Serf.token | Origin$ Battlefield | Destination$ Exile\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -311,12 +358,15 @@ public class MechanicsTests
             "A:AB$ Mana | Cost$ T Sac<1/CARDNAME/this token> | Produced$ Any | Amount$ 1\n",
         ["b_0_0_orc_army"] = "Name:Orc Army Token\nManaCost:no cost\nColors:black\nTypes:Creature Orc Army\nPT:0/0\n",
         ["r_1_1_warrior"] = "Name:Warrior Token\nManaCost:no cost\nColors:red\nTypes:Creature Warrior\nPT:1/1\n",
+        ["c_1_1_a_servo"] = "Name:Servo Token\nManaCost:no cost\nTypes:Artifact Creature Servo\nPT:1/1\n",
+        ["b_0_1_serf"] = "Name:Serf Token\nManaCost:no cost\nColors:black\nTypes:Creature Serf\nPT:0/1\n",
     };
 
     private static readonly CardPool Pool = new(ForgeLibrary.FromScripts(Scripts, Tokens), null);
 
-    private static Game Setup(string[] hand, string[]? battlefield = null, string[]? library = null, TestDecider? decider = null) =>
-        TestGames.Setup(Pool, hand, battlefield, library, decider);
+    private static Game Setup(string[] hand, string[]? battlefield = null, string[]? library = null, TestDecider? decider = null,
+        string[]? commanders = null) =>
+        TestGames.Setup(Pool, hand, battlefield, library, decider, commanders);
 
     [Fact]
     public void AllTestCardsCompile()
@@ -1884,5 +1934,189 @@ public class MechanicsTests
         g.CheckStateBasedActions();
         g.PlayLand(g.State[InHand(g, "Bog")]);
         Assert.Contains(g.LegalActions(Game.Me), a => a is GameAction.PlayLand);
+    }
+
+    [Fact]
+    public void MorphCastsFaceDownAndTurnsUp()
+    {
+        var g = Setup(new[] { "Masked" }, battlefield: new[] { "Wood", "Wood", "Wood", "Wood" });
+        var m = g.State[InHand(g, "Masked")];
+        Assert.Equal(2, m.CurrentFace.SpellAbilities.Count);
+        g.CastSpell(m, 1);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, m.Zone);
+        Assert.True(m.FaceDown);
+        Assert.Equal("Face-down creature", m.Name);
+        Assert.Equal(2, m.Power);
+        Assert.Equal(1, g.State.BattlefieldCards.Count(c => c.Name == "Wood" && !c.Tapped));
+        // Turning it face up is a special action: no stack.
+        g.Perform(g.LegalActions(Game.Me).OfType<GameAction.Activate>().Single(a => a.CardId == m.Id));
+        Assert.False(m.FaceDown);
+        Assert.Equal("Masked", m.Name);
+        Assert.Equal(5, m.Power);   // megamorph: a +1/+1 counter
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+        g.Destroy(m, regenerate: false);
+        Assert.False(m.FaceDown);
+    }
+
+    [Fact]
+    public void FabricateCountersOrServos()
+    {
+        var g = Setup(new[] { "Puppet" });
+        g.CastSpell(g.State[InHand(g, "Puppet")], -1);
+        ResolveAll(g);
+        Assert.Equal(3, OnBattlefield(g, "Puppet").Power);
+
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Option ? 1 : null };
+        g = Setup(new[] { "Puppet" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Puppet")], -1);
+        ResolveAll(g);
+        Assert.Equal(1, OnBattlefield(g, "Puppet").Power);
+        Assert.Equal(2, g.State.BattlefieldCards.Count(c => c.Name == "Servo Token"));
+    }
+
+    [Fact]
+    public void DyingTriggersTwiceWithTeysa()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Teyla", "Mourner", "Bear" });
+        g.Destroy(OnBattlefield(g, "Bear"), regenerate: false);
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+
+        g = Setup(Array.Empty<string>(), battlefield: new[] { "Mourner", "Bear" });
+        g.Destroy(OnBattlefield(g, "Bear"), regenerate: false);
+        ResolveAll(g);
+        Assert.Equal(41, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void GraveyardTriggerWithACost()
+    {
+        var g = Setup(new[] { "Traitor" }, battlefield: new[] { "Bear", "Bog" });
+        var traitor = g.State[InHand(g, "Traitor")];
+        g.MoveTo(traitor, Zone.Graveyard);
+        g.Destroy(OnBattlefield(g, "Bear"), regenerate: false);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, traitor.Zone);
+        Assert.True(OnBattlefield(g, "Bog").Tapped);
+
+        // Declining to pay: nothing happens.
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.YesNo ? 1 : null };
+        g = Setup(new[] { "Traitor" }, battlefield: new[] { "Bear", "Bog" }, decider: d);
+        traitor = g.State[InHand(g, "Traitor")];
+        g.MoveTo(traitor, Zone.Graveyard);
+        g.Destroy(OnBattlefield(g, "Bear"), regenerate: false);
+        ResolveAll(g);
+        Assert.Equal(Zone.Graveyard, traitor.Zone);
+        Assert.False(OnBattlefield(g, "Bog").Tapped);
+
+        // On the battlefield it doesn't trigger.
+        g = Setup(Array.Empty<string>(), battlefield: new[] { "Traitor", "Bear", "Bog" });
+        g.Destroy(OnBattlefield(g, "Bear"), regenerate: false);
+        ResolveAll(g);
+        Assert.False(OnBattlefield(g, "Bog").Tapped);
+    }
+
+    [Fact]
+    public void EscapesWithCounters()
+    {
+        var g = Setup(new[] { "Strider", "Filler" }, battlefield: new[] { "Bog" });
+        var strider = g.State[InHand(g, "Strider")];
+        g.MoveTo(strider, Zone.Graveyard);
+        g.MoveTo(g.State[InHand(g, "Filler")], Zone.Graveyard);
+        g.Perform(g.LegalActions(Game.Me).OfType<GameAction.Cast>().Single(a => a.CardId == strider.Id));
+        ResolveAll(g);
+        Assert.Equal(3, strider.Power);
+
+        g = Setup(new[] { "Strider" });
+        g.CastSpell(g.State[InHand(g, "Strider")], -1);
+        ResolveAll(g);
+        Assert.Equal(1, OnBattlefield(g, "Strider").Power);
+    }
+
+    [Fact]
+    public void ReanimateLosesLifeEqualToManaValue()
+    {
+        var g = Setup(new[] { "Revive", "Golem" });
+        g.MoveTo(g.State[InHand(g, "Golem")], Zone.Graveyard);
+        g.CastSpell(g.State[InHand(g, "Revive")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, g.State.Cards.First(c => c.Name == "Golem").Zone);
+        Assert.Equal(35, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void AnimateDeadReturnsAndSacrifices()
+    {
+        var g = Setup(new[] { "Animator", "Bear" }, battlefield: new[] { "Bog" });
+        var bear = g.State[InHand(g, "Bear")];
+        g.MoveTo(bear, Zone.Graveyard);
+        var raise = g.State[InHand(g, "Animator")];
+        g.CastSpell(raise, -1);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, bear.Zone);
+        Assert.Equal(Zone.Battlefield, raise.Zone);
+        Assert.Equal(bear.Id, raise.AttachedTo);
+        Assert.Equal(1, bear.Power);
+        g.Destroy(raise, regenerate: false);
+        ResolveAll(g);
+        Assert.Equal(Zone.Graveyard, bear.Zone);
+    }
+
+    [Fact]
+    public void RevoltRaisesTheLimit()
+    {
+        var g = Setup(new[] { "Shove", "Shove" }, battlefield: new[] { "Ogre", "Sig" });
+        g.CastSpell(g.State[InHand(g, "Shove")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, OnBattlefield(g, "Ogre").Zone);
+        g.MoveTo(OnBattlefield(g, "Sig"), Zone.Graveyard);
+        g.CastSpell(g.State[InHand(g, "Shove")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Ogre").Zone);
+    }
+
+    [Fact]
+    public void EachOpponentChoosesOrLosesLife()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.X ? dec.Options.ToList().IndexOf(2) : null };
+        var g = Setup(new[] { "Hail" }, battlefield: new[] { "Bog", "Bog" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Hail")], 0);
+        ResolveAll(g);
+        Assert.Equal(34, g.State.Players[1].Life);
+        Assert.Equal(34, g.State.Players[2].Life);
+    }
+
+    [Fact]
+    public void OpponentsLoseTwiceAsMuchOnYourTurn()
+    {
+        var g = Setup(new[] { "Quake" }, battlefield: new[] { "Leech", "Bog" });
+        g.CastSpell(g.State[InHand(g, "Quake")], 0);
+        ResolveAll(g);
+        Assert.Equal(36, g.State.Players[1].Life);
+        Assert.Equal(38, g.State.Players[Game.Me].Life);
+        Assert.Equal(Zone.Battlefield, OnBattlefield(g, "Leech").Zone);
+    }
+
+    [Fact]
+    public void CommanderOnlyAbility()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Room" }, library: new[] { "Filler" });
+        Assert.DoesNotContain(g.LegalActions(Game.Me), a => a is GameAction.Activate);
+        g = Setup(Array.Empty<string>(), battlefield: new[] { "Room" }, library: new[] { "Filler" }, commanders: new[] { "Ogre" });
+        Assert.Contains(g.LegalActions(Game.Me), a => a is GameAction.Activate);
+    }
+
+    [Fact]
+    public void TokenOnlySubtypeFilters()
+    {
+        var g = Setup(new[] { "Autocrat" });
+        g.CastSpell(g.State[InHand(g, "Autocrat")], -1);
+        ResolveAll(g);
+        Assert.Equal(2, g.State.BattlefieldCards.Count(c => c.Name == "Serf Token"));
+        g.Destroy(OnBattlefield(g, "Autocrat"), regenerate: false);
+        ResolveAll(g);
+        Assert.Equal(0, g.State.BattlefieldCards.Count(c => c.Name == "Serf Token"));
     }
 }

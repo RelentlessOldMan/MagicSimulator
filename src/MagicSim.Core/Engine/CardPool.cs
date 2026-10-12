@@ -20,7 +20,8 @@ public sealed class CardPool
     {
         _forge = forge;
         _index = index;
-        foreach (var c in forge.Cards)
+        // Subtypes in any card's or token's type line ("Serf" only appears on tokens).
+        foreach (var c in forge.Cards.Concat(forge.Tokens.Values))
             foreach (var f in c.Faces)
                 foreach (var w in f.Types.Split(' ', StringSplitOptions.RemoveEmptyEntries))
                     if (char.IsUpper(w[0]) && TypeLine.Parse(w) is { Types: 0, Supers: 0 }) Filter.KnownSubtypes.Add(w);

@@ -39,7 +39,7 @@ public static class Replacements
 {
     private static readonly HashSet<string> Common = new(StringComparer.Ordinal)
     {
-        "Event", "Description", "ActiveZones", "ReplaceWith", "Secondary", "AICheckSVar", "AILogic",
+        "Event", "Description", "ActiveZones", "ReplaceWith", "Secondary", "AICheckSVar", "AILogic", "PlayerTurn",
     };
 
     private static readonly Dictionary<string, HashSet<string>> MatchParams = new()
@@ -48,6 +48,7 @@ public static class Replacements
         ["CreateToken"] = new(StringComparer.Ordinal) { "ValidToken", "ValidPlayer", "EffectOnly" },
         ["AddCounter"] = new(StringComparer.Ordinal) { "ValidCard", "ValidCounterType", "EffectOnly", "ValidObject" },
         ["GainLife"] = new(StringComparer.Ordinal) { "ValidPlayer" },
+        ["LifeReduced"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["Moved"] = new(StringComparer.Ordinal) { "ValidCard", "Origin", "Destination", "ValidLKI" },
         ["Draw"] = new(StringComparer.Ordinal) { "ValidPlayer", "NotFirstCardInDrawStep" },
     };
@@ -93,6 +94,7 @@ public static class Replacements
                 break;
             case "DamageDone" when w.Api == "ReplaceEffect" && w["VarName"] == "DamageAmount" && OnlyKeys(w, "VarName", "VarValue"):
             case "GainLife" when w.Api == "ReplaceEffect" && w["VarName"] == "LifeGained" && OnlyKeys(w, "VarName", "VarValue"):
+            case "LifeReduced" when w.Api == "ReplaceEffect" && w["VarName"] == "Amount" && OnlyKeys(w, "VarName", "VarValue"):
                 kind = ReplacementKind.Amount;
                 newAmount = w["VarValue"];
                 break;
@@ -160,15 +162,18 @@ public static class Replacements
         foreach (var c in g.State.BattlefieldCards)
             if (!c.IsBlank && !c.LostAbilities)
                 foreach (var r in c.CurrentFace.Replacements)
-                    if (r.Event == evt && r["ActiveZones"] != "Command") yield return (c, r);
+                    if (r.Event == evt && r["ActiveZones"] != "Command" && OnItsTurn(g, c, r)) yield return (c, r);
         foreach (var p in g.State.Players)
             foreach (var id in p.Command)
             {
                 var c = g.State[id];
                 foreach (var r in c.CurrentFace.Replacements)
-                    if (r.Event == evt && (c.IsEffect || r["ActiveZones"] == "Command")) yield return (c, r);
+                    if (r.Event == evt && (c.IsEffect || r["ActiveZones"] == "Command") && OnItsTurn(g, c, r)) yield return (c, r);
             }
     }
+
+    /// <summary>"During your turn" (PlayerTurn$ True).</summary>
+    private static bool OnItsTurn(Game g, Card host, ReplacementDef r) => r["PlayerTurn"] != "True" || g.State.ActivePlayer == host.Controller;
 
     private static EffectContext ContextFor(Game g, Card host, ReplacementDef r, int replaced) => new()
     {
@@ -204,14 +209,14 @@ public static class Replacements
                 "CreateToken" => CardOk(r, "ValidToken", targetCard, x) && PlayerOk(r, "ValidPlayer", targetPlayer, x),
                 "AddCounter" => CardOk(r, "ValidCard", targetCard, x) && (r["ValidObject"] is null || CardOk(r, "ValidObject", targetCard, x))
                     && (r["ValidCounterType"] is not { } ct || ct == counterType),
-                "GainLife" => PlayerOk(r, "ValidPlayer", targetPlayer, x),
+                "GainLife" or "LifeReduced" => PlayerOk(r, "ValidPlayer", targetPlayer, x),
                 _ => false,
             };
             if (ok) applicable.Add((host, r));
         }
         if (applicable.Count == 0) return amount;
         var hurtsMe = evt == "DamageDone" && (targetPlayer == Game.Me || targetCard?.Controller == Game.Me)
-            || evt == "AddCounter" && targetCard?.Controller != Game.Me;
+            || evt == "AddCounter" && targetCard?.Controller != Game.Me || evt == "LifeReduced" && targetPlayer == Game.Me;
         var best = amount;
         var first = true;
         foreach (var order in Orders(applicable.Count))

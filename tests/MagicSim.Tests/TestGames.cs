@@ -25,16 +25,17 @@ internal sealed class TestDecider : ChoiceDecider
 internal static class TestGames
 {
     /// <summary>A game in main phase 1 of turn 1 with the given hand, battlefield and library (top first).</summary>
-    public static Game Setup(CardPool pool, string[] hand, string[]? battlefield = null, string[]? library = null, TestDecider? decider = null)
+    public static Game Setup(CardPool pool, string[] hand, string[]? battlefield = null, string[]? library = null, TestDecider? decider = null,
+        string[]? commanders = null)
     {
         CardDef Def(string name) => pool.Resolve(name) ?? throw new ArgumentException(name);
         var lib = (library ?? Array.Empty<string>()).Concat(hand).Concat(battlefield ?? Array.Empty<string>()).Select(Def).ToList();
-        var g = Game.NewGoldfish(lib, Array.Empty<CardDef>(), new GameSettings(), new Rng(1), decider ?? new TestDecider());
+        var g = Game.NewGoldfish(lib, (commanders ?? Array.Empty<string>()).Select(Def).ToList(), new GameSettings(), new Rng(1), decider ?? new TestDecider());
         var s = g.State;
         var me = s.Players[Game.Me];
-        // Rebuild zones deterministically instead of using the shuffle.
+        // Rebuild zones deterministically instead of using the shuffle (commanders come first).
         me.Library.Clear();
-        var next = 0;
+        var next = commanders?.Length ?? 0;
         foreach (var _ in library ?? Array.Empty<string>()) { me.Library.Add(next); s[next].Zone = Zone.Library; next++; }
         foreach (var _ in hand) { me.Hand.Add(next); s[next].Zone = Zone.Hand; next++; }
         foreach (var _ in battlefield ?? Array.Empty<string>()) { s.Battlefield.Add(next); s[next].Zone = Zone.Battlefield; next++; }

@@ -89,7 +89,7 @@ sealed class AnimateEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "Defined", "Types", "Power", "Toughness", "Keywords", "Colors", "OverwriteColors", "RemoveCardTypes", "RemoveCreatureTypes",
         "RemoveSuperTypes", "RemoveAllAbilities", "Abilities", "Triggers", "staticAbilities", "Duration", "AtEOT", "sVars",
-        "AddAllCreatureTypes");
+        "AddAllCreatureTypes", "RemoveKeywords");
 
     public static readonly HashSet<string> Durations = new(StringComparer.Ordinal)
     {
@@ -108,6 +108,10 @@ sealed class AnimateEffect : Effect
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
                 if (!Keywords.Supported.Contains(ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + ForgeRequirements.KeywordName(k));
         if (ab["Colors"] is { } col && col != "ChosenColor" && ColorsOf(col) is null) ctx.Need("Animate.Colors:" + col);
+        // Only an Aura's own "enchant …" can be removed so far (Animate Dead); what it enchants is already set.
+        if (ab["RemoveKeywords"] is { } rk)
+            foreach (var k in rk.Split('&', StringSplitOptions.TrimEntries))
+                if (ForgeRequirements.KeywordName(k) != "Enchant") ctx.Need("Animate.RemoveKeywords:" + ForgeRequirements.KeywordName(k));
         if (ab["Duration"] is { } d && !Durations.Contains(d)) ctx.Need("Animate.Duration:" + d);
         if (ab["AtEOT"] is { } eot && eot is not ("Exile" or "Sacrifice")) ctx.Need("Animate.AtEOT:" + eot);
         ab.Grants = Grants.Compile(ab.P, ctx, "Abilities", "Triggers", "staticAbilities");

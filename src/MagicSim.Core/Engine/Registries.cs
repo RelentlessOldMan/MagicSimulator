@@ -14,7 +14,9 @@ public static class Keywords
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
         "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade", "Ninjutsu", "Persist", "Undying",
-        "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute",
+        "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate",
+        // An Aura's own enchant restriction (Animate Dead swapping its "enchant" ability).
+        "Enchant",
     };
 }
 
@@ -53,6 +55,7 @@ public static class Triggers
         ["Discarded"] = new(StringComparer.Ordinal) { },
         ["LifeGained"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["Taps"] = new(StringComparer.Ordinal) { },
+        ["TurnFaceUp"] = new(StringComparer.Ordinal) { },
     };
 
     public static readonly HashSet<string> Supported = new(ModeParams.Keys.Concat(NeverInGoldfish), StringComparer.Ordinal);
@@ -72,7 +75,9 @@ public static class Triggers
         if (t["Number"] is { } num && !int.TryParse(num, out _)) ctx.Need("TriggerNumber:" + num);
         if (t["ActivatorThisTurnCast"] is { } atc && (atc.Length < 3 || !int.TryParse(atc[2..], out _))) ctx.Need("ActivatorThisTurnCast:" + atc);
         if (t["ValidSource"] is { } vsr && t.Mode == "CounterAddedOnce" && vsr != "You") ctx.Need("CounterAddedOnce.ValidSource:" + vsr);
-        if (t["TriggerZones"] is { } tz && tz is not ("Battlefield" or "Command") && !(tz == "Stack" && t.Mode == "SpellCast"))
+        // Graveyard triggers ("whenever …, return this from your graveyard") fire from Game.Fire's graveyard sources.
+        if (t["TriggerZones"] is { } tz && tz is not ("Battlefield" or "Command") && !(tz == "Stack" && t.Mode == "SpellCast")
+            && !(tz == "Graveyard" && t.Mode is not ("ChangesZoneAll" or "DamageDoneOnce" or "CounterAddedOnce")))
             ctx.Need("TriggerZones:" + tz);
         if (t["Phase"] is { } ph && ph is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "End Of Turn" or "BeginCombat" or "EndCombat"))
             ctx.Need("TriggerPhase:" + ph);
@@ -86,6 +91,8 @@ public static class Triggers
             Item = new StackItem { SourceId = source.Id, Ability = t.Execute ?? Game.PermanentSpell, Controller = source.Controller },
             FaceOverride = t.Face,
         };
+        // A graveyard trigger works only from the graveyard.
+        if (t["TriggerZones"] == "Graveyard") return source.Zone == Zone.Graveyard && ModeMatches(g, t, source, e, x) && Presence.Hold(t.P, x);
         // Triggers work from the battlefield, except the moved card's own "look back" triggers.
         // Effects and emblems (and "eminence" commanders) trigger from the command zone.
         var sourceActive = source.Zone == Zone.Battlefield
@@ -126,6 +133,8 @@ public static class Triggers
             case "Phase" when e.Mode == TriggerMode.Phase:
                 if (!string.Equals(t["Phase"], e.Phase, StringComparison.OrdinalIgnoreCase)) return false;
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
+            case "TurnFaceUp" when e.Mode == TriggerMode.TurnFaceUp:
+                return CardMatches(g, t, e.CardId, x, source);
             case "SpellCast" when e.Mode == TriggerMode.SpellCast && t["ActivatorThisTurnCast"] is { } nth:
                 // "Whenever you cast your second spell each turn": this is that spell.
                 if (!Filter.Compare(g.State.ThisTurn.SpellsCast, nth[..2], int.Parse(nth[2..]))) return false;

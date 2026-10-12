@@ -40,6 +40,7 @@ public sealed partial class Game
 
         if (from == Zone.Battlefield)
         {
+            State.ThisTurn.PermanentLeft.Add(c.Controller);
             c.LeftPower = c.Power;
             c.LeftToughness = c.Toughness;
             c.LeftCounters = c.Counters;
@@ -58,12 +59,15 @@ public sealed partial class Game
             c.Controller = c.Owner;
             c.RegenShields = 0;
             c.PaidOptional = null;
+            c.Escaped = false;
             c.ClearStaticEffects();
             State.Attackers.Remove(c.Id);
         }
         // Off the battlefield and the stack a modal double-faced card is its front face again.
         if (to is not (Zone.Battlefield or Zone.Stack) && c.Def.Layout is "Modal" or "Adventure") c.Face = 0;
         c.OnAdventure = false;
+        // A face-down card is turned face up when it goes anywhere but the battlefield (rule 708.9).
+        if (to is not (Zone.Battlefield or Zone.Stack)) c.FaceDown = false;
         if (c.IsToken && to != Zone.Battlefield)
         {
             c.Zone = Zone.None;   // tokens cease to exist outside the battlefield (rule 111.8)
@@ -157,21 +161,25 @@ public sealed partial class Game
         }
     }
 
-    /// <summary>How many extra times a trigger caused by <paramref name="entering"/> entering triggers (Panharmonicon, rule 603.2d).</summary>
-    private int ExtraEnteringTriggers(Card source, Card? entering)
+    /// <summary>
+    /// How many extra times a trigger of <paramref name="source"/> caused by these zone changes triggers
+    /// (Panharmonicon for entering, Teysa Karlov for dying; rule 603.2d).
+    /// </summary>
+    private int ExtraZoneTriggers(Card source, string mode, IEnumerable<(Card Moved, Zone From, Zone To)> moves)
     {
-        if (entering is null) return 0;
         var extra = 0;
         foreach (var host in State.BattlefieldCards)
         {
             if (host.IsBlank || host.Controller != source.Controller) continue;
             foreach (var st in host.Statics)
             {
-                if (st.Mode != "Panharmonicon" || st["ValidMode"] is { } vm && !vm.Split(',').Contains("ChangesZone")) continue;
+                if (st.Mode != "Panharmonicon" || st["ValidMode"] is { } vm && !vm.Split(',').Contains(mode)) continue;
                 var x = ContextFor(host);
                 if (st["ValidCard"] is { } vc && !Effect.FilterFor(host.CurrentFace, vc).MatchesCard(source, x)) continue;
-                if (st["ValidCause"] is { } cause && !Effect.FilterFor(host.CurrentFace, cause).MatchesCard(entering, x)) continue;
-                extra++;
+                var cause = st["ValidCause"] is { } vcause ? Effect.FilterFor(host.CurrentFace, vcause) : null;
+                if (moves.Any(m => Triggers.ZoneMatches(st["Origin"], m.From) && Triggers.ZoneMatches(st["Destination"] ?? "Battlefield", m.To)
+                                   && (cause is null || cause.MatchesCard(m.Moved, x))))
+                    extra++;
             }
         }
         return extra;
@@ -201,7 +209,9 @@ public sealed partial class Game
                 var n = batch.Count(m => Triggers.ZoneMatches(t["Origin"], m.From) && Triggers.ZoneMatches(t["Destination"], m.To)
                                          && (filter is null || filter.MatchesCard(State[m.CardId], x)));
                 if (n == 0 || !Presence.Hold(t.P, x) || !Triggers.UnderLimit(this, src, t)) continue;
-                _pending.Add(new PendingTrigger(id, t, new TriggerEvent(TriggerMode.ChangesZoneAll, Amount: n), src.Controller));
+                var times = 1 + ExtraZoneTriggers(src, "ChangesZoneAll", batch.Select(m => (State[m.CardId], m.From, m.To)));
+                for (var i = 0; i < times; i++)
+                    _pending.Add(new PendingTrigger(id, t, new TriggerEvent(TriggerMode.ChangesZoneAll, Amount: n), src.Controller));
             }
         }
     }
@@ -220,6 +230,7 @@ public sealed partial class Game
         {
             var x = new EffectContext { Game = this, Ability = PermanentSpell, Item = new StackItem { SourceId = c.Id, Ability = PermanentSpell, Controller = c.Controller, X = c.XPaid } };
             if (condition is not null && !Presence.Hold(condition, x)) continue;
+            if (condition?["ValidCard"] is { } valid && !Effect.FilterFor(face, valid).MatchesCard(c, x)) continue;
             var n = Effect.EvalAmount(x, amount);
             AddCounters(c, kind, Replacements.Amount(this, "AddCounter", n, targetCard: c, counterType: kind));
         }
@@ -428,7 +439,7 @@ public sealed partial class Game
             _damageBatch.Add((source.Id, player, null, amount, combat));
             return amount;
         }
-        State.Players[player].Life -= amount;
+        State.Players[player].Life -= Replacements.Amount(this, "LifeReduced", amount, source, targetPlayer: player);
         // Toxic N: combat damage to a player also gives N poison counters (rule 702.164).
         if (combat && source is not null)
             foreach (var k in source.CurrentFace.RawKeywords)
@@ -460,6 +471,7 @@ public sealed partial class Game
     public void LoseLife(int player, int amount, Card? source)
     {
         if (amount <= 0) return;
+        amount = Replacements.Amount(this, "LifeReduced", amount, source, targetPlayer: player);
         State.Players[player].Life -= amount;
         Note($"player {player} loses {amount} life (life {State.Players[player].Life})");
         if (source is not null && player != Me) RememberWinCard(source);
@@ -491,7 +503,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);
@@ -509,13 +521,17 @@ public sealed partial class Game
         var sources = State.Battlefield.ToList();
         foreach (var p in State.Players) sources.AddRange(p.Command);
         if (e.CardId is { } moved && !sources.Contains(moved)) sources.Add(moved);
+        // Cards whose triggers work from the graveyard (Nether Traitor).
+        foreach (var p in State.Players)
+            foreach (var id in p.Graveyard)
+                if (!sources.Contains(id) && State[id].Triggers.Any(t => t["TriggerZones"] == "Graveyard")) sources.Add(id);
         foreach (var id in sources)
         {
             var src = State[id];
             foreach (var t in src.Triggers)
             {
                 if (src.IsBlank || !Triggers.Matches(this, t, src, e) || !Triggers.UnderLimit(this, src, t)) continue;
-                var times = 1 + (e.Mode == TriggerMode.ChangesZone && e.To == Zone.Battlefield && e.CardId is { } entered ? ExtraEnteringTriggers(src, State[entered]) : 0);
+                var times = 1 + (e.Mode == TriggerMode.ChangesZone && e.CardId is { } changed ? ExtraZoneTriggers(src, "ChangesZone", new[] { (State[changed], e.From, e.To) }) : 0);
                 for (var i = 0; i < times; i++) _pending.Add(new PendingTrigger(id, t, e, src.Controller));
             }
         }
@@ -538,7 +554,7 @@ public sealed partial class Game
         {
             if (pt.Trigger.Execute is not { } exec) continue;
             var src = State[pt.SourceId];
-            if (pt.Trigger["OptionalDecider"] is not null && !Decider.ChooseYesNo(this, pt.Controller, src, $"use {src.Name}'s trigger?"))
+            if (pt.Trigger["OptionalDecider"] is not null && !HasTriggerCost(exec) && !Decider.ChooseYesNo(this, pt.Controller, src, $"use {src.Name}'s trigger?"))
                 continue;
             if (pt.Trigger.Modes is { Count: > 1 } modes)
                 exec = modes[Decider.ChooseOption(this, pt.Controller, src, modes.Select(m => m.Description).ToList())];
