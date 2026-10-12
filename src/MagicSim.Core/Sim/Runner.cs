@@ -8,7 +8,7 @@ public sealed class RunOptions
 {
     public int Games { get; init; } = 10000;
     public ulong Seed { get; init; } = 1;
-    public int MaxTurn { get; init; } = 10;
+    public int MaxTurn { get; init; } = 20;
     public IReadOnlyList<MulliganPolicy> Mulligans { get; init; } = new[] { MulliganPolicy.A, MulliganPolicy.B, MulliganPolicy.C };
     public IReadOnlyList<string> Seats { get; init; } = new[] { "play", "draw" };
     /// <summary>Table sizes: "1v1" (one goldfish opponent) and "1v1v1" (two).</summary>

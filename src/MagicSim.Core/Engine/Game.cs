@@ -6,7 +6,7 @@ public sealed class GameSettings
     public int Opponents { get; init; } = 2;
     public int OpponentLibrary { get; init; } = 99;
     public bool OnThePlay { get; init; } = true;
-    public int MaxTurn { get; init; } = 10;
+    public int MaxTurn { get; init; } = 20;
     public int StartingHand { get; init; } = 7;
     public bool FreeFirstMulligan { get; init; } = true;
     public int MaxHandSize { get; init; } = 7;

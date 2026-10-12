@@ -179,7 +179,7 @@ public static class Program
         if (!ulong.TryParse(seedText, out var seed)) throw new UsageException("--seed must be a non-negative integer");
         return new RunOptions
         {
-            Games = Int("--games", 10000), Seed = seed, MaxTurn = Int("--max-turn", 10), Mulligans = mulls, Seats = seats, Tables = tables,
+            Games = Int("--games", 10000), Seed = seed, MaxTurn = Int("--max-turn", 20), Mulligans = mulls, Seats = seats, Tables = tables,
             Rollouts = Int("--rollouts", 6), Threads = Int("--threads", Environment.ProcessorCount),
         };
     }

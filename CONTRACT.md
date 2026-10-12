@@ -2,7 +2,7 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.7.1** (2026-10-12).
+Status: **draft v0.7.2** (2026-10-12).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
@@ -12,6 +12,7 @@ Status: **draft v0.7.1** (2026-10-12).
 - v0.6.2: states what the goldfish opponents are assumed to have for effects that look at them: 7 cards in hand, lands of every color (§3). No field changes.
 - v0.7: games are played at two table sizes, 1v1 and 1v1v1 (`--table`, default `both`). Result rows and per-game rows gain a `table` field (§3). Readers that ignore it will see two rows per (mulligan, seat) and must filter on `table`.
 - v0.7.1: adds `sim report`, an HTML page of charts from one or more `run` JSON files (§3). It's for people to read, not a stable format.
+- v0.7.2: the default `--max-turn` goes from 10 to 20, so slower decks get a full curve (§3). Pass `--max-turn 10` for the old behavior.
 - Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
@@ -133,7 +134,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
 
 `replay` prints a readable turn-by-turn log of one game: the mulligans, each spell and ability, each trigger, what's on the stack and when it resolves, the mana pool, and how the game ended. The same (deck, seed, `--game`, mulligan, seat, table) gives the same game as row `game` in the `--per-game` output, so any interesting row can be replayed. This is for checking by hand that the engine plays correctly. Its text output isn't a stable format.
 
-**Defaults:** `--games 10000`, `--seed 1`, `--mull all`, `--seat both`, `--table both`, `--max-turn 10`. `replay` defaults to `--mull C --seat play --table 1v1v1`.
+**Defaults:** `--games 10000`, `--seed 1`, `--mull all`, `--seat both`, `--table both`, `--max-turn 20`. `replay` defaults to `--mull C --seat play --table 1v1v1`.
 
 **Determinism:**
 - The same deck, seed, options and simulator version always give the same JSON.
@@ -178,7 +179,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
   "sim_version": "0.1.0",
   "deck": {"name": "For-The-Lulz", "path": "…", "card_count": 100,
            "commanders": ["…"], "unsupported_cards": ["…"]},
-  "settings": {"games": 10000, "seed": 1, "max_turn": 10},
+  "settings": {"games": 10000, "seed": 1, "max_turn": 20},
   "results": [
     {
       "table": "1v1v1", "mulligan": "A", "seat": "play", "games": 10000,
