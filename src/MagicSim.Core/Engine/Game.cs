@@ -54,9 +54,10 @@ public sealed partial class Game
         Decider = decider;
     }
 
-    public Game Clone(IDecider? decider = null)
+    /// <param name="keepRecord">False for search copies, which don't report what happened.</param>
+    public Game Clone(IDecider? decider = null, bool keepRecord = true)
     {
-        var g = new Game(State.Clone(), Settings, decider ?? Decider) { _actionsThisTurn = _actionsThisTurn, MulligansTaken = MulligansTaken, StaticsApplied = StaticsApplied };
+        var g = new Game(State.Clone(keepRecord), Settings, decider ?? Decider) { _actionsThisTurn = _actionsThisTurn, MulligansTaken = MulligansTaken, StaticsApplied = StaticsApplied };
         g._pending.AddRange(_pending);
         return g;
     }
@@ -440,7 +441,18 @@ public sealed partial class Game
 
     // ---- legal actions ----------------------------------------------------------------
 
+    // Mana sources found while working out the legal actions; the game doesn't change during that.
+    private Dictionary<int, List<ManaSource>>? _autoSourceCache;
+
     public List<GameAction> LegalActions(int player)
+    {
+        var saved = _autoSourceCache;
+        _autoSourceCache = new();
+        try { return LegalActionsCore(player); }
+        finally { _autoSourceCache = saved; }
+    }
+
+    private List<GameAction> LegalActionsCore(int player)
     {
         var result = new List<GameAction> { GameAction.PassAction };
         var p = State.Players[player];
@@ -492,10 +504,17 @@ public sealed partial class Game
         }
 
         // Flashback and escape: cast from the graveyard.
+        bool? escapeGranted = null;
         foreach (var id in p.Graveyard)
         {
             var c = State[id];
-            if (c.IsBlank || c.CurrentFace.Flashback is null && Statics.EscapeCost(this, c) is null || !seenNames.Add("graveyard:" + c.Name)) continue;
+            if (c.IsBlank) continue;
+            if (c.CurrentFace.Flashback is null && c.CurrentFace.EscapeCost is null)
+            {
+                escapeGranted ??= Statics.GrantsEscape(this, player);
+                if (escapeGranted == false || Statics.EscapeCost(this, c) is null) continue;
+            }
+            if (!seenNames.Add("graveyard:" + c.Name)) continue;
             if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed)) continue;
             if (c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0)
             {

@@ -278,6 +278,16 @@ public static class Statics
         return text.Contains("CardManaCost", StringComparison.Ordinal) ? new Cost { Mana = c.CurrentFace.ManaCost }.Plus(cost) : cost;
     }
 
+    /// <summary>Whether anything <paramref name="player"/> controls could give cards escape (a cheap check before <see cref="EscapeCost"/>).</summary>
+    public static bool GrantsEscape(Game g, int player)
+    {
+        foreach (var source in Sources(g))
+            if (source.Controller == player)
+                foreach (var st in source.Statics)
+                    if (st.Mode == "Continuous" && IsEscapeGrant(st)) return true;
+        return false;
+    }
+
     private static EffectContext ContextFor(Game g, Card source, StaticDef? st = null) => new()
     {
         Game = g, Ability = Game.PermanentSpell, FaceOverride = st?.Face,

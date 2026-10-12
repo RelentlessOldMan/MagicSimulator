@@ -200,7 +200,8 @@ public static class Program
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var games = Runner.Run(deck, opts, progress: new Progress<int>(n =>
             Console.Error.Write($"\r{n}/{total} games ({sw.Elapsed.TotalSeconds:F0}s)")));
-        Console.Error.WriteLine($"\r{total}/{total} games in {sw.Elapsed.TotalSeconds:F1}s");
+        var cpu = System.Diagnostics.Process.GetCurrentProcess().TotalProcessorTime;
+        Console.Error.WriteLine($"\r{total}/{total} games in {sw.Elapsed.TotalSeconds:F1}s (CPU {cpu.TotalSeconds:F1}s)");
         if (o.Get("--per-game") is { } perGame)
             File.WriteAllLines(perGame, games.Select(Report.GameLine), new System.Text.UTF8Encoding(false));
         Emit(o, JsonSerializer.Serialize(Report.RunDocument(deck, path, opts, games), Report.Json));

@@ -43,7 +43,7 @@ public sealed class SearchDecider : ChoiceDecider
 
         if (d.Kind == DecisionKind.Action)
         {
-            _snapshot = g.Clone();
+            _snapshot = g.Clone(keepRecord: false);
             _snapshot.Log = null;
             _prefix.Clear();
         }
@@ -115,7 +115,7 @@ public sealed class SearchDecider : ChoiceDecider
         var determinizeRng = new Rng(worldSeed);
         var policy = new RolloutPolicy(rolloutSeed);
         var replay = new ReplayDecider(script, policy, game => game.Determinize(Game.Me, ref determinizeRng));
-        var sim = _snapshot!.Clone(replay);
+        var sim = _snapshot!.Clone(replay, keepRecord: false);
         // The player could stop at any main-phase checkpoint, so a rollout is worth the best
         // checkpoint it reached (after its scripted choices), not just where random play ended up.
         var best = double.NegativeInfinity;
@@ -172,7 +172,7 @@ public sealed class SearchDecider : ChoiceDecider
         {
             var trialRng = new Rng(_rng.NextULong());
             var inner = new SearchDecider(new SearchSettings { Rollouts = Math.Max(2, _settings.Rollouts / 2), Mulligan = MulliganPolicy.C }, _rng.NextULong());
-            var sim = g.Clone(inner);
+            var sim = g.Clone(inner, keepRecord: false);
             sim.Log = null;
             sim.Determinize(Game.Me, ref trialRng);
             sim.KeepCurrentHand();

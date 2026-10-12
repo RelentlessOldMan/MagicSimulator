@@ -368,7 +368,8 @@ public sealed class GameState
         _ => throw new ArgumentException($"no card list for zone {zone}"),
     };
 
-    public GameState Clone() => new()
+    /// <param name="keepRecord">False for search copies: what happened so far is only reported for the real game.</param>
+    public GameState Clone(bool keepRecord = true) => new()
     {
         Cards = Cards.Select(c => c.Clone()).ToList(),
         Players = Players.Select(p => p.Clone()).ToArray(),
@@ -376,7 +377,7 @@ public sealed class GameState
         Stack = Stack.Select(s => s.Clone()).ToList(),
         Turn = Turn, ExtraTurns = ExtraTurns, ExtraTurnsTaken = ExtraTurnsTaken, Step = Step, ActivePlayer = ActivePlayer, Rng = Rng,
         GameOver = GameOver, Winner = Winner, WinReason = WinReason, ThisTurn = ThisTurn.Clone(), Attackers = new List<int>(Attackers),
-        NextStackId = NextStackId, Record = Record.Clone(), Delayed = new List<DelayedTrigger>(Delayed),
+        NextStackId = NextStackId, Record = keepRecord ? Record.Clone() : new GameRecord(), Delayed = new List<DelayedTrigger>(Delayed),
         UntilHostLeaves = new(UntilHostLeaves), ReturnWhenDies = new(ReturnWhenDies),
     };
 }

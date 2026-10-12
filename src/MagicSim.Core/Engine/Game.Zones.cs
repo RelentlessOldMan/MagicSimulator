@@ -546,7 +546,7 @@ public sealed partial class Game
         // Cards whose triggers work from the graveyard (Nether Traitor).
         foreach (var p in State.Players)
             foreach (var id in p.Graveyard)
-                if (!sources.Contains(id) && State[id].Triggers.Any(t => t["TriggerZones"] == "Graveyard")) sources.Add(id);
+                if (State[id].Triggers is { Count: > 0 } ts && ts.Any(t => t["TriggerZones"] == "Graveyard") && !sources.Contains(id)) sources.Add(id);
         foreach (var id in sources)
         {
             var src = State[id];
@@ -690,7 +690,17 @@ public sealed partial class Game
 
     public List<ManaSource> AutoSources(int player, int excludeId)
     {
-        var list = new List<ManaSource>();
+        // Within LegalActions the same sources come up for every card: reuse them, minus the card being paid for.
+        // Not when convoke or delve, or a restricted source, makes them depend on what's being paid for.
+        var wanted = excludeId;
+        var cacheable = _autoSourceCache is not null && !(_payingForSpell && _payingFor is { } paying && (paying.HasKeyword("Convoke") || paying.HasKeyword("Delve")));
+        if (cacheable)
+        {
+            if (_autoSourceCache!.TryGetValue(player, out var cached)) return Without(cached, wanted);
+            excludeId = -1;
+        }
+        var restricted = false;
+        var list = new List<ManaSource>(State.Battlefield.Count + 8);
         var p = State.Players[player];
         IEnumerable<Card> candidates = State.BattlefieldCards.Where(c => c.Controller == player)
             .Concat(p.Hand.Select(id => State[id]));
@@ -704,7 +714,7 @@ public sealed partial class Game
                 var fromHand = ab["ActivationZone"] == "Hand";
                 if (fromHand != (c.Zone == Zone.Hand)) continue;
                 if (ab.Cost.Tap && (c.Tapped || IsSickForAbilities(c))) continue;
-                if (ab["RestrictValid"] is { } rv && !ManaRestriction.Allows(this, c, rv, _payingFor, _payingForSpell)) continue;
+                if (ab["RestrictValid"] is { } rv && (restricted = true) && !ManaRestriction.Allows(this, c, rv, _payingFor, _payingForSpell)) continue;
                 if (ab.P.Values.Keys.Any(Presence.Params.Contains) && !Presence.Hold(ab.P, ContextFor(c))) continue;
                 if (ab["Activation"] is { } activation && !Presence.ConditionHolds(activation, ContextFor(c))) continue;
                 var mask = ab.Api == "ManaReflected" ? ReflectedMask(this, c, ab)
@@ -744,8 +754,13 @@ public sealed partial class Game
             var fb = System.Numerics.BitOperations.PopCount((uint)b.Options);
             return fa != fb ? fa.CompareTo(fb) : a.CardId.CompareTo(b.CardId);
         });
-        return list;
+        if (!cacheable) return list;
+        if (!restricted) _autoSourceCache![player] = list;
+        return Without(list, wanted);
     }
+
+    private static List<ManaSource> Without(List<ManaSource> sources, int cardId) =>
+        cardId >= 0 && sources.Exists(s => s.CardId == cardId) ? sources.FindAll(s => s.CardId != cardId) : sources;
 
     /// <summary>
     /// Finds sources to use so the pool can pay <paramref name="cost"/>. Returns the sources and
