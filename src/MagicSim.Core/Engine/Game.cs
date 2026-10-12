@@ -507,6 +507,8 @@ public sealed partial class Game
     private bool CanActivate(Card c, AbilityDef ab, bool sorcerySpeed)
     {
         if (ab["SorcerySpeed"] == "True" && !sorcerySpeed) return false;
+        // Ninjutsu: only while you have an attacking creature (the goldfish never blocks, so attackers are unblocked).
+        if (ab.Api == "Ninjutsu" && State.Step is not (Step.DeclareAttackers or Step.CombatDamage)) return false;
         // A Class gains its levels in order (rule 716.2a).
         if (ab.Api == "ClassLevelUp" && c.ClassLevel != int.Parse(ab["ClassLevel"]!) - 1) return false;
         // Loyalty abilities: sorcery speed, one per planeswalker per turn (rule 606.3).
@@ -675,6 +677,7 @@ public sealed partial class Game
         };
         State.Stack.Add(item);
         Note($"copy {source.Name}" + TargetText(item));
+        Fire(new TriggerEvent(TriggerMode.SpellCopied, CardId: source.Id, Player: controller));
     }
 
     public void ActivateAbility(Card c, int abilityIndex)
@@ -685,6 +688,7 @@ public sealed partial class Game
         if (ab.Cost.Mana.XCount > 0) x = Decider.ChooseX(this, player, c, MaxAffordableX(ab.Cost, c, player));
         var targets = ChooseChainTargets(c, ab, player, x);
         if (ab["Planeswalker"] == "True") c.LoyaltyActivatedTurn = State.Turn;
+        if (ab.IsCycling) Fire(new TriggerEvent(TriggerMode.Cycled, CardId: c.Id, Player: player));
         if (!PayCost(ab.Cost, c, player, x, excludeSourceFromMana: ab.Cost.Tap))
             throw new InvalidOperationException($"could not pay for {c.Name}'s ability after checking it was activatable");
         var item = new StackItem

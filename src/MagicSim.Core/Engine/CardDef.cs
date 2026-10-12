@@ -41,6 +41,8 @@ public sealed class AbilityDef
     public string? TargetMaxExpr { get; set; }
     /// <summary>Cast for its evoke cost: sacrificed when it enters (rule 702.74).</summary>
     public bool Evoke { get; set; }
+    /// <summary>A cycling ability: using it is cycling ("whenever you cycle", rule 702.29).</summary>
+    public bool IsCycling { get; set; }
     /// <summary>Activated mana ability: resolves immediately, doesn't use the stack.</summary>
     public bool IsManaAbility { get; init; }
     /// <summary>Position in its chain (0 = the head) — index into StackItem.ChainTargets.</summary>
@@ -355,6 +357,7 @@ public static partial class CardCompiler
                 return true;
             case "Cycling":
                 AddGenerated(face, ctx, $"AB$ Draw | Cost$ {Part(1)} Discard<1/CARDNAME> | ActivationZone$ Hand | Defined$ You | NumCards$ 1 | SpellDescription$ Cycling");
+                face.Activated[^1].IsCycling = true;
                 return true;
             case "etbCounter":
                 if (Part(1).StartsWith("EACH", StringComparison.Ordinal) || Part(3).Length > 0 && Part(3) != "no Condition")
@@ -424,6 +427,20 @@ public static partial class CardCompiler
                 face.SVars["__Cascade"] = "DB$ Cascade";
                 face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ SpellCast | ValidCard$ Card.Self | TriggerZones$ Stack | Execute$ __Cascade"), ctx));
                 return true;
+            case "Ninjutsu":
+                // "Return an unblocked attacker you control to hand: put this onto the battlefield tapped and attacking."
+                AddGenerated(face, ctx, $"AB$ Ninjutsu | Cost$ {Part(1)} Return<1/Creature.attacking+YouCtrl> | ActivationZone$ Hand | SpellDescription$ Ninjutsu");
+                return true;
+            case "Persist":
+            case "Undying":
+            {
+                // "When this dies, if it had no -1/-1 (+1/+1) counters on it, return it with one."
+                var kind = name == "Persist" ? "M1M1" : "P1P1";
+                face.SVars["__" + name] = $"DB$ ChangeZone | Defined$ TriggeredNewCardLKICopy | Origin$ Graveyard | Destination$ Battlefield | WithCountersType$ {kind} | WithCountersAmount$ 1";
+                face.Triggers.Add(CompileTrigger(new ForgeParams(
+                    $"Mode$ ChangesZone | Origin$ Battlefield | Destination$ Graveyard | ValidCard$ Card.Self+counters_EQ0_{kind} | TriggerZones$ Battlefield | Execute$ __{name}"), ctx));
+                return true;
+            }
             case "Annihilator":
                 return true;   // the defending goldfish opponent has no permanents to sacrifice
             case "TypeCycling":
@@ -431,6 +448,7 @@ public static partial class CardCompiler
                 // "Basic landcycling {1}{B}": search for a card of that type instead of drawing.
                 var type = Part(1) == "Basic" ? "Land.Basic" : Part(1);
                 AddGenerated(face, ctx, $"AB$ ChangeZone | Cost$ {Part(2)} Discard<1/CARDNAME> | ActivationZone$ Hand | Origin$ Library | Destination$ Hand | ChangeType$ {type} | ChangeNum$ 1 | SpellDescription$ {Part(1)}cycling");
+                face.Activated[^1].IsCycling = true;
                 return true;
             }
             case "MayEffectFromOpeningHand":

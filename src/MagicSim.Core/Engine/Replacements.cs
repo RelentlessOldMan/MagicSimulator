@@ -10,6 +10,10 @@ public enum ReplacementKind
     ExileInstead,
     /// <summary>The event doesn't happen; an ability happens instead (draw replacements: Laboratory Maniac).</summary>
     Instead,
+    /// <summary>Creating tokens also creates others (Chatterfang).</summary>
+    AddTokens,
+    /// <summary>Creating tokens creates others instead (Divine Visitation, Academy Manufactor).</summary>
+    ReplaceTokens,
 }
 
 /// <summary>A replacement effect (rule 614) of a permanent or effect object, other than its own "as this enters".</summary>
@@ -23,6 +27,8 @@ public sealed class ReplacementDef
     public string? NewAmount { get; init; }
     /// <summary>For an "instead" replacement: what happens instead.</summary>
     public AbilityDef? With { get; init; }
+    /// <summary>For a token replacement: the tokens created instead or as well.</summary>
+    public List<CardDef>? Tokens { get; init; }
     public string? this[string key] => P[key];
 }
 
@@ -79,6 +85,20 @@ public static class Replacements
                 kind = ReplacementKind.Amount;
                 newAmount = w["VarValue"];
                 break;
+            case "CreateToken" when w.Api == "ReplaceToken" && w["Type"] is "AddToken" or "ReplaceToken" && OnlyKeys(w, "Type", "Amount", "TokenScript"):
+            {
+                // "Also create …" (AddToken) or "create … instead" (ReplaceToken).
+                kind = w["Type"] == "AddToken" ? ReplacementKind.AddTokens : ReplacementKind.ReplaceTokens;
+                var defs = new List<CardDef>();
+                foreach (var script in (w["TokenScript"] ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                    if (ctx.Tokens?.Invoke(script) is { } td) defs.Add(td); else ctx.Need("TokenScript:" + script);
+                if (defs.Count == 0) return false;
+                newAmount = w["Amount"] ?? "1";
+                face.Replacements.Add(new ReplacementDef { P = r, Event = evt, Kind = kind, Face = face, NewAmount = newAmount, Tokens = defs });
+                if (r["ValidToken"] is { } vtok) Filter.Parse(vtok, ctx);
+                Engine.Amount.Parse(newAmount, ctx);
+                return true;
+            }
             case "CreateToken" when w.Api == "ReplaceToken" && w["Type"] == "Amount" && OnlyKeys(w, "Type", "Amount"):
                 kind = ReplacementKind.Amount;
                 newAmount = "ReplaceCount$Amount/" + (w["Amount"] ?? "Twice");
@@ -226,6 +246,28 @@ public static class Replacements
             return (host, r);
         }
         return null;
+    }
+
+    /// <summary>
+    /// The tokens an effect creating <paramref name="n"/> of <paramref name="def"/> really creates: replacing
+    /// (Divine Visitation) and adding (Chatterfang) token replacements, then amount ones (Doubling Season).
+    /// </summary>
+    public static List<(CardDef Def, int Count)> Tokens(Game g, CardDef def, int owner, int n)
+    {
+        var probe = new Card { Id = g.State.Cards.Count, Def = def, Owner = owner, Controller = owner, Zone = Zone.Battlefield, IsToken = true };
+        var result = new List<(CardDef, int)> { (def, n) };
+        foreach (var (host, r) in Active(g, "CreateToken"))
+        {
+            if (r.Kind is not (ReplacementKind.AddTokens or ReplacementKind.ReplaceTokens)) continue;
+            var x = ContextFor(g, host, r, n);
+            if (!CardOk(r, "ValidToken", probe, x) || !PlayerOk(r, "ValidPlayer", owner, x) || !Presence.Hold(r.P, x)) continue;
+            var extra = r.Kind == ReplacementKind.AddTokens ? Effect.EvalAmount(x, r.NewAmount!) : n;
+            if (r.Kind == ReplacementKind.ReplaceTokens) result.Clear();
+            foreach (var t in r.Tokens!) result.Add((t, extra));
+        }
+        return result.Select(t => (t.Item1, Amount(g, "CreateToken", t.Item2,
+            targetCard: new Card { Id = g.State.Cards.Count, Def = t.Item1, Owner = owner, Controller = owner, Zone = Zone.Battlefield, IsToken = true },
+            targetPlayer: owner))).ToList();
     }
 
     /// <summary>Where a card moving to <paramref name="to"/> actually goes (Rest in Peace sends graveyard-bound cards to exile).</summary>

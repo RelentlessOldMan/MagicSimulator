@@ -123,6 +123,11 @@ public sealed class Card
 
     public int CounterCount(string kind) => Counters is not null && Counters.TryGetValue(kind, out var n) ? n : 0;
 
+    /// <summary>Counters it had when it last left the battlefield ("if it had no -1/-1 counters on it": persist).</summary>
+    public Dictionary<string, int>? LeftCounters { get; set; }
+    public int LastKnownCounterCount(string kind) =>
+        Zone == Zone.Battlefield || Counters is not null || LeftCounters is null ? CounterCount(kind) : LeftCounters.GetValueOrDefault(kind);
+
     public bool HasKeyword(string k) =>
         (!LostAbilities && CurrentFace.KeywordNames.Contains(k)) || (TempKeywords?.Contains(k) ?? false) || (StaticKeywords?.Contains(k) ?? false);
 
@@ -151,7 +156,7 @@ public sealed class Card
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
         NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
-        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness,
+        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
         Animations = Animations is null ? null : new List<Animation>(Animations),
@@ -290,6 +295,8 @@ public sealed class GameState
     public int NextStackId { get; set; }
     /// <summary>Cards exiled "until [host] leaves the battlefield": (exiled card, host).</summary>
     public List<(int CardId, int HostId)> UntilHostLeaves { get; set; } = new();
+    /// <summary>Permanents that return to the battlefield tapped when they die or are exiled (earthbend).</summary>
+    public List<int> ReturnWhenDies { get; set; } = new();
     /// <summary>Delayed triggers waiting for their event.</summary>
     public List<DelayedTrigger> Delayed { get; set; } = new();
     /// <summary>Cards seen in the game's main player's hand, cards cast, notes — for per-game output.</summary>
@@ -319,7 +326,7 @@ public sealed class GameState
         Turn = Turn, Step = Step, ActivePlayer = ActivePlayer, Rng = Rng,
         GameOver = GameOver, Winner = Winner, WinReason = WinReason, ThisTurn = ThisTurn.Clone(), Attackers = new List<int>(Attackers),
         NextStackId = NextStackId, Record = Record.Clone(), Delayed = new List<DelayedTrigger>(Delayed),
-        UntilHostLeaves = new(UntilHostLeaves),
+        UntilHostLeaves = new(UntilHostLeaves), ReturnWhenDies = new(ReturnWhenDies),
     };
 }
 

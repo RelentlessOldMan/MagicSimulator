@@ -13,7 +13,7 @@ public static class Keywords
         // Deck-building only.
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
-        "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade",
+        "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade", "Ninjutsu", "Persist", "Undying",
     };
 }
 
@@ -43,6 +43,8 @@ public static class Triggers
         ["DamageDoneOnce"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["TapsForMana"] = new(StringComparer.Ordinal) { "Activator" },
         ["ClassLevelGained"] = new(StringComparer.Ordinal) { "ClassLevel" },
+        ["Cycled"] = new(StringComparer.Ordinal) { },
+        ["SpellCastOrCopy"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer", "ValidAttackers" },
         ["Drawn"] = new(StringComparer.Ordinal) { "Number" },
@@ -89,7 +91,9 @@ public static class Triggers
             || (e.Mode == TriggerMode.ChangesZone && e.CardId == source.Id && e.From == Zone.Battlefield)
             || source.Zone == Zone.Command && (source.IsEffect || t["TriggerZones"] == "Command")
             // "When you cast this spell" (cascade, casualty, …) triggers from the stack.
-            || source.Zone == Zone.Stack && t["TriggerZones"] == "Stack";
+            || source.Zone == Zone.Stack && t["TriggerZones"] == "Stack"
+            // "When you cycle this card" triggers from wherever cycling put it.
+            || e.Mode == TriggerMode.Cycled && e.CardId == source.Id && t["TriggerZones"] is null;
         if (!sourceActive) return false;
         if (!ModeMatches(g, t, source, e, x)) return false;
         return Presence.Hold(t.P, x);
@@ -124,6 +128,10 @@ public static class Triggers
             case "SpellCast" when e.Mode == TriggerMode.SpellCast && t["ActivatorThisTurnCast"] is { } nth:
                 // "Whenever you cast your second spell each turn": this is that spell.
                 if (!Filter.Compare(g.State.ThisTurn.SpellsCast, nth[..2], int.Parse(nth[2..]))) return false;
+                return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
+            case "Cycled" when e.Mode == TriggerMode.Cycled:
+                return CardMatches(g, t, e.CardId, x, source);
+            case "SpellCastOrCopy" when e.Mode is TriggerMode.SpellCast or TriggerMode.SpellCopied:
                 return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
             case "ClassLevelGained" when e.Mode == TriggerMode.ClassLevelGained:
                 return (t["ClassLevel"] is not { } lvl || lvl == e.Amount.ToString()) && CardMatches(g, t, e.CardId, x, source);

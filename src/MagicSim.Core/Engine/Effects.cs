@@ -62,7 +62,8 @@ public static class Effects
         new AnimateAllEffect(), new FightEffect(), new BranchEffect(), new MultiplyCounterEffect(), new SetStateEffect(),
         new UntapAllEffect(), new RemoveCounterEffect(), new ClassLevelUpEffect(), new ProtectionEffect(), new RollDiceEffect(),
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
-        new PoisonEffect(), new ExploreEffect(), new CascadeEffect(),
+        new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
+        new MoveCounterEffect(), new GenericChoiceEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -196,7 +197,7 @@ sealed class ChangeZoneEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "Origin", "Destination", "ChangeType", "ChangeNum", "Hidden", "Mandatory", "Tapped", "LibraryPosition", "Defined",
         "ChangeTypeDesc", "Shuffle", "Reveal", "SelectPrompt", "Reorder", "Optional", "NoReveal", "ShuffleNonMandatory",
-        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "WithCountersType", "WithCountersAmount", "RememberTargets", "Duration", "TargetsWithDefinedController");
+        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "WithCountersType", "WithCountersAmount", "RememberTargets", "Duration", "TargetsWithDefinedController", "RememberLKI");
 
     private static readonly HashSet<string> Zones = new() { "Library", "Hand", "Battlefield", "Graveyard", "Exile" };
 
@@ -235,7 +236,7 @@ sealed class ChangeZoneEffect : Effect
 
     public static void Note(EffectContext x, int id)
     {
-        if (x.Ability["RememberChanged"] == "True") (x.Host.Remembered ??= new()).Add(id);
+        if (x.Ability["RememberChanged"] == "True" || x.Ability["RememberLKI"] == "True") (x.Host.Remembered ??= new()).Add(id);
         if (x.Ability["Imprint"] == "True") (x.Host.Imprinted ??= new()).Add(id);
     }
 

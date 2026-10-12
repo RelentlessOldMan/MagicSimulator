@@ -221,6 +221,20 @@ public class MechanicsTests
         "Name:Venom\nManaCost:0\nTypes:Sorcery\nA:SP$ Poison | Defined$ Player.Opponent | Num$ 3\n",
         "Name:Doubler\nManaCost:0\nTypes:Instant\nA:SP$ Pump | ValidTgts$ Creature | NumAtt$ Double\n",
         "Name:Ghost\nManaCost:9\nTypes:Creature Spirit\nPT:1/1\nA:AB$ GainLife | Cost$ 0 Exile<1/CARDNAME> | ActivationZone$ Graveyard | Defined$ You | LifeAmount$ 2\n",
+        "Name:Kitchen\nManaCost:0\nTypes:Creature Goblin\nPT:2/2\nK:Persist\n",
+        "Name:Ninja\nManaCost:9\nTypes:Creature Ninja\nPT:3/3\nK:Ninjutsu:0\n",
+        "Name:Visitation\nManaCost:0\nTypes:Enchantment\n" +
+        "R:Event$ CreateToken | ActiveZones$ Battlefield | ValidToken$ Creature.YouCtrl | ReplaceWith$ TokenReplace\n" +
+        "SVar:TokenReplace:DB$ ReplaceToken | Type$ ReplaceToken | TokenScript$ r_1_1_warrior\n",
+        "Name:Chatter\nManaCost:0\nTypes:Creature Squirrel\nPT:3/3\n" +
+        "R:Event$ CreateToken | ActiveZones$ Battlefield | ValidToken$ Card.YouCtrl | ReplaceWith$ DBReplace\n" +
+        "SVar:DBReplace:DB$ ReplaceToken | Type$ AddToken | Amount$ 1 | TokenScript$ c_a_treasure_sac\n",
+        "Name:Find\nManaCost:0\nTypes:Sorcery\nA:SP$ Discover | Num$ 2\n",
+        "Name:Pick\nManaCost:0\nTypes:Sorcery\nA:SP$ GenericChoice | Defined$ You | Choices$ DBA,DBB\n" +
+        "SVar:DBA:DB$ GainLife | Defined$ You | LifeAmount$ 1 | SpellDescription$ A\nSVar:DBB:DB$ GainLife | Defined$ You | LifeAmount$ 5 | SpellDescription$ B\n",
+        "Name:Cyc2\nManaCost:9\nTypes:Creature Beast\nPT:1/1\nK:Cycling:0\n" +
+        "T:Mode$ Cycled | ValidCard$ Card.Self | Execute$ TrigGain\nSVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 2\n",
+        "Name:Bend\nManaCost:0\nTypes:Sorcery\nA:SP$ Earthbend | Num$ 2\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -1407,6 +1421,96 @@ public class MechanicsTests
         ResolveAll(g);
         Assert.Equal(42, g.State.Players[Game.Me].Life);
         Assert.Equal(Zone.Exile, ghost.Zone);
+    }
+
+    [Fact]
+    public void PersistReturnsOnce()
+    {
+        var g = Setup(new[] { "Wrath", "Wrath" }, battlefield: new[] { "Kitchen", "Bog", "Bog", "Bog", "Bog" });
+        g.CastSpell(g.State[InHand(g, "Wrath")], 0);
+        ResolveAll(g);
+        var kitchen = g.State.Cards.First(c => c.Name == "Kitchen");
+        Assert.Equal(Zone.Battlefield, kitchen.Zone);
+        Assert.Equal(1, kitchen.Power);
+        g.CastSpell(g.State[InHand(g, "Wrath")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Graveyard, kitchen.Zone);
+    }
+
+    [Fact]
+    public void NinjutsuSwapsWithAnAttacker()
+    {
+        var g = Setup(new[] { "Ninja" }, battlefield: new[] { "Bear" });
+        var bear = OnBattlefield(g, "Bear");
+        g.State.Step = Step.DeclareAttackers;
+        g.State.Attackers.Add(bear.Id);
+        var ninja = g.State[InHand(g, "Ninja")];
+        g.Perform(g.LegalActions(Game.Me).OfType<GameAction.Activate>().Single(a => a.CardId == ninja.Id));
+        ResolveAll(g);
+        Assert.Equal(Zone.Hand, bear.Zone);
+        Assert.Equal(Zone.Battlefield, ninja.Zone);
+        Assert.True(ninja.Tapped);
+        Assert.Contains(ninja.Id, g.State.Attackers);
+    }
+
+    [Fact]
+    public void TokensReplacedOrAdded()
+    {
+        var g = Setup(new[] { "Muster" }, battlefield: new[] { "Visitation", "Bog" });
+        g.CastSpell(g.State[InHand(g, "Muster")], 0);
+        ResolveAll(g);
+        Assert.Equal(2, g.State.BattlefieldCards.Count(c => c.Name == "Warrior Token"));
+        Assert.DoesNotContain(g.State.BattlefieldCards, c => c.Name == "Soldier Token");
+
+        g = Setup(new[] { "Muster" }, battlefield: new[] { "Chatter", "Bog" });
+        g.CastSpell(g.State[InHand(g, "Muster")], 0);
+        ResolveAll(g);
+        Assert.Equal(2, g.State.BattlefieldCards.Count(c => c.Name == "Soldier Token"));
+        Assert.Single(g.State.BattlefieldCards, c => c.Name == "Treasure Token");
+    }
+
+    [Fact]
+    public void DiscoverCastsACheapEnoughCard()
+    {
+        var g = Setup(new[] { "Find" }, library: new[] { "Filler", "Bear" });
+        g.CastSpell(g.State[InHand(g, "Find")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, g.State.Cards.First(c => c.Name == "Bear").Zone);
+    }
+
+    [Fact]
+    public void GenericChoiceLetsYouPick()
+    {
+        var g = Setup(new[] { "Pick" }, decider: new TestDecider { Choose = (game, d) => d.Kind == DecisionKind.Option ? 1 : null });
+        g.CastSpell(g.State[InHand(g, "Pick")], 0);
+        ResolveAll(g);
+        Assert.Equal(45, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void CyclingTriggersWhenYouCycle()
+    {
+        var g = Setup(new[] { "Cyc2" }, library: new[] { "Filler" });
+        g.ActivateAbility(g.State[InHand(g, "Cyc2")], 0);
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void EarthbentLandReturnsWhenItDies()
+    {
+        var g = Setup(new[] { "Bend", "Wrath" }, battlefield: new[] { "Bog", "Bog" });
+        g.CastSpell(g.State[InHand(g, "Bend")], 0);
+        ResolveAll(g);
+        g.CheckStateBasedActions();
+        var land = g.State.BattlefieldCards.Single(c => c.Types.Is(CardType.Creature));
+        Assert.Equal(2, land.Power);
+        Assert.False(g.IsSick(land) && !land.HasKeyword("Haste"));
+        g.CastSpell(g.State[InHand(g, "Wrath")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, land.Zone);
+        Assert.True(land.Tapped);
+        Assert.False(land.Types.Is(CardType.Creature));
     }
 
     [Fact]

@@ -171,7 +171,7 @@ public sealed class Filter
             var n = int.Parse(cm.Groups[2].Value);
             var kind = cm.Groups[3].Value;
             var op = cm.Groups[1].Value;
-            test = (c, pl, x) => c is not null && Compare(c.CounterCount(kind), op, n);
+            test = (c, pl, x) => c is not null && Compare(c.LastKnownCounterCount(kind), op, n);
         }
 
         if (test is null)
@@ -389,7 +389,7 @@ public sealed class Amount
         return Const(0);
     }
 
-    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|Remembered|Imprinted|Sacrificed)\$(CardPower|CardToughness|CardManaCost|Amount|Valid|CardCounters\.\w+)(?: (.+))?$", RegexOptions.Compiled);
+    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|TriggeredSpellAbility|Remembered|Imprinted|Sacrificed)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+)(?: (.+))?$", RegexOptions.Compiled);
 
     /// <summary>"Targeted$CardPower", "Remembered$CardManaCost", "Imprinted$Valid Card.X": a property of defined cards (summed), or how many there are.</summary>
     private static Amount DefinedCardsAmount(string core, Match m, CompileContext ctx)
@@ -403,7 +403,7 @@ public sealed class Amount
             IEnumerable<int> ids = which switch
             {
                 "Targeted" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value),
-                "TriggeredCard" => x.Item.TriggeredCardId is { } id ? new[] { id } : Array.Empty<int>(),
+                "TriggeredCard" or "TriggeredSpellAbility" => x.Item.TriggeredCardId is { } id ? new[] { id } : Array.Empty<int>(),
                 "Remembered" => x.Host.Remembered ?? new List<int>(),
                 "Sacrificed" => x.Item.Sacrificed ?? new List<int>(),
                 _ => x.Host.Imprinted ?? new List<int>(),
@@ -415,7 +415,7 @@ public sealed class Amount
             _ when prop.StartsWith("CardCounters.", StringComparison.Ordinal) => new(core, x => Cards(x).Sum(c => c.CounterCount(prop[13..]))),
             "CardPower" => new(core, x => Cards(x).Sum(c => c.LastKnownPower)),
             "CardToughness" => new(core, x => Cards(x).Sum(c => c.LastKnownToughness)),
-            "CardManaCost" => new(core, x => Cards(x).Sum(c => c.CurrentFace.ManaCost.ManaValue)),
+            "CardManaCost" or "CardManaCostLKI" => new(core, x => Cards(x).Sum(c => c.CurrentFace.ManaCost.ManaValue)),
             "Amount" => new(core, x => Cards(x).Count),
             _ => new(core, x => Cards(x).Count(c => filter!.MatchesCard(c, x))),
         };
@@ -459,6 +459,8 @@ public static class Defined
 
     public static void ValidateCards(string? text, CompileContext ctx)
     {
+        // "Valid Creature.YouCtrl": every permanent matching the filter.
+        if (text is not null && text.StartsWith("Valid ", StringComparison.Ordinal)) { Filter.Parse(text[6..], ctx); return; }
         if (text is not null && !CardRefs.Contains(text)) ctx.Need("DefinedCard:" + text);
     }
 
@@ -484,6 +486,11 @@ public static class Defined
 
     public static List<int> Cards(string? text, EffectContext x, string fallback = "Self")
     {
+        if (text is not null && text.StartsWith("Valid ", StringComparison.Ordinal))
+        {
+            var filter = Effect.FilterFor(x.SVarFace, text[6..]);
+            return x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
+        }
         return (text ?? fallback) switch
         {
             "Self" => new() { x.Item.SourceId },

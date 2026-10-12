@@ -42,6 +42,7 @@ public sealed partial class Game
         {
             c.LeftPower = c.Power;
             c.LeftToughness = c.Toughness;
+            c.LeftCounters = c.Counters;
             c.Tapped = false;
             c.Damage = 0;
             c.PowerBonus = 0;
@@ -278,6 +279,14 @@ public sealed partial class Game
     private void CheckEffectLinks()
     {
         foreach (var c in State.BattlefieldCards) EndAnimations(c, "links");
+        // Earthbent lands come back tapped when they die or are exiled.
+        foreach (var id in State.ReturnWhenDies.ToList())
+        {
+            var c = State[id];
+            if (c.Zone == Zone.Battlefield) continue;
+            State.ReturnWhenDies.Remove(id);
+            if (c.Zone is Zone.Graveyard or Zone.Exile) MoveTo(c, Zone.Battlefield, tapped: true);
+        }
         // Cards exiled until a permanent leaves come back when it does.
         foreach (var (card, host) in State.UntilHostLeaves.ToList())
         {
@@ -472,7 +481,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);

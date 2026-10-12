@@ -304,10 +304,13 @@ sealed class CascadeEffect : Effect
     public override string Api => "Cascade";
     public override IReadOnlySet<string> Params { get; } = P();
 
-    public override void Resolve(EffectContext x)
+    public override void Resolve(EffectContext x) => Reveal(x, x.Host.CurrentFace.ManaCost.ManaValue - 1, toHandInstead: false);
+
+    /// <summary>Exiles from the top until a nonland card with mana value at most <paramref name="maxValue"/>; casts it free (or puts it in hand); the rest go to the bottom.</summary>
+    public static void Reveal(EffectContext x, int maxValue, bool toHandInstead)
     {
         var lib = x.S.Players[x.Controller].Library;
-        var mv = x.Host.CurrentFace.ManaCost.ManaValue;
+        var mv = maxValue + 1;
         var exiled = new List<Card>();
         Card? hit = null;
         while (lib.Count > 0)
@@ -324,8 +327,119 @@ sealed class CascadeEffect : Effect
             x.Game.CastFromEffect(hit, free: true, exileAfter: false);
             exiled.Remove(hit);
         }
+        else if (hit is not null && toHandInstead)
+        {
+            x.Game.MoveTo(hit, Zone.Hand);   // discover: or put it into your hand
+            exiled.Remove(hit);
+        }
         x.S.Rng.Shuffle(exiled);
         foreach (var c in exiled)
             if (c.Zone == Zone.Exile) x.Game.MoveTo(c, Zone.Library, position: -1);
+    }
+}
+
+/// <summary>Discover N (rule 701.57): like cascade with mana value N or less, and the card may go to hand instead.</summary>
+sealed class DiscoverEffect : Effect
+{
+    public override string Api => "Discover";
+    public override IReadOnlySet<string> Params { get; } = P("Num");
+    public override void Validate(AbilityDef ab, CompileContext ctx) => ValidateAmount(ab, "Num", ctx);
+    public override void Resolve(EffectContext x) => CascadeEffect.Reveal(x, Amount(x, x.Ability["Num"], 0), toHandInstead: true);
+}
+
+/// <summary>Ninjutsu: the cost returned an attacker; this enters tapped and attacking.</summary>
+sealed class NinjutsuEffect : Effect
+{
+    public override string Api => "Ninjutsu";
+    public override IReadOnlySet<string> Params { get; } = P();
+
+    public override void Resolve(EffectContext x)
+    {
+        if (x.Host.Zone != Zone.Hand) return;
+        x.Game.MoveTo(x.Host, Zone.Battlefield, tapped: true);
+        if (x.Host.Zone == Zone.Battlefield) x.S.Attackers.Add(x.Host.Id);
+    }
+}
+
+/// <summary>
+/// Earthbend N: target land you control becomes a 0/0 creature with haste that's still a land, gets N
+/// +1/+1 counters, and returns to the battlefield tapped when it dies or is exiled.
+/// </summary>
+sealed class EarthbendEffect : Effect
+{
+    public override string Api => "Earthbend";
+    public override IReadOnlySet<string> Params { get; } = P("Num");
+
+    private static readonly AbilityDef Becomes = new()
+    {
+        P = new Forge.ForgeParams("DB$ Animate | Types$ Creature | Keywords$ Haste | Duration$ Permanent"), Api = "Animate", Kind = AbilityKind.Sub,
+    };
+
+    public override void Validate(AbilityDef ab, CompileContext ctx) => ValidateAmount(ab, "Num", ctx);
+
+    public override void Resolve(EffectContext x)
+    {
+        var lands = x.S.BattlefieldCards.Where(c => c.Controller == x.Controller && c.Types.Is(CardType.Land)).Select(c => c.Id).ToList();
+        if (lands.Count == 0) return;
+        var land = x.S[x.Game.Decider.ChooseCards(x.Game, x.Controller, Choice.Generic, x.Host, lands, 1, 1)[0]];
+        (land.Animations ??= new()).Add(new Animation(Becomes, "Creature", 0, 0, null, "Permanent", x.Host.Id, x.S.Turn));
+        x.Game.StaticsApplied = true;
+        x.Game.PutCounters(land, "P1P1", Amount(x, x.Ability["Num"], 1));
+        if (!x.S.ReturnWhenDies.Contains(land.Id)) x.S.ReturnWhenDies.Add(land.Id);
+        x.Game.Note($"  earthbend {land.Name}");
+    }
+}
+
+/// <summary>Moves counters from one permanent to another.</summary>
+sealed class MoveCounterEffect : Effect
+{
+    public override string Api => "MoveCounter";
+    public override IReadOnlySet<string> Params { get; } = P("Source", "Defined", "CounterType", "CounterNum");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        Defined.ValidateCards(ab["Source"], ctx);
+        Defined.ValidateCards(ab["Defined"], ctx);
+        if (ab["CounterType"] is null) ctx.Need("MoveCounter.CounterType:none");
+        if (ab["CounterNum"] is { } n && n != "All") ValidateAmount(ab, "CounterNum", ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var kind = x.Ability["CounterType"]!;
+        var from = Defined.Cards(x.Ability["Source"] ?? "Self", x).Select(id => x.S[id]).FirstOrDefault();
+        var to = Defined.Cards(x.Ability["Defined"], x, "Targeted").Select(id => x.S[id]).FirstOrDefault(c => c.Zone == Zone.Battlefield);
+        if (from is null || to is null || from.Id == to.Id) return;
+        var n = Math.Min(from.CounterCount(kind), x.Ability["CounterNum"] == "All" ? int.MaxValue : Amount(x, x.Ability["CounterNum"], 1));
+        if (n <= 0) return;
+        from.Counters![kind] -= n;
+        x.Game.PutCounters(to, kind, n);
+    }
+}
+
+/// <summary>"Choose one: …" where you choose at resolution (GenericChoice with Defined$ You).</summary>
+sealed class GenericChoiceEffect : Effect
+{
+    public override string Api => "GenericChoice";
+    public override IReadOnlySet<string> Params { get; } = P("Choices", "Defined", "ShowChoice", "AILogic", "FallbackAbility");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Defined"] is { } d && d != "You") { ctx.Need("GenericChoice.Defined:" + d); return; }
+        if (ab["FallbackAbility"] is not null) ctx.Need("GenericChoice.FallbackAbility");
+        foreach (var name in (ab["Choices"] ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!ctx.Face.SVars.TryGetValue(name, out var body)) { ctx.Need("SVarMissing:" + name); continue; }
+            if (CardCompiler.CompileAbility(new Forge.ForgeParams(body), ctx, AbilityKind.Sub, CardCompiler.SideChainIndex) is { } chain)
+                (ab.SideChains ??= new())[name] = chain;
+        }
+        if (ab.SideChains is null) ctx.Need("GenericChoice:NoChoices");
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var options = x.Ability.SideChains!.ToList();
+        var pick = options.Count == 1 ? 0 : x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, options.Select(o => o.Value.Description).ToList());
+        x.Game.RunSideChain(x, options[pick].Value);
     }
 }
