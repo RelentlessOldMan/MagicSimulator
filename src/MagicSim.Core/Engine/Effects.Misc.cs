@@ -443,3 +443,49 @@ sealed class GenericChoiceEffect : Effect
         x.Game.RunSideChain(x, options[pick].Value);
     }
 }
+
+/// <summary>"After this phase, there is an additional combat phase [followed by an additional main phase]."</summary>
+sealed class AddPhaseEffect : Effect
+{
+    public override string Api => "AddPhase";
+    public override IReadOnlySet<string> Params { get; } = P("ExtraPhase", "AfterPhase", "FollowedBy");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["ExtraPhase"] != "Combat") ctx.Need("AddPhase.ExtraPhase:" + ab["ExtraPhase"]);
+        if (ab["AfterPhase"] is { } a && a != "EndCombat") ctx.Need("AddPhase.AfterPhase:" + a);
+        if (ab["FollowedBy"] is { } f && f != "Main2") ctx.Need("AddPhase.FollowedBy:" + f);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var steps = new List<Step> { Step.BeginCombat, Step.DeclareAttackers, Step.CombatDamage, Step.EndCombat };
+        if (x.Ability["FollowedBy"] == "Main2") steps.Add(Step.Main2);
+        // "After this phase": the main phase it was used in, or this combat's end.
+        var after = x.Ability["AfterPhase"] == "EndCombat" || x.S.Step is Step.BeginCombat or Step.DeclareAttackers or Step.CombatDamage
+            ? Step.EndCombat : x.S.Step;
+        x.S.ThisTurn.ExtraPhases.Add((after, steps.ToArray()));
+    }
+}
+
+/// <summary>"Take an extra turn after this one."</summary>
+sealed class AddTurnEffect : Effect
+{
+    public override string Api => "AddTurn";
+    public override IReadOnlySet<string> Params { get; } = P("NumTurns", "Defined");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        ValidateAmount(ab, "NumTurns", ctx);
+        Defined.ValidatePlayers(ab["Defined"], ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        // Only the simulated player's turns are played; extra turns for a goldfish opponent change nothing.
+        var players = x.Ability["Defined"] is { } d ? Defined.Players(d, x) : x.Ability.TargetFilter is not null ? Defined.Players("Targeted", x) : new() { x.Controller };
+        if (!players.Contains(Game.Me)) return;
+        x.S.ExtraTurns += Amount(x, x.Ability["NumTurns"], 1);
+        x.Game.Note($"  extra turn(s): {x.S.ExtraTurns}");
+    }
+}

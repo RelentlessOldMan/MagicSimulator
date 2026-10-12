@@ -2,12 +2,13 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.6** (2026-10-11).
+Status: **draft v0.6.1** (2026-10-11).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
 - v0.5: card behavior comes from Forge scripts (§6), and Cardinator 1.6.32 has shipped (§5).
 - v0.6: the card index gains `edhrec_rank` (§2). It is additive, so older readers are unaffected.
+- v0.6.1: states that turn numbers in results are rounds, so extra turns don't add to them (§3). No field changes.
 - Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
@@ -188,6 +189,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
 
 **Field meanings:**
 - **Win rates:** `win_by_turn` and `no_win` are fractions of all games. The win values plus `no_win` add up to 1.
+- **Turn numbers are rounds:** turn N is your Nth turn not counting extra turns. A win during an extra turn taken after turn 3 counts as turn 3, and `--max-turn` caps rounds. Only `mana_by_turn` has one entry per turn actually taken, extra turns included.
 - **`mean_turn` / `median_turn`:** counted over winning games only.
 - **`mean_turn_capped`:** counted over all games, with each game that wasn't won counted as `max_turn + 1`. Use this to rank variants: a deck that wins less often but faster can't look better than it is.
 - **`win_lines`:** fractions of the wins. The keys come from the deck profile.

@@ -92,9 +92,9 @@ public static class Runner
         {
             Variant = variant, Game = gameIndex, Mulligan = mull.ToString(), Seat = seat,
             Mulligans = g.MulligansTaken, Kept = g.KeptHand.Count, HandKept = g.KeptHand.ToList(), Bottomed = g.Bottomed.ToList(),
-            Won = won, WinTurn = won ? s.Turn : null, WinLine = won ? s.WinReason : null, FailReason = fail,
+            Won = won, WinTurn = won ? s.Round : null, WinLine = won ? s.WinReason : null, FailReason = fail,
             LifeEnd = me.Life, OpponentsLifeEnd = s.Players.Where(p => p.Index != Game.Me).Select(p => p.Life).ToList(),
-            TurnsPlayed = s.Turn, ManaByTurn = s.Record.ManaByTurn.ToList(), LifePaid = me.LifePaidTotal,
+            TurnsPlayed = s.Round, ManaByTurn = s.Record.ManaByTurn.ToList(), LifePaid = me.LifePaidTotal,
             StormMax = s.Record.StormMax, Notes = s.Record.Notes.ToList(), Seen = seen, Cast = s.Record.Cast.ToList(),
             WinCards = won ? s.Record.WinCards.ToList() : new(),
         };

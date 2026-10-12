@@ -63,7 +63,7 @@ public static class Effects
         new UntapAllEffect(), new RemoveCounterEffect(), new ClassLevelUpEffect(), new ProtectionEffect(), new RollDiceEffect(),
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
-        new MoveCounterEffect(), new GenericChoiceEffect(),
+        new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;

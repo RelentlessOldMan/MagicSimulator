@@ -209,9 +209,25 @@ public static class Triggers
 /// <summary>"Condition…$" parameters that decide whether one link of an ability chain happens.</summary>
 public static class Conditions
 {
+    /// <summary>Forge phase names: Main1, Main2, BeginCombat, …, "End of Turn".</summary>
+    public static bool PhaseIs(Step step, string name) => name switch
+    {
+        "Main1" => step == Step.Main1,
+        "Main2" => step == Step.Main2,
+        "Upkeep" => step == Step.Upkeep,
+        "Draw" => step == Step.Draw,
+        "BeginCombat" => step == Step.BeginCombat,
+        "Declare Attackers" or "DeclareAttackers" => step == Step.DeclareAttackers,
+        "CombatDamage" or "Combat Damage" => step == Step.CombatDamage,
+        "EndCombat" => step == Step.EndCombat,
+        "End of Turn" or "End Of Turn" => step == Step.End,
+        _ => false,
+    };
+
     public static readonly HashSet<string> Params = new(StringComparer.Ordinal)
     {
         "ConditionCheckSVar", "ConditionSVarCompare", "ConditionDefined", "ConditionPresent", "ConditionCompare", "ConditionDescription",
+        "ConditionPhases", "ConditionPlayerTurn", "ConditionFirstCombat",
     };
 
     public static void Validate(AbilityDef ab, CompileContext ctx)
@@ -233,6 +249,9 @@ public static class Conditions
     public static bool Hold(EffectContext x)
     {
         var ab = x.Ability;
+        if (ab["ConditionPhases"] is { } phases && !phases.Split(',').Any(ph => PhaseIs(x.S.Step, ph.Trim()))) return false;
+        if (ab["ConditionPlayerTurn"] == "True" && x.S.ActivePlayer != x.Controller) return false;
+        if (ab["ConditionFirstCombat"] == "True" && x.S.ThisTurn.Combats > 1) return false;
         var ctx = new CompileContext { Face = x.SVarFace, Missing = new() };
         if (ab["ConditionCheckSVar"] is { } sv)
         {

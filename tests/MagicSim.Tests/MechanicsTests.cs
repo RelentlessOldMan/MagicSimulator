@@ -235,6 +235,9 @@ public class MechanicsTests
         "Name:Cyc2\nManaCost:9\nTypes:Creature Beast\nPT:1/1\nK:Cycling:0\n" +
         "T:Mode$ Cycled | ValidCard$ Card.Self | Execute$ TrigGain\nSVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 2\n",
         "Name:Bend\nManaCost:0\nTypes:Sorcery\nA:SP$ Earthbend | Num$ 2\n",
+        "Name:Watcher\nManaCost:0\nTypes:Creature Human\nPT:2/2\nK:Vigilance\n",
+        "Name:Assault\nManaCost:0\nTypes:Sorcery\nA:SP$ AddPhase | ExtraPhase$ Combat | FollowedBy$ Main2\n",
+        "Name:Warp\nManaCost:0\nTypes:Sorcery\nA:SP$ AddTurn | Defined$ You | NumTurns$ 1\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -1511,6 +1514,30 @@ public class MechanicsTests
         Assert.Equal(Zone.Battlefield, land.Zone);
         Assert.True(land.Tapped);
         Assert.False(land.Types.Is(CardType.Creature));
+    }
+
+    [Fact]
+    public void AdditionalCombatPhase()
+    {
+        var g = Setup(new[] { "Assault" }, battlefield: new[] { "Watcher" }, library: new[] { "Filler", "Filler" });
+        g.CastSpell(g.State[InHand(g, "Assault")], 0);
+        ResolveAll(g);
+        g.ResumeTurn();
+        Assert.Equal(36, g.State.Players.Where(p => p.Index != Game.Me).Min(p => p.Life));
+    }
+
+    [Fact]
+    public void ExtraTurnIsTheSameRound()
+    {
+        var g = Setup(new[] { "Warp" }, battlefield: new[] { "Bear" }, library: new[] { "Filler", "Filler", "Filler" });
+        g.CastSpell(g.State[InHand(g, "Warp")], 0);
+        ResolveAll(g);
+        Assert.Equal(1, g.State.ExtraTurns);
+        g.ResumeTurn();
+        g.RunExtraTurns();
+        Assert.Equal(2, g.State.Turn);
+        Assert.Equal(1, g.State.Round);
+        Assert.Equal(36, g.State.Players.Where(p => p.Index != Game.Me).Min(p => p.Life));   // the Bear attacked in both turns
     }
 
     [Fact]

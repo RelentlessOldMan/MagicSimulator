@@ -146,8 +146,11 @@ public sealed partial class Game
     public void PlayGame()
     {
         Mulligans();
-        while (!State.GameOver && State.Turn < Settings.MaxTurn)
+        while (!State.GameOver && State.Round < Settings.MaxTurn)
+        {
             RunTurn();
+            RunExtraTurns();
+        }
     }
 
     /// <summary>Steps of a turn in order. Each runs its start-of-step actions, then priority (except untap and cleanup).</summary>
@@ -156,6 +159,17 @@ public sealed partial class Game
         Step.Untap, Step.Upkeep, Step.Draw, Step.Main1, Step.BeginCombat, Step.DeclareAttackers, Step.CombatDamage,
         Step.EndCombat, Step.Main2, Step.End, Step.Cleanup,
     };
+
+    /// <summary>Takes any extra turns due: right after this one (goldfish opponents' turns don't matter), in the same round.</summary>
+    public void RunExtraTurns()
+    {
+        while (!State.GameOver && State.ExtraTurns > 0)
+        {
+            State.ExtraTurns--;
+            State.ExtraTurnsTaken++;
+            RunTurn();
+        }
+    }
 
     public void RunTurn()
     {
@@ -176,13 +190,18 @@ public sealed partial class Game
     public void ResumeTurn()
     {
         PriorityLoop();
-        RunStepsFrom(Array.IndexOf(TurnSteps, State.Step) + 1);
+        var current = State.Step;
+        RunExtraPhasesAfter(current);
+        RunStepsFrom(Array.IndexOf(TurnSteps, current) + 1);
     }
 
     private void RunStepsFrom(int index)
     {
         for (var i = index; i < TurnSteps.Length && !State.GameOver; i++)
+        {
             ExecuteStep(TurnSteps[i]);
+            RunExtraPhasesAfter(TurnSteps[i]);
+        }
         if (State.Step == Step.Cleanup || State.GameOver) EndTurnBookkeeping();
     }
 
@@ -191,6 +210,23 @@ public sealed partial class Game
         if (State.Record.ManaByTurn.Count >= State.Turn) return;
         State.Record.ManaByTurn.Add(State.ThisTurn.MaxManaSeen);
         State.Record.StormMax = Math.Max(State.Record.StormMax, State.ThisTurn.SpellsCast);
+    }
+
+    /// <summary>Additional phases set up to follow <paramref name="after"/> (extra combats, rule 505.1a).</summary>
+    private void RunExtraPhasesAfter(Step after)
+    {
+        while (!State.GameOver && State.ThisTurn.ExtraPhases.FindIndex(p => p.After == after) is var i and >= 0)
+        {
+            var steps = State.ThisTurn.ExtraPhases[i].Steps;
+            State.ThisTurn.ExtraPhases.RemoveAt(i);
+            Note("additional phase: " + string.Join(", ", steps));
+            foreach (var step in steps)
+            {
+                if (State.GameOver) break;
+                ExecuteStep(step);
+                RunExtraPhasesAfter(step);
+            }
+        }
     }
 
     private void ExecuteStep(Step step)
@@ -217,7 +253,10 @@ public sealed partial class Game
                     PutCounters(saga, "LORE", 1);
                 FirePhase("Main1");
                 break;
-            case Step.BeginCombat: FirePhase("BeginCombat"); break;
+            case Step.BeginCombat:
+                State.ThisTurn.Combats++;
+                FirePhase("BeginCombat");
+                break;
             case Step.DeclareAttackers: DeclareAttackers(); break;
             case Step.CombatDamage: CombatDamage(); break;
             case Step.EndCombat:

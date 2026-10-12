@@ -265,6 +265,10 @@ public sealed class TurnInfo
     public List<(int CardId, string Action)> AtEndStep { get; set; } = new();
     /// <summary>Control changes that end at cleanup: (card id, controller to return it to).</summary>
     public List<(int CardId, int Controller)> ControlUntilEot { get; set; } = new();
+    /// <summary>Extra phases to run after a step: (after which step, the steps to run).</summary>
+    public List<(Step After, Step[] Steps)> ExtraPhases { get; set; } = new();
+    /// <summary>Combat phases so far this turn.</summary>
+    public int Combats { get; set; }
     /// <summary>Life each player gained this turn.</summary>
     public Dictionary<int, int> LifeGained { get; set; } = new();
     /// <summary>Cards each player drew this turn.</summary>
@@ -272,6 +276,7 @@ public sealed class TurnInfo
     public TurnInfo Clone() => new()
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
+        ExtraPhases = new(ExtraPhases), Combats = Combats,
         CardsDrawn = new(CardsDrawn),
     };
 }
@@ -284,6 +289,11 @@ public sealed class GameState
     public List<int> Battlefield { get; set; } = new();
     public List<StackItem> Stack { get; set; } = new();     // last = top
     public int Turn { get; set; }
+    /// <summary>Extra turns the simulated player will take after this one, and has taken.</summary>
+    public int ExtraTurns { get; set; }
+    public int ExtraTurnsTaken { get; set; }
+    /// <summary>The round: turns taken not counting extra turns. Results are reported in rounds.</summary>
+    public int Round => Turn - ExtraTurnsTaken;
     public Step Step { get; set; }
     public int ActivePlayer { get; set; }
     public Rng Rng;
@@ -323,7 +333,7 @@ public sealed class GameState
         Players = Players.Select(p => p.Clone()).ToArray(),
         Battlefield = new List<int>(Battlefield),
         Stack = Stack.Select(s => s.Clone()).ToList(),
-        Turn = Turn, Step = Step, ActivePlayer = ActivePlayer, Rng = Rng,
+        Turn = Turn, ExtraTurns = ExtraTurns, ExtraTurnsTaken = ExtraTurnsTaken, Step = Step, ActivePlayer = ActivePlayer, Rng = Rng,
         GameOver = GameOver, Winner = Winner, WinReason = WinReason, ThisTurn = ThisTurn.Clone(), Attackers = new List<int>(Attackers),
         NextStackId = NextStackId, Record = Record.Clone(), Delayed = new List<DelayedTrigger>(Delayed),
         UntilHostLeaves = new(UntilHostLeaves), ReturnWhenDies = new(ReturnWhenDies),

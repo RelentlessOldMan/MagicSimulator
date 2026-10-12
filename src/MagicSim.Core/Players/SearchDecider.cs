@@ -141,7 +141,9 @@ public sealed class SearchDecider : ChoiceDecider
         }
         var hand = me.Hand.Sum(id => s[id].IsBlank ? 0.3 : 1.0);
         var deckRisk = me.Library.Count < 5 ? (5 - me.Library.Count) * 20 : 0;
-        return 4 * oppDamage + 12 * manaSources + 5 * hand + 3 * power + 7 * otherPermanents + 0.5 * Math.Min(me.Life, 40) - deckRisk;
+        // An extra turn still to come is worth about a turn's worth of development.
+        var extraTurns = 30 * s.ExtraTurns;
+        return 4 * oppDamage + 12 * manaSources + 5 * hand + 3 * power + 7 * otherPermanents + 0.5 * Math.Min(me.Life, 40) - deckRisk + extraTurns;
     }
 
     private static bool IsOneShotMana(Card c) =>
