@@ -133,6 +133,11 @@ public sealed partial class Game
             State.Record.Seen.Add(State[id].Name);
         }
         Note($"kept {me.Hand.Count}: {string.Join(", ", KeptHand)}" + (Bottomed.Count > 0 ? $" (bottomed {string.Join(", ", Bottomed)})" : ""));
+        // "If this card is in your opening hand, you may begin the game with it on the battlefield" (Leylines).
+        foreach (var id in me.Hand.ToList())
+            if (State[id].CurrentFace.OpeningHand is { } opening && !State[id].IsBlank
+                && Decider.ChooseYesNo(this, Me, State[id], $"use {State[id].Name} from your opening hand?"))
+                RunChain(new StackItem { SourceId = id, Ability = opening, Controller = Me, Description = State[id].Name + " (opening hand)" });
     }
 
     private int BottomCount(int mulligans) => Math.Max(0, Settings.FreeFirstMulligan ? mulligans - 1 : mulligans);
@@ -198,7 +203,10 @@ public sealed partial class Game
                 foreach (var c in State.BattlefieldCards)
                     if (c.Controller == Me && !c.CurrentFace.DoesntUntap) c.Tapped = false;
                 return;   // no priority in the untap step
-            case Step.Upkeep: FirePhase("Upkeep"); break;
+            case Step.Upkeep:
+                Suspended();
+                FirePhase("Upkeep");
+                break;
             case Step.Draw:
                 if (!(State.Turn == 1 && Settings.OnThePlay)) Draw(Me, 1);
                 FirePhase("Draw");
@@ -245,11 +253,30 @@ public sealed partial class Game
         foreach (var p in State.Players) p.Pool.Clear();   // mana empties between steps (rule 500.4)
     }
 
+    /// <summary>
+    /// Suspend (rule 702.62): at the beginning of your upkeep remove a time counter from each of your
+    /// suspended cards; when the last is removed, cast it without paying its mana cost.
+    /// </summary>
+    private void Suspended()
+    {
+        foreach (var c in State.Players[State.ActivePlayer].Exile.Select(id => State[id]).Where(c => c.Suspended).ToList())
+        {
+            if (c.CounterCount("TIME") > 0) c.Counters!["TIME"]--;
+            Note($"{c.Name}: {c.CounterCount("TIME")} time counter(s) left");
+            if (c.CounterCount("TIME") > 0) continue;
+            c.Suspended = false;
+            c.Counters = null;
+            if (!CanCastFromEffect(c, free: true)) continue;
+            CastFromEffect(c, free: true, exileAfter: false);
+            if (c.Types.Is(CardType.Creature)) (c.TempKeywords ??= new HashSet<string>(StringComparer.Ordinal)).Add("Haste");
+        }
+    }
+
     private void DeclareAttackers()
     {
         Statics.Apply(this);
         var candidates = State.BattlefieldCards
-            .Where(c => c.Controller == Me && c.Types.Is(CardType.Creature) && !c.Tapped && !IsSick(c) && !c.HasKeyword("Defender"))
+            .Where(c => c.Controller == Me && c.Types.Is(CardType.Creature) && !c.Tapped && !IsSick(c) && !c.HasKeyword("Defender") && !Statics.CantAttack(this, c))
             .Select(c => c.Id).ToList();
         var attackers = candidates.Count == 0 ? new List<int>() : Decider.ChooseAttackers(this, Me, candidates);
         if (attackers.Count == 0) return;
@@ -471,7 +498,8 @@ public sealed partial class Game
     private bool HasLegalTargets(Card source, AbilityDef head)
     {
         foreach (var ab in head.Chain())
-            if (ab.TargetFilter is not null && ab.TargetMin > 0 && TargetCandidates(source, ab, source.Controller).Count < ab.TargetMin)
+            if (ab.TargetFilter is not null && TargetBounds(source, ab, source.Controller, 0).Min is var min and > 0
+                && TargetCandidates(source, ab, source.Controller).Count < min)
                 return false;
         return true;
     }
@@ -553,7 +581,7 @@ public sealed partial class Game
         var item = new StackItem
         {
             Id = State.NextStackId++, SourceId = c.Id, Ability = ability, Controller = player, IsSpell = true, X = x,
-            ChainTargets = ChooseChainTargets(c, ability, player), Description = c.Name + (from == Zone.Graveyard ? " (flashback)" : ""),
+            ChainTargets = ChooseChainTargets(c, ability, player, x), Description = c.Name + (from == Zone.Graveyard ? " (flashback)" : ""),
             ExileAfter = from == Zone.Graveyard || _castExileAfter,
         };
         _payingForSpell = true;
@@ -635,7 +663,7 @@ public sealed partial class Game
         var player = c.Controller;
         var x = 0;
         if (ab.Cost.Mana.XCount > 0) x = Decider.ChooseX(this, player, c, MaxAffordableX(ab.Cost, c, player));
-        var targets = ChooseChainTargets(c, ab, player);
+        var targets = ChooseChainTargets(c, ab, player, x);
         if (ab["Planeswalker"] == "True") c.LoyaltyActivatedTurn = State.Turn;
         if (!PayCost(ab.Cost, c, player, x, excludeSourceFromMana: ab.Cost.Tap))
             throw new InvalidOperationException($"could not pay for {c.Name}'s ability after checking it was activatable");
@@ -659,6 +687,13 @@ public sealed partial class Game
         var all = item.ChainTargets.SelectMany(t => t).ToList();
         return all.Count == 0 ? "" : " → " + string.Join(", ", all);
     }
+
+    /// <summary>"When this enters, if its evoke cost was paid, its controller sacrifices it."</summary>
+    private static readonly TriggerDef EvokeTrigger = new()
+    {
+        P = new Forge.ForgeParams("Mode$ Evoked"), Mode = "Evoked",
+        Execute = new AbilityDef { P = new Forge.ForgeParams("DB$ Sacrifice"), Api = "Sacrifice", Kind = AbilityKind.TriggerEffect },
+    };
 
     /// <summary>A permanent spell's "ability": resolving puts the card onto the battlefield.</summary>
     public static readonly AbilityDef PermanentSpell = new()
@@ -696,15 +731,25 @@ public sealed partial class Game
         return list;
     }
 
-    private List<List<TargetRef>> ChooseChainTargets(Card source, AbilityDef head, int controller)
+    /// <summary>How many targets an ability takes: its TargetMin$/TargetMax$, worked out now if they're expressions.</summary>
+    public (int Min, int Max) TargetBounds(Card source, AbilityDef ab, int controller, int x)
+    {
+        if (ab.TargetMinExpr is null && ab.TargetMaxExpr is null) return (ab.TargetMin, ab.TargetMax);
+        var ctx = new EffectContext { Game = this, Ability = ab, Item = new StackItem { SourceId = source.Id, Ability = ab, Controller = controller, X = x } };
+        int Eval(string e) => e == "OneEach" ? State.Players.Count(p => !p.Lost) : Math.Max(0, Effect.EvalAmount(ctx, e));
+        return (ab.TargetMinExpr is { } mn ? Eval(mn) : ab.TargetMin, ab.TargetMaxExpr is { } mx ? Eval(mx) : ab.TargetMax);
+    }
+
+    private List<List<TargetRef>> ChooseChainTargets(Card source, AbilityDef head, int controller, int x = 0)
     {
         var result = new List<List<TargetRef>>();
         foreach (var ab in head.Chain())
         {
             if (ab.TargetFilter is null) { result.Add(new()); continue; }
             var candidates = TargetCandidates(source, ab, controller);
-            var max = Math.Min(ab.TargetMax, candidates.Count);
-            var min = Math.Min(ab.TargetMin, max);
+            var (tmin, tmax) = TargetBounds(source, ab, controller, x);
+            var max = Math.Min(tmax, candidates.Count);
+            var min = Math.Min(tmin, max);
             result.Add(max == 0 ? new() : Decider.ChooseTargets(this, controller, source, ab, candidates, min, max));
         }
         return result;
@@ -736,6 +781,8 @@ public sealed partial class Game
                 source.AttachedTo = to;
             }
             MoveTo(source, Zone.Battlefield);
+            if (item.Ability.Evoke && source.Zone == Zone.Battlefield)
+                _pending.Add(new PendingTrigger(source.Id, EvokeTrigger, new TriggerEvent(TriggerMode.Immediate, CardId: source.Id), source.Controller));
             return;
         }
         if (TargetsAllGone(item))

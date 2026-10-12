@@ -13,7 +13,7 @@ public static class Keywords
         // Deck-building only.
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
-        "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class",
+        "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke",
     };
 }
 
@@ -43,7 +43,7 @@ public static class Triggers
         ["DamageDoneOnce"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["TapsForMana"] = new(StringComparer.Ordinal) { "Activator" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
-        ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer" },
+        ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer", "ValidAttackers" },
         ["Drawn"] = new(StringComparer.Ordinal) { "Number" },
         ["LandPlayed"] = new(StringComparer.Ordinal) { },
         ["Discarded"] = new(StringComparer.Ordinal) { },
@@ -141,7 +141,8 @@ public static class Triggers
                 }
                 return true;
             case "AttackersDeclared" when e.Mode == TriggerMode.AttackersDeclared:
-                return e.Player == source.Controller;
+                if (e.Player != source.Controller) return false;
+                return t["ValidAttackers"] is not { } va || g.State.Attackers.Any(a => FilterOf(x, va).MatchesCard(g.State[a], x));
             case "Drawn" when e.Mode == TriggerMode.Drawn && t["Number"] is { } number:
                 return int.TryParse(number, out var nthCard) && e.Amount == nthCard && CardMatches(g, t, e.CardId, x, source);
             case "Drawn" when e.Mode == TriggerMode.Drawn:

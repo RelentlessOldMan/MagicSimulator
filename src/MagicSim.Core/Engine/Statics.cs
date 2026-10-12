@@ -116,6 +116,7 @@ public static class Statics
         "Amount", "ValidCard", "Type", "EffectZone", "Activator",
     };
 
+    private static readonly HashSet<string> CantAttackParams = new(StringComparer.Ordinal) { "ValidCard", "EffectZone" };
     private static readonly HashSet<string> CastWithFlashParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Caster" };
     private static readonly HashSet<string> PanharmoniconParams = new(StringComparer.Ordinal) { "ValidMode", "ValidCard", "ValidCause", "Destination" };
 
@@ -129,8 +130,8 @@ public static class Statics
         if (NoEffectInGoldfish.Contains(s.Mode)) return;
         // "Your opponents can't cast spells / activate abilities": goldfish opponents never do anyway.
         if (s.Mode is "CantBeCast" or "CantBeActivated" && (s["Caster"] ?? s["Activator"]) == "Opponent") return;
-        // "Creatures can't attack you unless …" (Ghostly Prison): goldfish opponents never attack.
-        if (s.Mode == "CantAttackUnless" && s["Target"] is "You" or "You,Planeswalker.YouCtrl") return;
+        // "Creatures can't attack you unless …" (Ghostly Prison), "can't attack you": goldfish opponents never attack.
+        if (s.Mode is "CantAttackUnless" or "CantAttack" && s["Target"] is "You" or "You,Planeswalker.YouCtrl") return;
         HashSet<string> own;
         switch (s.Mode)
         {
@@ -149,6 +150,10 @@ public static class Statics
                 if (s["Caster"] is { } caster && caster is not ("You" or "Player")) ctx.Need("CastWithFlash.Caster:" + caster);
                 if (s["EffectZone"] is { } fez && fez is not ("Battlefield" or "Command" or "All")) ctx.Need("EffectZone:" + fez);
                 if (s["ValidCard"] is { } fvc) Filter.Parse(fvc, ctx);
+                break;
+            case "CantAttack":
+                own = CantAttackParams;
+                if (s["ValidCard"] is { } cvc) Filter.Parse(cvc, ctx);
                 break;
             case "Panharmonicon":
                 own = PanharmoniconParams;
@@ -415,6 +420,19 @@ public static class Statics
         if (st["Affected"] is not { } a) return Array.Empty<Player>();
         var filter = Effect.FilterFor(x.SVarFace, a);
         return g.State.Players.Where(p => !p.Lost && filter.MatchesPlayer(p.Index, x));
+    }
+
+    /// <summary>"[This creature] can't attack" (Pacifism-style auras, "CARDNAME can't attack").</summary>
+    public static bool CantAttack(Game g, Card creature)
+    {
+        foreach (var source in Sources(g))
+            foreach (var st in source.Statics)
+            {
+                if (st.Mode != "CantAttack" || st["Target"] is not null) continue;
+                var x = ContextFor(g, source, st);
+                if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(creature, x)) && Presence.Hold(st.P, x)) return true;
+            }
+        return false;
     }
 
     /// <summary>"You may cast [spells] as though they had flash."</summary>

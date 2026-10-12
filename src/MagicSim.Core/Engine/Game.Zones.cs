@@ -295,6 +295,10 @@ public sealed partial class Game
     }
 
     /// <summary>Taps a permanent, firing "whenever this becomes tapped" triggers.</summary>
+    /// <summary>Puts a reflexive or other immediate trigger ("when you do, …") into the queue.</summary>
+    public void AddImmediateTrigger(Card host, TriggerDef trigger, int controller, List<int>? remembered) =>
+        _pending.Add(new PendingTrigger(host.Id, trigger, new TriggerEvent(TriggerMode.Immediate, CardId: host.Id), controller, remembered));
+
     /// <summary>Sacrifices a permanent: it goes to its owner's graveyard and "whenever you sacrifice" triggers fire.</summary>
     public void Sacrifice(Card c)
     {
@@ -441,7 +445,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);
@@ -499,6 +503,7 @@ public sealed partial class Game
                 Sacrificed = pt.Event.Mode == TriggerMode.Sacrificed && pt.Event.CardId is { } sac ? new() { sac } : null,
                 TriggeredPlayer = pt.Event.Player, ChainTargets = ChooseChainTargets(src, exec, pt.Controller), DelayRemembered = pt.DelayRemembered,
                 TriggerAmount = pt.Event.Amount,
+                TriggeredSourceId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.CardId : null,
                 Description = $"{src.Name} trigger",
             };
             // "Static" triggers (bookkeeping such as forgetting an imprinted card) happen at once, without the stack.

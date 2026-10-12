@@ -61,6 +61,7 @@ public static class Effects
         new DelayedTriggerEffect(), new RepeatEachEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
         new AnimateAllEffect(), new FightEffect(), new BranchEffect(), new MultiplyCounterEffect(), new SetStateEffect(),
         new UntapAllEffect(), new RemoveCounterEffect(), new ClassLevelUpEffect(), new ProtectionEffect(), new RollDiceEffect(),
+        new ImmediateTriggerEffect(), new SuspendEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -100,11 +101,12 @@ sealed class ManaEffect : Effect
 {
     public override string Api => "Mana";
     public override IReadOnlySet<string> Params { get; } =
-        P(new[] { "Produced", "Amount", "ActivationZone", "RestrictValid" }.Concat(Presence.Params).ToArray());
+        P(new[] { "Produced", "Amount", "ActivationZone", "RestrictValid", "Defined" }.Concat(Presence.Params).ToArray());
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         ValidateAmount(ab, "Amount", ctx);
+        Defined.ValidatePlayers(ab["Defined"], ctx);
         Presence.Validate(ab.P, ctx);
         if (ab.P.Values.Keys.Any(Presence.Params.Contains) && ab.Kind != AbilityKind.Activated) ctx.Need("Mana.IsPresent+NotActivated");
         if (ab["RestrictValid"] is { } rv)
@@ -122,7 +124,8 @@ sealed class ManaEffect : Effect
     {
         var amount = Amount(x, x.Ability["Amount"], 1);
         var produced = x.Ability["Produced"]!;
-        var p = x.S.Players[x.Controller];
+        // Defined$: who gets the mana (e.g. the player who tapped a land, for TapsForMana triggers).
+        var p = x.S.Players[x.Ability["Defined"] is { } d ? Defined.Players(d, x).FirstOrDefault(x.Controller) : x.Controller];
         if (FixedMana(produced) is { } several)   // "U B": one of each
         {
             foreach (var c in several) p.Pool.Add(c, amount);
@@ -191,7 +194,7 @@ sealed class ChangeZoneEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "Origin", "Destination", "ChangeType", "ChangeNum", "Hidden", "Mandatory", "Tapped", "LibraryPosition", "Defined",
         "ChangeTypeDesc", "Shuffle", "Reveal", "SelectPrompt", "Reorder", "Optional", "NoReveal", "ShuffleNonMandatory",
-        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "WithCountersType", "WithCountersAmount");
+        "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "WithCountersType", "WithCountersAmount", "RememberTargets");
 
     private static readonly HashSet<string> Zones = new() { "Library", "Hand", "Battlefield", "Graveyard", "Exile" };
 
@@ -247,6 +250,7 @@ sealed class ChangeZoneEffect : Effect
         if (ab["Defined"] is not null || ab.TargetFilter is not null)
         {
             var ids = ab["Defined"] is { } d ? Defined.Cards(d, x) : Defined.Cards("Targeted", x);
+            if (ab["RememberTargets"] == "True") (x.Host.Remembered ??= new()).AddRange(Defined.Cards("Targeted", x));
             foreach (var id in ids)
             {
                 var c = x.S[id];

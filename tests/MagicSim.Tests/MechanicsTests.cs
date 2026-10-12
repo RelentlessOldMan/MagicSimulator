@@ -193,6 +193,16 @@ public class MechanicsTests
         "Name:Dice\nManaCost:0\nTypes:Sorcery\nA:SP$ RollDice | Sides$ 20 | ResultSubAbilities$ 1-9:DBLow,10-20:DBHigh\n" +
         "SVar:DBLow:DB$ GainLife | Defined$ You | LifeAmount$ 1\nSVar:DBHigh:DB$ GainLife | Defined$ You | LifeAmount$ 2\n",
         "Name:Prism\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseC\nSVar:ChooseC:DB$ ChooseColor | Defined$ You\nA:AB$ Mana | Cost$ T | Produced$ Chosen\n",
+        "Name:Scatter\nManaCost:X\nTypes:Sorcery\nA:SP$ Pump | ValidTgts$ Creature | TargetMin$ 0 | TargetMax$ X | NumAtt$ +1\nSVar:X:Count$xPaid\n",
+        "Name:Vision\nManaCost:no cost\nTypes:Sorcery\nK:Suspend:2:0\nA:SP$ Draw | NumCards$ 3 | Defined$ You\n",
+        "Name:Elemental\nManaCost:9\nTypes:Creature Elemental\nPT:3/3\nK:Evoke:0\n" +
+        "T:Mode$ ChangesZone | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ TrigGain\nSVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 3\n",
+        "Name:Seeker\nManaCost:9\nTypes:Creature Beast\nPT:1/1\nK:TypeCycling:Basic:0\n",
+        "Name:Leyline\nManaCost:4\nTypes:Enchantment\nK:MayEffectFromOpeningHand:FromHand\n" +
+        "SVar:FromHand:DB$ ChangeZone | Defined$ Self | Origin$ Hand | Destination$ Battlefield\n",
+        "Name:Reflex\nManaCost:0\nTypes:Sorcery\nA:SP$ GainLife | Defined$ You | LifeAmount$ 1 | SubAbility$ DBRef\n" +
+        "SVar:DBRef:DB$ ImmediateTrigger | Cost$ PayLife<3> | Execute$ TrigDraw\nSVar:TrigDraw:DB$ Draw | Defined$ You | NumCards$ 2\n",
+        "Name:Chains\nManaCost:0\nTypes:Enchantment Aura\nK:Enchant:Creature\nS:Mode$ CantAttack | ValidCard$ Creature.EnchantedBy\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -1159,6 +1169,89 @@ public class MechanicsTests
         ResolveAll(g);
         Assert.Equal(ManaColor.G, OnBattlefield(g, "Prism").ChosenColor);
         Assert.True(g.CanCast(g.State[InHand(g, "Sprout")], 0));
+    }
+
+    [Fact]
+    public void TargetCountCanDependOnX()
+    {
+        var g = Setup(new[] { "Scatter" });
+        var card = g.State[InHand(g, "Scatter")];
+        Assert.Equal((0, 2), g.TargetBounds(card, card.CurrentFace.SpellAbilities[0], Game.Me, 2));
+    }
+
+    [Fact]
+    public void SuspendCastsTheCardWhenTheLastTimeCounterIsRemoved()
+    {
+        var g = Setup(new[] { "Vision" }, library: Enumerable.Repeat("Filler", 8).ToArray());
+        var vision = g.State[InHand(g, "Vision")];
+        var suspend = g.LegalActions(Game.Me).OfType<GameAction.Activate>().Single(a => a.CardId == vision.Id);
+        g.Perform(suspend);
+        ResolveAll(g);
+        Assert.Equal(Zone.Exile, vision.Zone);
+        Assert.Equal(2, vision.CounterCount("TIME"));
+        g.ResumeTurn();
+        g.RunTurn();
+        Assert.Equal(1, vision.CounterCount("TIME"));
+        g.RunTurn();
+        Assert.Equal(Zone.Graveyard, vision.Zone);
+        Assert.True(g.State.Players[Game.Me].Hand.Count >= 3 + 2);   // two draw steps and the spell
+    }
+
+    [Fact]
+    public void EvokedCreatureIsSacrificedButItsEnterTriggerHappens()
+    {
+        var g = Setup(new[] { "Elemental" });
+        var card = g.State[InHand(g, "Elemental")];
+        var evoke = card.CurrentFace.SpellAbilities.FindIndex(a => a.Evoke);
+        Assert.False(g.CanCast(card, 0));
+        g.CastSpell(card, evoke);
+        ResolveAll(g);
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+        Assert.Equal(Zone.Graveyard, card.Zone);
+    }
+
+    [Fact]
+    public void TypecyclingFindsABasicLand()
+    {
+        var g = Setup(new[] { "Seeker" }, library: new[] { "Filler", "Bog" });
+        g.ActivateAbility(g.State[InHand(g, "Seeker")], 0);
+        ResolveAll(g);
+        Assert.Equal("Bog", g.State[g.State.Players[Game.Me].Hand.Single()].Name);
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Seeker").Zone);
+    }
+
+    [Fact]
+    public void LeylineStartsOnTheBattlefield()
+    {
+        var g = Setup(new[] { "Leyline" });
+        g.KeepCurrentHand();
+        Assert.Equal(Zone.Battlefield, g.State.Cards.First(c => c.Name == "Leyline").Zone);
+    }
+
+    [Fact]
+    public void ReflexiveTriggerAfterPaying()
+    {
+        var g = Setup(new[] { "Reflex" }, library: new[] { "Filler", "Filler" });
+        g.CastSpell(g.State[InHand(g, "Reflex")], 0);
+        ResolveAll(g);
+        Assert.Equal(38, g.State.Players[Game.Me].Life);
+        Assert.Equal(2, g.State.Players[Game.Me].Hand.Count);
+    }
+
+    [Fact]
+    public void EnchantedCreatureCantAttack()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Bear", "Chains" }, library: new[] { "Filler", "Filler" });
+        OnBattlefield(g, "Chains").AttachedTo = OnBattlefield(g, "Bear").Id;
+        g.ResumeTurn();
+        Assert.All(g.State.Players, p => Assert.Equal(40, p.Life));
+    }
+
+    [Fact]
+    public void TestCardNamesAreUnique()
+    {
+        var names = Scripts.Select(script => script.Split('\n')[0]).ToList();
+        Assert.Equal(names.Count, names.Distinct().Count());
     }
 
     [Fact]

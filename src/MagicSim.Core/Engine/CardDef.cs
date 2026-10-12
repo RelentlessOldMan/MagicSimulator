@@ -36,6 +36,11 @@ public sealed class AbilityDef
     public Filter? TargetFilter { get; set; }
     public int TargetMin { get; set; }
     public int TargetMax { get; set; }
+    /// <summary>"TargetMax$ X": a number of targets worked out when the ability is put on the stack ("OneEach" = one per player).</summary>
+    public string? TargetMinExpr { get; set; }
+    public string? TargetMaxExpr { get; set; }
+    /// <summary>Cast for its evoke cost: sacrificed when it enters (rule 702.74).</summary>
+    public bool Evoke { get; set; }
     /// <summary>Activated mana ability: resolves immediately, doesn't use the stack.</summary>
     public bool IsManaAbility { get; init; }
     /// <summary>Position in its chain (0 = the head) — index into StackItem.ChainTargets.</summary>
@@ -129,6 +134,10 @@ public sealed class FaceDef
     public List<TriggerDef> Chapters { get; } = new();
     /// <summary>Replacement effects that modify events (damage, tokens, counters, zone changes).</summary>
     public List<ReplacementDef> Replacements { get; } = new();
+    /// <summary>Evoke cost: added as an alternative-cost cast once the spell abilities are known.</summary>
+    public Cost? EvokeCost { get; set; }
+    /// <summary>"If this is in your opening hand, you may …" (Leylines).</summary>
+    public AbilityDef? OpeningHand { get; set; }
     /// <summary>A Class's levels 2+: what each level gives (rule 716).</summary>
     public List<(int Level, Grants Grants)> ClassLevels { get; } = new();
 
@@ -278,6 +287,15 @@ public static partial class CardCompiler
         foreach (var s in f.Statics) face.Statics.Add(CompileStatic(s, ctx));
 
         foreach (var st in face.Statics.Where(st => st.Mode == "AlternativeCost").ToList()) AddAlternativeCost(face, st, ctx);
+        if (face.EvokeCost is { } evoke)
+            foreach (var ab in face.SpellAbilities.Where(a => a.Api == "PermanentSpell" && a.AltCost is null).ToList())
+            {
+                var alt = ab.CloneHead();
+                alt.AltCost = evoke;
+                alt.Evoke = true;
+                alt.ModeDescription = "Evoke";
+                face.SpellAbilities.Add(alt);
+            }
         foreach (var r in f.Replacements) CompileReplacement(r, face, ctx);
         // "*" power/toughness needs a characteristic-defining ability to say what it is.
         if (starPT && !face.Statics.Any(st => st.Mode == "Continuous" && st["CharacteristicDefining"] == "True")) ctx.Need("PT:*");
@@ -397,6 +415,31 @@ public static partial class CardCompiler
                 return true;
             case "Annihilator":
                 return true;   // the defending goldfish opponent has no permanents to sacrifice
+            case "TypeCycling":
+            {
+                // "Basic landcycling {1}{B}": search for a card of that type instead of drawing.
+                var type = Part(1) == "Basic" ? "Land.Basic" : Part(1);
+                AddGenerated(face, ctx, $"AB$ ChangeZone | Cost$ {Part(2)} Discard<1/CARDNAME> | ActivationZone$ Hand | Origin$ Library | Destination$ Hand | ChangeType$ {type} | ChangeNum$ 1 | SpellDescription$ {Part(1)}cycling");
+                return true;
+            }
+            case "MayEffectFromOpeningHand":
+                if (!face.SVars.TryGetValue(Part(1), out var openingBody)) { ctx.Need("SVarMissing:" + Part(1)); return true; }
+                face.OpeningHand = CompileAbility(new ForgeParams(openingBody), ctx, AbilityKind.Sub, 0);
+                return true;
+            case "Suspend":
+                // Exile it from your hand with N time counters; remove one each upkeep; cast it free when the last is removed.
+                if (!int.TryParse(Part(1), out _)) { ctx.Need("Keyword:Suspend+" + Part(1)); return true; }
+                AddGenerated(face, ctx, $"AB$ Suspend | Cost$ {Part(2)} | ActivationZone$ Hand | TimeCounters$ {Part(1)}"
+                    + (face.Types.Is(CardType.Instant) || face.KeywordNames.Contains("Flash") ? "" : " | SorcerySpeed$ True") + " | SpellDescription$ Suspend");
+                return true;
+            case "Evoke":
+            {
+                var cost = ParseCost(Part(1), ctx);
+                if (face.SpellAbilities.Count == 0)
+                    face.SpellAbilities.Add(new AbilityDef { P = new ForgeParams("SP$ PermanentSpell"), Api = "PermanentSpell", Kind = AbilityKind.Spell });
+                face.EvokeCost = cost;
+                return true;
+            }
             case "Changeling":
                 face.Types = new TypeLine { Types = face.Types.Types, Supers = face.Types.Supers, Subtypes = face.Types.Subtypes, AllCreatureTypes = true };
                 return true;
@@ -561,8 +604,11 @@ public static partial class CardCompiler
         if (p["ValidTgts"] is { } vt)
         {
             ab.TargetFilter = Filter.Parse(vt, ctx);
-            ab.TargetMin = p["TargetMin"] is { } mn ? Amount.ParseConst(mn, ctx) : 1;
-            ab.TargetMax = p["TargetMax"] is { } mx ? Amount.ParseConst(mx, ctx) : 1;
+            ab.TargetMin = TargetCount(p["TargetMin"], ctx, out var minExpr) ?? 1;
+            ab.TargetMax = TargetCount(p["TargetMax"], ctx, out var maxExpr) ?? 1;
+            ab.TargetMinExpr = minExpr;
+            ab.TargetMaxExpr = maxExpr;
+            if (maxExpr is not null && p["TargetMin"] is null) ab.TargetMin = 0;
         }
 
         if (p["OptionalDecider"] is { } od && od is not ("You" or "TargetedController" or "Targeted" or "Opponent" or "TriggeredActivator"))
@@ -591,6 +637,17 @@ public static partial class CardCompiler
             else ctx.Need("SVarMissing:" + subName);
         }
         return ab;
+    }
+
+    /// <summary>A constant number of targets, or null with <paramref name="expr"/> set for one worked out later.</summary>
+    private static int? TargetCount(string? text, CompileContext ctx, out string? expr)
+    {
+        expr = null;
+        if (text is null) return null;
+        if (int.TryParse(text, out var n)) return n;
+        expr = text;
+        if (text != "OneEach") Amount.Parse(text, ctx);
+        return 0;
     }
 
     /// <summary>Splits a cost on spaces, keeping "Sac&lt;1/CARDNAME/this token&gt;" whole.</summary>

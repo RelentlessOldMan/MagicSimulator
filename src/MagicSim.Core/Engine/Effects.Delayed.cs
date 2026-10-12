@@ -105,3 +105,50 @@ sealed class RepeatEachEffect : Effect
         }
     }
 }
+
+/// <summary>"When you do, …" (reflexive trigger, rule 603.12): optionally pays Cost$, then triggers Execute$ at once.</summary>
+sealed class ImmediateTriggerEffect : Effect
+{
+    public override string Api => "ImmediateTrigger";
+    public override IReadOnlySet<string> Params { get; } = P("Execute", "TriggerDescription", "RememberObjects", "OptionalDecider");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Execute"] is not { } name || !ctx.Face.SVars.TryGetValue(name, out var body)) { ctx.Need("ImmediateTrigger:NoExecute"); return; }
+        var exec = CardCompiler.CompileAbility(new ForgeParams(body), ctx, AbilityKind.TriggerEffect, 0);
+        var modes = exec is null ? null : CardCompiler.ExpandModes(exec, ctx);
+        ab.Delayed = new TriggerDef { P = new ForgeParams("Mode$ Immediate"), Mode = "Immediate", Execute = modes?.FirstOrDefault(), Modes = modes, Face = ctx.Face };
+        Defined.ValidateCards(ab["RememberObjects"], ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var ab = x.Ability;
+        // "You may pay …. When you do, …" (on a spell or activated ability, Cost$ is what it cost to use)
+        if (ab["Cost"] is not null && ab.Kind is AbilityKind.Sub or AbilityKind.TriggerEffect)
+        {
+            if (!x.Game.CanPayCost(ab.Cost, x.Host, x.Controller, 0, excludeSourceFromMana: false)) return;
+            if (!x.Game.Decider.ChooseYesNo(x.Game, x.Controller, x.Host, $"pay for {x.Host.Name}?")) return;
+            if (!x.Game.PayCost(ab.Cost, x.Host, x.Controller, 0, excludeSourceFromMana: false)) return;
+        }
+        var remembered = ab["RememberObjects"] is { } ro ? Defined.Cards(ro, x) : null;
+        x.Game.AddImmediateTrigger(x.Host, ab.Delayed!, x.Controller, remembered);
+    }
+}
+
+/// <summary>Suspends the card from hand: exiled with N time counters (rule 702.62).</summary>
+sealed class SuspendEffect : Effect
+{
+    public override string Api => "Suspend";
+    public override IReadOnlySet<string> Params { get; } = P("TimeCounters");
+
+    public override void Resolve(EffectContext x)
+    {
+        var c = x.Host;
+        if (c.Zone != Zone.Hand) return;
+        x.Game.MoveTo(c, Zone.Exile);
+        Game.AddCounters(c, "TIME", int.Parse(x.Ability["TimeCounters"]!));
+        c.Suspended = true;
+        x.Game.Note($"  suspend {c.Name} ({c.CounterCount("TIME")} time counters)");
+    }
+}

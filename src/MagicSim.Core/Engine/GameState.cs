@@ -55,6 +55,8 @@ public sealed class Card
     public int? TokenToughness { get; init; }
     /// <summary>Triggers with a per-turn limit (ActivationLimit$) and the turn and times each last triggered.</summary>
     public Dictionary<TriggerDef, (int Turn, int Count)>? TriggerUses { get; set; }
+    /// <summary>Suspended in exile (rule 702.62).</summary>
+    public bool Suspended { get; set; }
     /// <summary>A Class's current level (rule 716).</summary>
     public int ClassLevel { get; set; } = 1;
     /// <summary>The turn this permanent last entered the battlefield.</summary>
@@ -146,7 +148,7 @@ public sealed class Card
         Remembered = Remembered is null ? null : new List<int>(Remembered),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel,
+        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended,
         TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
@@ -227,6 +229,8 @@ public sealed class StackItem
     /// <summary>For triggers: the player involved (e.g. the player dealt damage), if any.</summary>
     public int? TriggeredPlayer { get; init; }
     public string Description { get; init; } = "";
+    /// <summary>For a damage trigger: the source that dealt the damage (TriggeredSource).</summary>
+    public int? TriggeredSourceId { get; init; }
     /// <summary>For a trigger: the amount of its event (damage dealt, life gained, cards moved).</summary>
     public int TriggerAmount { get; init; }
     /// <summary>Permanents sacrificed to pay for this (or that triggered it): "Sacrificed".</summary>
@@ -239,6 +243,7 @@ public sealed class StackItem
     public StackItem Clone() => new()
     {
         DelayRemembered = DelayRemembered, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount, Sacrificed = Sacrificed,
+        TriggeredSourceId = TriggeredSourceId,
         Id = Id, SourceId = SourceId, Ability = Ability, Controller = Controller, IsSpell = IsSpell,
         ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, TriggeredPlayer = TriggeredPlayer, Description = Description, ExileAfter = ExileAfter,
     };

@@ -447,7 +447,8 @@ public static class Defined
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
     {
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
-        "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
+        "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards",
+        "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
     };
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
@@ -489,8 +490,9 @@ public static class Defined
             "ParentTarget" => x.ParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value).ToList(),
             "Remembered" or "RememberedLKI" or "RememberedCard" => x.Host.Remembered?.ToList() ?? new(),
             "DelayTriggerRemembered" or "DelayTriggerRememberedLKI" => x.Item.DelayRemembered?.ToList() ?? new(),
-            "TriggeredCard" or "TriggeredCardLKICopy" or "TriggeredNewCardLKICopy" =>
+            "TriggeredCard" or "TriggeredCardLKICopy" or "TriggeredNewCardLKICopy" or "TriggeredAttacker" or "TriggeredAttackerLKICopy" =>
                 x.Item.TriggeredCardId is { } id ? new() { id } : new(),
+            "TriggeredSource" or "TriggeredSourceLKICopy" => x.Item.TriggeredSourceId is { } ts ? new() { ts } : new(),
             "Enchanted" or "Equipped" => x.Host.AttachedTo >= 0 ? new() { x.Host.AttachedTo } : new(),
             "Imprinted" => x.Host.Imprinted?.ToList() ?? new(),
             "Sacrificed" or "SacrificedCards" => x.Item.Sacrificed?.ToList() ?? new(),
