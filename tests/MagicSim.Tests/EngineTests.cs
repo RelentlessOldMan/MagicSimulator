@@ -31,6 +31,7 @@ public class EngineTests
         "Name:Drain\nManaCost:2 B B\nTypes:Sorcery\nK:Storm\n" +
         "A:SP$ LoseLife | ValidTgts$ Player | LifeAmount$ 2 | SubAbility$ Gain\nSVar:Gain:DB$ GainLife | Defined$ You | LifeAmount$ 2\n",
         "Name:Bear\nManaCost:2\nTypes:Creature Bear\nPT:2/2\nK:Haste\n",
+        "Name:Chant\nManaCost:0\nTypes:Artifact\nA:AB$ GainLife | Cost$ 0 | Defined$ You | LifeAmount$ 1\n",
     };
 
     private static readonly ForgeLibrary Lib = ForgeLibrary.FromScripts(Scripts);
@@ -249,5 +250,15 @@ public class EngineTests
             if (quiet) Assert.Equal(new[] { Step.Main1, Step.Main2 }, steps.Order());
             else Assert.Contains(Step.End, steps);   // the instant could be cast at the end step
         }
+    }
+
+    [Fact]
+    public void ActionLimitStopsALoop()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Action && TestDecider.Named(game, dec, "Chant") is var i and >= 0 ? i : null };
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Chant" }, decider: d);
+        g.ActionLimit = 10;
+        g.ResumeTurn();
+        Assert.InRange(g.State.Players[Game.Me].Life - g.Settings.StartingLife, 1, 10);
     }
 }

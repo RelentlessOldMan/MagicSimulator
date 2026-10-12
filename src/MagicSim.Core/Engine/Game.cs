@@ -47,6 +47,12 @@ public sealed partial class Game
     /// <summary>Whether continuous effects were in force at the last <see cref="Statics.Apply"/> (lets it skip work when there are none).</summary>
     public bool StaticsApplied { get; set; }
 
+    /// <summary>Actions taken so far this turn (capped by <see cref="GameSettings.MaxActionsPerTurn"/> and <see cref="ActionLimit"/>).</summary>
+    public int ActionsThisTurn => _actionsThisTurn;
+
+    /// <summary>Stop acting this turn once <see cref="ActionsThisTurn"/> reaches this (search rollouts use it so a loop can't run on).</summary>
+    public int ActionLimit { get; set; } = int.MaxValue;
+
     public Game(GameState state, GameSettings settings, IDecider decider)
     {
         State = state;
@@ -404,7 +410,7 @@ public sealed partial class Game
                 OnCheckpoint(this);
 
             var legal = LegalActions(Me);
-            GameAction action = _actionsThisTurn >= Settings.MaxActionsPerTurn
+            GameAction action = _actionsThisTurn >= Math.Min(Settings.MaxActionsPerTurn, ActionLimit)
                 ? GameAction.PassAction
                 : Decider.ChooseAction(this, Me, legal);
             _actionsThisTurn++;

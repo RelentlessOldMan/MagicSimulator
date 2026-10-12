@@ -180,7 +180,7 @@ public static class Program
         return new RunOptions
         {
             Games = Int("--games", 10000), Seed = seed, MaxTurn = Int("--max-turn", 20), Mulligans = mulls, Seats = seats, Tables = tables,
-            Rollouts = Int("--rollouts", 6, 0), Threads = Int("--threads", Environment.ProcessorCount),
+            Rollouts = Int("--rollouts", 2, 0), Threads = Int("--threads", Environment.ProcessorCount),
         };
     }
 

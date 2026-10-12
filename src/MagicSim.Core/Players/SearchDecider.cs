@@ -5,7 +5,7 @@ namespace MagicSim.Core.Players;
 public sealed class SearchSettings
 {
     /// <summary>Rollouts per option at each searched decision.</summary>
-    public int Rollouts { get; init; } = 6;
+    public int Rollouts { get; init; } = 2;
     /// <summary>Outside the main phases, with nothing on the stack, just pass (a goldfish has nothing to answer there).</summary>
     public bool QuietSteps { get; init; } = true;
     /// <summary>Mulligan policy A: how many determinized turn-1 tries a hand gets.</summary>
@@ -133,6 +133,7 @@ public sealed class SearchDecider : ChoiceDecider
         var policy = new RolloutPolicy(rolloutSeed) { QuietStepsPass = true };
         var replay = new ReplayDecider(script, policy, game => game.Determinize(Game.Me, ref determinizeRng));
         var sim = _snapshot!.Clone(replay, keepRecord: false);
+        sim.ActionLimit = sim.ActionsThisTurn + RolloutActions;
         // The player could stop at any main-phase checkpoint, so a rollout is worth the best
         // checkpoint it reached (after its scripted choices), not just where random play ended up.
         var best = double.NegativeInfinity;
@@ -142,6 +143,12 @@ public sealed class SearchDecider : ChoiceDecider
     }
 
     private const double WinScore = 1e6;
+
+    /// <summary>
+    /// How many actions a rollout may take. Random play that runs this long is almost always going round a loop
+    /// (sacrifice, return, sacrifice…), and every step of it costs more as the board fills with tokens.
+    /// </summary>
+    private const int RolloutActions = 100;
 
     /// <summary>End-of-turn score: winning dwarfs everything; otherwise resources and damage.</summary>
     public static double Evaluate(Game g)

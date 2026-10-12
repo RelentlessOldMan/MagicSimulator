@@ -13,7 +13,7 @@ public sealed class RunOptions
     public IReadOnlyList<string> Seats { get; init; } = new[] { "play", "draw" };
     /// <summary>Table sizes: "1v1" (one goldfish opponent) and "1v1v1" (two).</summary>
     public IReadOnlyList<string> Tables { get; init; } = new[] { "1v1", "1v1v1" };
-    public int Rollouts { get; init; } = 6;
+    public int Rollouts { get; init; } = 2;
     public int Threads { get; init; } = Environment.ProcessorCount;
 }
 
