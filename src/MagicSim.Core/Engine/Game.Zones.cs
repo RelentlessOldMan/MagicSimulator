@@ -66,6 +66,9 @@ public sealed partial class Game
             c.Controller = c.Owner;
             c.RegenShields = 0;
             c.ExileIfLeaves = false;
+            // Soulbond: the pair ends when either leaves.
+            if (c.PairedWith is { } partner && State[partner].PairedWith == c.Id) State[partner].PairedWith = null;
+            c.PairedWith = null;
             c.PaidOptional = null;
             c.Escaped = false;
             c.ColorsSpent = 0;
@@ -566,7 +569,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);

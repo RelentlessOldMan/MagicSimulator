@@ -89,7 +89,7 @@ public sealed class Filter
     }
 
     private static bool IsKnownBase(string b) =>
-        b is "Card" or "Permanent" or "Spell" or "Player" or "Opponent" or "You" or "Any" or "Creature" or "Planeswalker"
+        b is "Card" or "Permanent" or "Spell" or "Player" or "Opponent" or "You" or "Any" or "Creature" or "Planeswalker" or "Emblem"
         || CardTypes.ContainsKey(b) || KnownSubtypes.Contains(b);
 
     private static Prop? ParseProp(string p, CompileContext ctx)
@@ -108,6 +108,9 @@ public sealed class Filter
             "ChosenCtrl" => (c, pl, x) => c is not null ? c.Controller == x.Host.ChosenPlayer : pl is not null && pl == x.Host.ChosenPlayer,
             "Chosen" => (c, pl, x) => c is null && pl is not null && pl == x.Host.ChosenPlayer,
             "DrawnThisTurn" => (c, pl, x) => c is not null && x.S.ThisTurn.Drawn.Contains(c.Id),
+            // Soulbond: paired with anything, or with this card.
+            "Paired" => (c, pl, x) => c?.PairedWith is not null,
+            "PairedWith" => (c, pl, x) => c is not null && c.PairedWith == x.Host.Id,
             "prowled" => (c, pl, x) => c is not null && (c.PaidOptional?.Contains("Prowl") ?? false),
             // "If you cast it" (from your hand): the permanent came from a spell. Only you cast spells here.
             "wasCast" or "wasCastByYou" => (c, pl, x) => c is not null && c.CastFrom is not null && c.Controller == x.Controller,
@@ -280,6 +283,8 @@ public sealed class Filter
     private static bool BaseMatchesCard(string b, Card c) => b switch
     {
         "Card" or "Spell" => true,
+        // Emblems aren't cards, and their abilities never go on the stack here.
+        "Emblem" => false,
         "Permanent" => c.Zone == Zone.Battlefield || c.Types.IsPermanent,
         "Any" => c.Types.Is(CardType.Creature) || c.Types.Is(CardType.Planeswalker) || c.Types.Is(CardType.Battle),
         "Player" or "Opponent" or "You" => false,

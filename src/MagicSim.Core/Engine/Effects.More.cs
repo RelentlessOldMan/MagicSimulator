@@ -9,7 +9,7 @@ namespace MagicSim.Core.Engine;
 sealed class CharmEffect : Effect
 {
     public override string Api => "Charm";
-    public override IReadOnlySet<string> Params { get; } = P("Choices", "CharmNum", "MinCharmNum", "AdditionalDescription");
+    public override IReadOnlySet<string> Params { get; } = P("Choices", "CharmNum", "MinCharmNum", "AdditionalDescription", "CanRepeatModes");
     public override void Resolve(EffectContext x) { }
 }
 
@@ -241,7 +241,8 @@ sealed class ExploitEffect : Effect
 sealed class ChangeTargetsEffect : Effect
 {
     public override string Api => "ChangeTargets";
-    public override IReadOnlySet<string> Params { get; } = P();
+    // "You may choose new targets": the old target is one of the choices.
+    public override IReadOnlySet<string> Params { get; } = P("Optional");
 
     public override void Resolve(EffectContext x)
     {
@@ -253,7 +254,7 @@ sealed class ChangeTargetsEffect : Effect
             {
                 if (ab.TargetFilter is null || ab.ChainIndex >= item.ChainTargets.Count || item.ChainTargets[ab.ChainIndex].Count != 1) continue;
                 var old = item.ChainTargets[ab.ChainIndex][0];
-                var options = x.Game.TargetCandidates(spell, ab, item.Controller).Where(o => o != old).ToList();
+                var options = x.Game.TargetCandidates(spell, ab, item.Controller).Where(o => o != old || x.Ability["Optional"] == "True").ToList();
                 if (options.Count == 0) continue;
                 item.ChainTargets[ab.ChainIndex] = x.Game.Decider.ChooseTargets(x.Game, x.Controller, x.Host, ab, options, 1, 1);
                 x.Game.Note($"  {spell.Name} now targets {string.Join(", ", item.ChainTargets[ab.ChainIndex])}");
@@ -420,6 +421,7 @@ sealed class CounterEffect : Effect
             x.S.Stack.Remove(item);
             x.Game.Note($"  countered {x.S[id].Name}");
             x.Game.MoveTo(x.S[id], item.ExileAfter ? Zone.Exile : dest);
+            x.Game.Fire(new TriggerEvent(TriggerMode.Countered, CardId: id, Player: x.Controller));
         }
     }
 }

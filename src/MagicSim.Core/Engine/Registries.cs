@@ -14,7 +14,7 @@ public static class Keywords
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
         "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade", "Ninjutsu", "Persist", "Undying",
-        "Flashback", "Unearth", "Cumulative upkeep", "Prowl", "Spectacle", "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit", "MayFlashSac", "Overload", "Entwine", "Ascend",
+        "Flashback", "Unearth", "Cumulative upkeep", "Prowl", "Spectacle", "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit", "MayFlashSac", "Overload", "Entwine", "Ascend", "Jump-start", "Multikicker", "Soulbond",
         // An Aura's own enchant restriction (Animate Dead swapping its "enchant" ability).
         "Enchant",
     };
@@ -62,6 +62,7 @@ public static class Triggers
         ["Exploited"] = new(StringComparer.Ordinal) { "ValidSource" },
         ["Always"] = new(StringComparer.Ordinal) { },
         ["LifeLost"] = new(StringComparer.Ordinal) { "ValidPlayer" },
+        ["Countered"] = new(StringComparer.Ordinal) { "ValidCause", "ValidSA" },
     };
 
     public static readonly HashSet<string> Supported = new(ModeParams.Keys.Concat(NeverInGoldfish), StringComparer.Ordinal);
@@ -78,6 +79,9 @@ public static class Triggers
         if (t["ValidTarget"] is { } vt) Filter.Parse(vt, ctx);
         if (t["ValidAttachment"] is { } va) Filter.Parse(va, ctx);
         if (t["ValidObject"] is { } vo) Filter.Parse(vo, ctx);
+        // "Whenever a spell or ability you control counters a spell": whose spell or ability countered it.
+        if (t["ValidCause"] is { } cause && cause is not ("SpellAbility.YouCtrl" or "SpellAbility.OppCtrl")) ctx.Need("Countered.ValidCause:" + cause);
+        if (t["ValidSA"] is { } sa) Filter.Parse(sa, ctx);
         // A granted "when this creature dies" trigger is controlled by that creature's controller.
         if (t["TriggerController"] is { } tc && tc != "TriggeredCardController") ctx.Need("TriggerController:" + tc);
         if (t["AttackingPlayer"] is { } ap && ap != "You") ctx.Need("AttackingPlayer:" + ap);
@@ -152,6 +156,10 @@ public static class Triggers
                 if (!string.Equals(t["Phase"], e.Phase, StringComparison.OrdinalIgnoreCase)) return false;
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller, x, t.Face);
             case "TurnFaceUp" when e.Mode == TriggerMode.TurnFaceUp:
+                return CardMatches(g, t, e.CardId, x, source);
+            case "Countered" when e.Mode == TriggerMode.Countered:
+                if (t["ValidCause"] is { } cause && (cause == "SpellAbility.YouCtrl") != (e.Player == source.Controller)) return false;
+                if (t["ValidSA"] is { } sa && !FilterOf(x, sa).MatchesCard(g.State[e.CardId!.Value], x)) return false;
                 return CardMatches(g, t, e.CardId, x, source);
             case "LifeLost" when e.Mode == TriggerMode.LifeLost:
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller, x, t.Face);

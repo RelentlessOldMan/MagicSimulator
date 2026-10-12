@@ -58,7 +58,7 @@ public static class Effects
         new ManaReflectedEffect(), new FlipCoinEffect(), new RepeatEffect(), new StoreSVarEffect(),
         new EffectEffect(), new ChooseColorEffect(), new ChooseTypeEffect(), new ChoosePlayerEffect(),
         new CopyPermanentEffect(), new CloneEffect(), new AnimateEffect(), new ProliferateEffect(),
-        new DelayedTriggerEffect(), new RepeatEachEffect(), new TwoPilesEffect(), new CumulativeUpkeepEffect(), new PhasesEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
+        new DelayedTriggerEffect(), new RepeatEachEffect(), new TwoPilesEffect(), new CumulativeUpkeepEffect(), new PhasesEffect(), new TapAllEffect(), new PairEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
         new AnimateAllEffect(), new FightEffect(), new BranchEffect(), new MultiplyCounterEffect(), new SetStateEffect(),
         new UntapAllEffect(), new RemoveCounterEffect(), new ClassLevelUpEffect(), new ProtectionEffect(), new RollDiceEffect(),
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),

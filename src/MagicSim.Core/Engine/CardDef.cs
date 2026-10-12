@@ -456,6 +456,21 @@ public static partial class CardCompiler
             case "Flashback":
                 face.Flashback = ParseCost(Part(1), ctx);
                 return true;
+            case "Jump-start":
+                // "You may cast this card from your graveyard by discarding a card in addition to paying its other costs.
+                // Then exile this card": flashback for its mana cost plus a discard.
+                face.Flashback = new Cost { Mana = face.ManaCost }.Plus(ParseCost("Discard<1/Card>", ctx));
+                return true;
+            case "Soulbond":
+                // "You may pair this creature with another unpaired creature when either enters. They remain paired for as
+                // long as you control both of them."
+                face.SVars["__SoulbondPair"] = "DB$ Pair";
+                face.SVars["__SoulbondPairWith"] = "DB$ Pair | Defined$ TriggeredCard";
+                face.Triggers.Add(CompileTrigger(new ForgeParams(
+                    "Mode$ ChangesZone | Destination$ Battlefield | ValidCard$ Card.Self | OptionalDecider$ You | Execute$ __SoulbondPair"), ctx));
+                face.Triggers.Add(CompileTrigger(new ForgeParams(
+                    "Mode$ ChangesZone | Destination$ Battlefield | ValidCard$ Creature.Other+YouCtrl+!Paired | TriggerZones$ Battlefield | IsPresent$ Card.Self+!Paired | OptionalDecider$ You | Execute$ __SoulbondPairWith"), ctx));
+                return true;
             case "Cumulative upkeep":
                 // "At the beginning of your upkeep, put an age counter on this permanent, then sacrifice it unless you pay
                 // its upkeep cost for each age counter on it."
@@ -578,6 +593,17 @@ public static partial class CardCompiler
                 if (Part(2).Length > 0) { ctx.Need("Keyword:Kicker+Second"); return true; }
                 face.OptionalCosts.Add((new[] { "Kicker" }, ParseCost(Part(1), ctx)));
                 return true;
+            case "Multikicker":
+            {
+                // "You may pay an additional [cost] any number of times as you cast this spell": one twin per number of
+                // kicks, up to a handful.
+                if (Part(2).Length > 0) { ctx.Need("Keyword:Multikicker+" + Part(2)); return true; }
+                var once = ParseCost(Part(1), ctx);
+                var total = once;
+                for (var k = 1; k <= MaxMultikicks; k++, total = total.Plus(once))
+                    face.OptionalCosts.Add((Enumerable.Repeat("Kicker", k).ToArray(), total));
+                return true;
+            }
             case "Bargain":
                 // "You may sacrifice an artifact, enchantment, or token as you cast this spell."
                 face.OptionalCosts.Add((new[] { "Bargain" }, ParseCost("Sac<1/Artifact;Enchantment;Card.token/artifact, enchantment, or token>", ctx)));
@@ -682,6 +708,9 @@ public static partial class CardCompiler
     }
 
     /// <summary>"You may pay an additional [cost] as you cast this spell" (kicker, bargain): each way to cast it gets a twin that pays it.</summary>
+    /// <summary>The most times a multikicker spell is offered kicked.</summary>
+    public const int MaxMultikicks = 5;
+
     private static void AddOptionalCost(FaceDef face, string[] names, Cost extra, CompileContext ctx)
     {
         if (face.SpellAbilities.Count == 0)
@@ -694,7 +723,8 @@ public static partial class CardCompiler
             var twin = ab.CloneHead();
             twin.ExtraCost = extra;
             twin.OptionalCosts = names;
-            twin.ModeDescription = (ab.ModeDescription ?? ab.Description) + $" ({string.Join(", ", names).ToLowerInvariant()})";
+            twin.ModeDescription = (ab.ModeDescription ?? ab.Description)
+                + (names.Length > 1 && names.All(n => n == names[0]) ? $" ({names[0].ToLowerInvariant()} ×{names.Length})" : $" ({string.Join(", ", names).ToLowerInvariant()})");
             face.SpellAbilities.Add(twin);
         }
     }
@@ -811,12 +841,14 @@ public static partial class CardCompiler
         }
         if (!int.TryParse(ab["MinCharmNum"] ?? max.ToString(), out var min)) { ctx.Need("Charm:MinCharmNum"); return new() { ab }; }
         min = Math.Max(1, min);
-        max = Math.Min(max, choices.Length);
+        // "You may choose the same mode more than once" (Confluences): combinations with repetition.
+        var repeat = ab["CanRepeatModes"] == "True";
+        if (!repeat) max = Math.Min(max, choices.Length);
         foreach (var c in choices)
             if (!ctx.Face.SVars.ContainsKey(c)) { ctx.Need("SVarMissing:" + c); return new() { ab }; }
 
         var combos = new List<int[]>();
-        for (var k = min; k <= max; k++) Combinations(choices.Length, k, 0, new List<int>(), combos);
+        for (var k = min; k <= max; k++) Combinations(choices.Length, k, 0, new List<int>(), combos, repeat);
         var entwined = ab.Kind == AbilityKind.Spell && ctx.Face.Entwine is not null && max < choices.Length;
         if (entwined) combos.Add(Enumerable.Range(0, choices.Length).ToArray());
         if (combos.Count > 40) { ctx.Need("Charm:TooManyModes"); return new() { ab }; }
@@ -850,13 +882,13 @@ public static partial class CardCompiler
         return result;
     }
 
-    private static void Combinations(int n, int k, int start, List<int> current, List<int[]> output)
+    private static void Combinations(int n, int k, int start, List<int> current, List<int[]> output, bool repeat = false)
     {
         if (current.Count == k) { output.Add(current.ToArray()); return; }
         for (var i = start; i < n; i++)
         {
             current.Add(i);
-            Combinations(n, k, i + 1, current, output);
+            Combinations(n, k, repeat ? i : i + 1, current, output, repeat);
             current.RemoveAt(current.Count - 1);
         }
     }

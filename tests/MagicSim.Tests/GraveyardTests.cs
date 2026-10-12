@@ -155,7 +155,7 @@ public class GraveyardTests
     {
         var g = Setup(new[] { "Plot" }, library: new[] { "Filler", "Filler", "Filler", "Filler" });
         Cast(g, "Plot");
-        Assert.Equal(1, Hand(g).Count);
+        Assert.Single(Hand(g));
 
         var h = Setup(new[] { "Plot" }, battlefield: new[] { "Bear" }, library: new[] { "Filler", "Filler", "Filler", "Filler" });
         h.ResumeTurn();

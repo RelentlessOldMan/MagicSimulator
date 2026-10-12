@@ -74,6 +74,8 @@ public sealed class Card
     public string[]? PaidOptional { get; set; }
     /// <summary>A replacement as it enters sends it somewhere else instead (Mox Diamond without a land to discard).</summary>
     public Zone? EnterInstead { get; set; }
+    /// <summary>The creature soulbond paired this one with, while both are on the battlefield.</summary>
+    public int? PairedWith { get; set; }
     /// <summary>"If it would leave the battlefield, exile it instead" (unearth, From the Catacombs).</summary>
     public bool ExileIfLeaves { get; set; }
     /// <summary>Where it was cast from, while it's that spell or the permanent the spell became ("if you cast it").</summary>
@@ -187,7 +189,7 @@ public sealed class Card
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
         NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
-        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
+        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),

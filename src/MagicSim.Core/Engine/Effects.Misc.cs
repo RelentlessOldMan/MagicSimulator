@@ -137,6 +137,48 @@ sealed class UntapAllEffect : Effect
     }
 }
 
+/// <summary>"Tap all creatures your opponents control."</summary>
+sealed class TapAllEffect : Effect
+{
+    public override string Api => "TapAll";
+    public override IReadOnlySet<string> Params { get; } = P("ValidCards");
+    public override void Validate(AbilityDef ab, CompileContext ctx) => Filter.Parse(ab["ValidCards"] ?? "Permanent", ctx);
+
+    public override void Resolve(EffectContext x)
+    {
+        var filter = FilterFor(x.SVarFace, x.Ability["ValidCards"] ?? "Permanent");
+        foreach (var c in x.S.BattlefieldCards)
+            if (filter.MatchesCard(c, x)) c.Tapped = true;
+    }
+}
+
+/// <summary>
+/// Soulbond's pairing: this creature and another unpaired creature you control (Defined$, or one you choose) become
+/// paired, if both are still on the battlefield, unpaired and yours.
+/// </summary>
+sealed class PairEffect : Effect
+{
+    public override string Api => "Pair";
+    public override IReadOnlySet<string> Params { get; } = P("Defined");
+    public override void Validate(AbilityDef ab, CompileContext ctx) => Defined.ValidateCards(ab["Defined"], ctx);
+
+    public override void Resolve(EffectContext x)
+    {
+        var host = x.Host;
+        bool Pairable(Card c) => c.Zone == Zone.Battlefield && c.Controller == x.Controller && c.PairedWith is null && c.Types.Is(CardType.Creature);
+        if (!Pairable(host)) return;
+        var candidates = (x.Ability["Defined"] is { } d ? Defined.Cards(d, x) : x.S.Battlefield)
+            .Where(id => id != host.Id && Pairable(x.S[id])).Distinct().ToList();
+        if (candidates.Count == 0) return;
+        var chosen = candidates.Count == 1 ? candidates : x.Game.Decider.ChooseCards(x.Game, x.Controller, Choice.Generic, host, candidates, 1, 1);
+        if (chosen.Count == 0) return;
+        var other = x.S[chosen[0]];
+        host.PairedWith = other.Id;
+        other.PairedWith = host.Id;
+        x.Game.Note($"  {host.Name} paired with {other.Name}");
+    }
+}
+
 /// <summary>Removes counters from permanents ("remove a +1/+1 counter", "remove all counters").</summary>
 sealed class RemoveCounterEffect : CardsEffect
 {
