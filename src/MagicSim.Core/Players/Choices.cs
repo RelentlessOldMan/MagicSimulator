@@ -36,6 +36,8 @@ public abstract class ChoiceDecider : IDecider
 
     protected abstract int Pick(Game g, Decision d);
 
+    public virtual bool PassesQuietSteps => false;
+
     /// <summary>Lets one decider delegate a decision to another.</summary>
     public int PickPublic(Game g, Decision d) => Pick(g, d);
 

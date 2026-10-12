@@ -14,7 +14,7 @@ public sealed class SearchSettings
 }
 
 /// <summary>
-/// Chooses by lookahead without peeking at hidden information (CONTRACT.md §3, "No cheating").
+/// Chooses by lookahead without peeking at hidden information (CONTRACT.md Â§3, "No cheating").
 ///
 /// At each searched decision it scores every option by rollouts: it clones the game as it was
 /// when the current priority action was chosen, replays the real choices made since then to
@@ -65,27 +65,40 @@ public sealed class SearchDecider : ChoiceDecider
         // between options come from the options, not from luck.
         var seeds = new (ulong Policy, ulong World)[_settings.Rollouts];
         for (var k = 0; k < seeds.Length; k++) seeds[k] = (_rng.NextULong(), _rng.NextULong());
-        var best = 0;
-        var bestScore = double.NegativeInfinity;
-        var scores = new double[d.Options.Count];
-        for (var i = 0; i < d.Options.Count; i++)
+        var n = d.Options.Count;
+        var total = new double[n];
+        var count = new int[n];
+        double Score(int i) => count[i] == 0 ? double.NegativeInfinity : total[i] / count[i] + Bias(d.Options[i]);
+        bool Won(int i)
         {
-            var total = 0.0;
-            var alwaysWins = true;
-            foreach (var (policySeed, worldSeed) in seeds)
-            {
-                var r = Rollout(i, policySeed, worldSeed);
-                total += r;
-                alwaysWins &= r >= WinScore;
-            }
-            var score = scores[i] = total / seeds.Length + Bias(d.Options[i]);
-            if (score > bestScore) { bestScore = score; best = i; }
-            // Nothing beats winning in every future tried: stop looking.
-            if (alwaysWins) { best = i; scores = scores[..(i + 1)]; break; }
+            var r = Rollout(i, seeds[count[i]].Policy, seeds[count[i]].World);
+            total[i] += r;
+            count[i]++;
+            return r >= WinScore;
         }
+        // Nothing beats winning in every future tried: an option that wins its first rollout gets the rest at once.
+        bool SureWin(int i)
+        {
+            while (count[i] < seeds.Length)
+                if (!Won(i)) return false;
+            return true;
+        }
+
+        // Successive halving: every option gets one rollout, then only the better half goes on to the next,
+        // so the rollouts go to the close calls rather than to options that are clearly behind.
+        var alive = Enumerable.Range(0, n).ToList();
+        var best = -1;
+        for (var k = 0; k < seeds.Length && best < 0; k++)
+        {
+            foreach (var i in alive)
+                if (count[i] == k && Won(i) && SureWin(i)) { best = i; break; }
+            if (best < 0 && k < seeds.Length - 1)
+                alive = alive.OrderByDescending(Score).ThenBy(i => i).Take(Math.Max(2, (alive.Count + 1) / 2)).ToList();
+        }
+        if (best < 0) best = alive.OrderByDescending(Score).ThenBy(i => i).First();
         if (g.Log is not null)
-            g.Note("  search " + d.Kind + ": " + string.Join(" | ", Enumerable.Range(0, scores.Length)
-                .OrderByDescending(i => scores[i]).Take(6).Select(i => $"{Describe(g, d.Options[i])} {scores[i]:F1}")));
+            g.Note("  search " + d.Kind + ": " + string.Join(" | ", Enumerable.Range(0, n).Where(i => count[i] > 0)
+                .OrderByDescending(i => i == best).ThenByDescending(Score).Take(6).Select(i => $"{Describe(g, d.Options[i])} {Score(i):F1}")));
         return best;
     }
 
@@ -113,7 +126,7 @@ public sealed class SearchDecider : ChoiceDecider
     {
         var script = new List<int>(_prefix) { option };
         var determinizeRng = new Rng(worldSeed);
-        var policy = new RolloutPolicy(rolloutSeed);
+        var policy = new RolloutPolicy(rolloutSeed) { QuietStepsPass = true };
         var replay = new ReplayDecider(script, policy, game => game.Determinize(Game.Me, ref determinizeRng));
         var sim = _snapshot!.Clone(replay, keepRecord: false);
         // The player could stop at any main-phase checkpoint, so a rollout is worth the best

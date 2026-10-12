@@ -12,6 +12,9 @@ public sealed class RolloutPolicy : ChoiceDecider
 {
     private Rng _rng;
     public MulliganPolicy Mulligan { get; init; } = MulliganPolicy.C;
+    /// <summary>Inside search rollouts: only act in the main phases or in response to something on the stack.</summary>
+    public bool QuietStepsPass { get; init; }
+    public override bool PassesQuietSteps => QuietStepsPass;
 
     public RolloutPolicy(ulong seed) => _rng = new Rng(seed);
 
@@ -177,6 +180,8 @@ public sealed class ReplayDecider : ChoiceDecider
     }
 
     public bool Exhausted => _next >= _script.Count;
+
+    public override bool PassesQuietSteps => Exhausted && _after.PassesQuietSteps;
 
     protected override int Pick(Game g, Decision d)
     {

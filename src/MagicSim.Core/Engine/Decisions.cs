@@ -25,6 +25,8 @@ public enum Choice
 public interface IDecider
 {
     GameAction ChooseAction(Game g, int player, IReadOnlyList<GameAction> legal);
+    /// <summary>Pass without looking at the legal actions outside the main phases when the stack is empty (cheap rollouts).</summary>
+    bool PassesQuietSteps => false;
     bool KeepHand(Game g, int player, int mulligansTaken);
     List<int> ChooseCards(Game g, int player, Choice kind, Card? source, IReadOnlyList<int> candidates, int min, int max);
     List<TargetRef> ChooseTargets(Game g, int player, Card source, AbilityDef ability, IReadOnlyList<TargetRef> candidates, int min, int max);

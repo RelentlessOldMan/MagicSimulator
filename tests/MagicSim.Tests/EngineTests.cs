@@ -236,4 +236,18 @@ public class EngineTests
         Assert.Contains("<h3>1v1v1</h3>", html);
         Assert.Contains("</span>Bears</td>", html);
     }
+
+    [Fact]
+    public void QuietDecidersOnlyActInMainPhasesOrWithAStack()
+    {
+        foreach (var quiet in new[] { false, true })
+        {
+            var steps = new HashSet<Step>();
+            var d = new TestDecider { Quiet = quiet, Choose = (game, dec) => { if (dec.Kind == DecisionKind.Action) steps.Add(game.State.Step); return null; } };
+            var g = Setup(new[] { "Ritual" }, battlefield: new[] { "Bog" }, decider: d);
+            g.ResumeTurn();
+            if (quiet) Assert.Equal(new[] { Step.Main1, Step.Main2 }, steps.Order());
+            else Assert.Contains(Step.End, steps);   // the instant could be cast at the end step
+        }
+    }
 }

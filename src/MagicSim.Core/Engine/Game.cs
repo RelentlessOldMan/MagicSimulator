@@ -55,9 +55,15 @@ public sealed partial class Game
     }
 
     /// <param name="keepRecord">False for search copies, which don't report what happened.</param>
+    /// <summary>A copy made for search: nothing about it is reported, so bookkeeping for reports is skipped.</summary>
+    public bool IsSearchCopy { get; private init; }
+
     public Game Clone(IDecider? decider = null, bool keepRecord = true)
     {
-        var g = new Game(State.Clone(keepRecord), Settings, decider ?? Decider) { _actionsThisTurn = _actionsThisTurn, MulligansTaken = MulligansTaken, StaticsApplied = StaticsApplied };
+        var g = new Game(State.Clone(keepRecord), Settings, decider ?? Decider)
+        {
+            _actionsThisTurn = _actionsThisTurn, MulligansTaken = MulligansTaken, StaticsApplied = StaticsApplied, IsSearchCopy = !keepRecord,
+        };
         g._pending.AddRange(_pending);
         return g;
     }
@@ -391,6 +397,8 @@ public sealed partial class Game
             CheckStateBasedActions();
             if (State.GameOver) return;
             if (_pending.Count > 0) { PutTriggersOnStack(); continue; }
+            // Rollouts don't act outside the main phases unless something is on the stack.
+            if (State.Stack.Count == 0 && State.Step is not (Step.Main1 or Step.Main2) && Decider.PassesQuietSteps) return;
             TrackMana();
             if (OnCheckpoint is not null && State.Stack.Count == 0 && State.Step is Step.Main1 or Step.Main2)
                 OnCheckpoint(this);
@@ -429,6 +437,7 @@ public sealed partial class Game
 
     private void TrackMana()
     {
+        if (IsSearchCopy) return;   // only reported (mana_by_turn)
         var available = State.Players[Me].Pool.Total + AutoSources(Me, -1).Where(s => State[s.CardId].Zone == Zone.Battlefield).Sum(s => s.Amount);
         State.ThisTurn.MaxManaSeen = Math.Max(State.ThisTurn.MaxManaSeen, available);
     }

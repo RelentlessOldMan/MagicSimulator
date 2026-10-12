@@ -10,6 +10,10 @@ internal sealed class TestDecider : ChoiceDecider
 
     protected override int Pick(Game g, Decision d) => Choose?.Invoke(g, d) ?? 0;
 
+    public bool Quiet { get; set; }
+
+    public override bool PassesQuietSteps => Quiet;
+
     /// <summary>Index of the first option that is a card (or target card) with this name.</summary>
     public static int Named(Game g, Decision d, string name) => d.Options.ToList().FindIndex(o => o switch
     {
