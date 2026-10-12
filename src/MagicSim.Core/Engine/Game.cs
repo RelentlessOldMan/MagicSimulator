@@ -447,7 +447,7 @@ public sealed partial class Game
                 result.Add(new GameAction.PlayLand(c.Id, face));
             return;
         }
-        if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed)) return;
+        if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed || Statics.CastWithFlash(this, c, p.Index))) return;
         if (c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0)
         {
             if (CanCast(c, -1)) result.Add(new GameAction.Cast(c.Id, -1, face));
@@ -550,6 +550,7 @@ public sealed partial class Game
         var paid = PayCost(cost, c, player, x, excludeSourceFromMana: true);
         _payingForSpell = false;
         if (!paid) throw new InvalidOperationException($"could not pay for {c.Name} after checking it was castable");
+        if (LastSacrificed.Count > 0) item.Sacrificed = LastSacrificed.ToList();
         if (from == Zone.Command) c.CommandCasts++;
         c.XPaid = x;
         State.Stack.Add(item);
@@ -631,7 +632,7 @@ public sealed partial class Game
         var item = new StackItem
         {
             Id = State.NextStackId++, SourceId = c.Id, Ability = ab, Controller = player, X = x, ChainTargets = targets,
-            Description = $"{c.Name}: {ab.Description}",
+            Description = $"{c.Name}: {ab.Description}", Sacrificed = LastSacrificed.Count > 0 ? LastSacrificed.ToList() : null,
         };
         Note($"activate {c.Name}: {ab.Description}" + TargetText(item));
         if (ab.IsManaAbility)
@@ -830,6 +831,7 @@ public sealed partial class Game
         }
         CheckEffectLinks();
         FireZoneBatch();
+        FireDamageBatch();
         // A Saga with all its chapters done and none still waiting to resolve is sacrificed (rule 714.4).
         foreach (var saga in State.BattlefieldCards.Where(c => c.CurrentFace.Chapters.Count > 0).ToList())
             if (saga.CounterCount("LORE") >= saga.CurrentFace.Chapters.Count && !_pending.Any(t => t.SourceId == saga.Id)

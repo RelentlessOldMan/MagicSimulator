@@ -115,6 +115,7 @@ public sealed class Filter
             "NamedCard" => (c, pl, x) => c is not null && x.Host.NamedCard is { } n && string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase),
             "IsRemembered" => (c, pl, x) => c is not null ? x.Host.Remembered?.Contains(c.Id) ?? false : pl is not null && pl == x.Item.IteratedPlayer,
             "IsTriggerRemembered" => (c, pl, x) => c is not null && (x.Item.DelayRemembered?.Contains(c.Id) ?? false),
+            "Historic" => (c, pl, x) => c is not null && (c.Types.Has(SuperType.Legendary) || c.Types.Is(CardType.Artifact) || c.Types.HasSubtype("Saga")),
             "ChosenColor" => (c, pl, x) => c is not null && x.Host.ChosenColor is { } cc && (c.Colors & cc.Mask()) != 0,
             "ChosenType" => (c, pl, x) => c is not null && x.Host.ChosenType is { } ct && c.Types.HasSubtype(ct),
             "IsImprinted" => (c, pl, x) => c is not null && (x.Host.Imprinted?.Contains(c.Id) ?? false),
@@ -306,6 +307,8 @@ public sealed class Amount
         if (core is "TriggerCount$DamageAmount" or "TriggerCount$LifeAmount" or "TriggerCount$Amount")
             return new(core, x => x.Item.TriggerAmount);
         if (DefinedCardsRx.Match(core) is { Success: true } dm) return DefinedCardsAmount(core, dm, ctx);
+        if (core == "PlayerCountOpponents$Amount")
+            return new(core, x => x.S.Players.Count(p => p.Index != x.Controller && !p.Lost));
         if (!core.StartsWith("Count$", StringComparison.Ordinal))
         {
             ctx.Need("Amount:" + core);
@@ -331,6 +334,9 @@ public sealed class Amount
         switch (kind)
         {
             case "xPaid": return new(core, x => x.X);
+            case "CardPower": return new(core, x => x.Host.LastKnownPower);
+            case "CardToughness": return new(core, x => x.Host.LastKnownToughness);
+            case "LifeYouGainedThisTurn": return new(core, x => x.S.ThisTurn.LifeGained.GetValueOrDefault(x.Controller));
             case "CardsInYourHand": return new(core, x => x.S.Players[x.Controller].Hand.Count);
             case "YourLifeTotal": return new(core, x => x.S.Players[x.Controller].Life);
             case "YourStartingLife": return new(core, x => x.Game.Settings.StartingLife);
@@ -366,7 +372,7 @@ public sealed class Amount
         return Const(0);
     }
 
-    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|Remembered|Imprinted)\$(CardPower|CardToughness|CardManaCost|Amount|Valid)(?: (.+))?$", RegexOptions.Compiled);
+    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|Remembered|Imprinted|Sacrificed)\$(CardPower|CardToughness|CardManaCost|Amount|Valid)(?: (.+))?$", RegexOptions.Compiled);
 
     /// <summary>"Targeted$CardPower", "Remembered$CardManaCost", "Imprinted$Valid Card.X": a property of defined cards (summed), or how many there are.</summary>
     private static Amount DefinedCardsAmount(string core, Match m, CompileContext ctx)
@@ -382,6 +388,7 @@ public sealed class Amount
                 "Targeted" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value),
                 "TriggeredCard" => x.Item.TriggeredCardId is { } id ? new[] { id } : Array.Empty<int>(),
                 "Remembered" => x.Host.Remembered ?? new List<int>(),
+                "Sacrificed" => x.Item.Sacrificed ?? new List<int>(),
                 _ => x.Host.Imprinted ?? new List<int>(),
             };
             return ids.Select(id => x.S[id]).ToList();
@@ -423,7 +430,7 @@ public static class Defined
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
     {
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
-        "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "RememberedCard", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
+        "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
     };
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
@@ -469,6 +476,7 @@ public static class Defined
                 x.Item.TriggeredCardId is { } id ? new() { id } : new(),
             "Enchanted" or "Equipped" => x.Host.AttachedTo >= 0 ? new() { x.Host.AttachedTo } : new(),
             "Imprinted" => x.Host.Imprinted?.ToList() ?? new(),
+            "Sacrificed" or "SacrificedCards" => x.Item.Sacrificed?.ToList() ?? new(),
             _ => new(),
         };
     }

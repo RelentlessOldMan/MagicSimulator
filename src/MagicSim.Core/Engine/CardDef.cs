@@ -3,7 +3,7 @@ using MagicSim.Core.Forge;
 
 namespace MagicSim.Core.Engine;
 
-public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand }
+public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower }
 
 /// <summary>A non-mana cost component: "Sac&lt;1/CARDNAME&gt;", "Discard&lt;0/Hand&gt;", "PayLife&lt;2&gt;", …</summary>
 public sealed record CostPart(CostPartKind Kind, string Amount, string Valid, string Raw);
@@ -359,6 +359,10 @@ public static partial class CardCompiler
                     face.Chapters.Add(new TriggerDef { P = new ForgeParams("Mode$ Chapter"), Mode = "Chapter", Execute = modes?.FirstOrDefault(), Modes = modes, Face = face });
                 }
                 return true;
+            case "Crew":
+                // "Crew N: tap creatures with total power N or more: this becomes an artifact creature until end of turn."
+                AddGenerated(face, ctx, $"AB$ Animate | Cost$ Crew<{Part(1)}> | Defined$ Self | Types$ Artifact,Creature | SpellDescription$ Crew {Part(1)}");
+                return true;
             case "Changeling":
                 face.Types = new TypeLine { Types = face.Types.Types, Supers = face.Types.Supers, Subtypes = face.Types.Subtypes, AllCreatureTypes = true };
                 return true;
@@ -594,11 +598,13 @@ public static partial class CardCompiler
                 "ExileFromHand" when valid == "CARDNAME" => CostPartKind.ExileSelf,
                 "ExileFromHand" => CostPartKind.ExileFromHand,
                 "Return" => CostPartKind.ReturnToHand,
+                "Reveal" => CostPartKind.Reveal,
+                "Crew" => CostPartKind.TapPower,
                 _ => null,
             };
             if (kind is null) { ctx.Need("Cost:" + m.Groups[1].Value); continue; }
             if (kind is CostPartKind.Sacrifice or CostPartKind.Discard or CostPartKind.ExileFromGraveyard or CostPartKind.TapUntapped
-                    or CostPartKind.ExileFromHand or CostPartKind.ReturnToHand
+                    or CostPartKind.ExileFromHand or CostPartKind.ReturnToHand or CostPartKind.Reveal
                 && valid is not ("CARDNAME" or "Hand" or "Random" or "Card" or ""))
                 Filter.Parse(valid, ctx);
             parts.Add(new CostPart(kind.Value, amount, valid, token));

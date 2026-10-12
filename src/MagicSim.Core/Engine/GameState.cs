@@ -223,6 +223,8 @@ public sealed class StackItem
     public string Description { get; init; } = "";
     /// <summary>For a trigger: the amount of its event (damage dealt, life gained, cards moved).</summary>
     public int TriggerAmount { get; init; }
+    /// <summary>Permanents sacrificed to pay for this (or that triggered it): "Sacrificed".</summary>
+    public List<int>? Sacrificed { get; set; }
     /// <summary>For a delayed trigger: the objects it remembers (DelayTriggerRemembered).</summary>
     public List<int>? DelayRemembered { get; init; }
     /// <summary>The player a RepeatEach is currently on ("Remembered" as a player).</summary>
@@ -230,7 +232,7 @@ public sealed class StackItem
 
     public StackItem Clone() => new()
     {
-        DelayRemembered = DelayRemembered, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount,
+        DelayRemembered = DelayRemembered, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount, Sacrificed = Sacrificed,
         Id = Id, SourceId = SourceId, Ability = Ability, Controller = Controller, IsSpell = IsSpell,
         ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, TriggeredPlayer = TriggeredPlayer, Description = Description, ExileAfter = ExileAfter,
     };
@@ -245,7 +247,12 @@ public sealed class TurnInfo
     public List<(int CardId, string Action)> AtEndStep { get; set; } = new();
     /// <summary>Control changes that end at cleanup: (card id, controller to return it to).</summary>
     public List<(int CardId, int Controller)> ControlUntilEot { get; set; } = new();
-    public TurnInfo Clone() => new() { SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot) };
+    /// <summary>Life each player gained this turn.</summary>
+    public Dictionary<int, int> LifeGained { get; set; } = new();
+    public TurnInfo Clone() => new()
+    {
+        SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
+    };
 }
 
 /// <summary>Everything about a game in progress. <see cref="Clone"/> gives an independent copy for search.</summary>

@@ -13,7 +13,7 @@ public static class Keywords
         // Deck-building only.
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
-        "Devoid", "Changeling",
+        "Devoid", "Changeling", "Infect", "Wither", "Convoke",
     };
 }
 
@@ -39,6 +39,7 @@ public static class Triggers
         ["Attacks"] = new(StringComparer.Ordinal) { },
         ["Sacrificed"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["ChangesZoneAll"] = new(StringComparer.Ordinal) { "ValidCards", "Origin", "Destination" },
+        ["DamageDoneOnce"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer" },
         ["Drawn"] = new(StringComparer.Ordinal) { },

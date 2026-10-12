@@ -112,6 +112,9 @@ public static class Statics
         "Amount", "ValidCard", "Type", "EffectZone", "Activator",
     };
 
+    private static readonly HashSet<string> CastWithFlashParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Caster" };
+    private static readonly HashSet<string> PanharmoniconParams = new(StringComparer.Ordinal) { "ValidMode", "ValidCard", "ValidCause", "Destination" };
+
     private static readonly HashSet<string> AlternativeCostParams = new(StringComparer.Ordinal)
     {
         "ValidSA", "ValidCard", "Cost", "EffectZone", "ValidPlayer", "StackDescription", "CostDesc",
@@ -133,6 +136,30 @@ public static class Statics
             case "Continuous":
                 own = ContinuousParams;
                 ValidateContinuous(s, ctx);
+                break;
+            case "CastWithFlash":
+                own = CastWithFlashParams;
+                if (s["ValidSA"] is { } vsa && vsa != "Spell") ctx.Need("CastWithFlash.ValidSA:" + vsa);
+                if (s["Caster"] is { } caster && caster is not ("You" or "Player")) ctx.Need("CastWithFlash.Caster:" + caster);
+                if (s["EffectZone"] is { } fez && fez is not ("Battlefield" or "Command" or "All")) ctx.Need("EffectZone:" + fez);
+                if (s["ValidCard"] is { } fvc) Filter.Parse(fvc, ctx);
+                break;
+            case "Panharmonicon":
+                own = PanharmoniconParams;
+                if (s["Destination"] is { } dest && dest != "Battlefield") ctx.Need("Panharmonicon.Destination:" + dest);
+                if (s["ValidCard"] is { } pvc) Filter.Parse(pvc, ctx);
+                if (s["ValidCause"] is { } pc) Filter.Parse(pc, ctx);
+                break;
+            case "RaiseCost" when s["Activator"] == "Opponent":
+                return;   // goldfish opponents cast nothing
+            case "RaiseCost":
+                own = ReduceCostParams;
+                if (s["Type"] is { } rtype && rtype != "Spell") ctx.Need("RaiseCost.Type:" + rtype);
+                if (s["Activator"] is { } ract && ract != "You") ctx.Need("RaiseCost.Activator:" + ract);
+                if (s["EffectZone"] is { } rez && rez is not ("All" or "Battlefield")) ctx.Need("EffectZone:" + rez);
+                if (s["ValidCard"] is { } rvc) Filter.Parse(rvc, ctx);
+                if (s["Cost"] is not null) ctx.Need("RaiseCost.Cost");
+                Amount.Parse(s["Amount"] ?? "1", ctx);
                 break;
             case "ReduceCost":
                 own = ReduceCostParams;
@@ -380,8 +407,27 @@ public static class Statics
         return g.State.Players.Where(p => !p.Lost && filter.MatchesPlayer(p.Index, x));
     }
 
-    /// <summary>Total generic-cost reduction from "spells cost {N} less" statics for casting <paramref name="spell"/>.</summary>
-    public static int CostReduction(Game g, Card spell, int caster)
+    /// <summary>"You may cast [spells] as though they had flash."</summary>
+    public static bool CastWithFlash(Game g, Card spell, int caster)
+    {
+        foreach (var source in Sources(g).Append(spell))
+            foreach (var st in source.Statics)
+            {
+                if (st.Mode != "CastWithFlash") continue;
+                var self = source.Id == spell.Id;
+                if (self != (st["EffectZone"] == "All")) continue;
+                if (st["Caster"] != "Player" && source.Controller != caster) continue;
+                var x = ContextFor(g, source, st);
+                if (st["ValidCard"] is { } vc && !Effect.FilterFor(x.SVarFace, vc).MatchesCard(spell, x)) continue;
+                if (Presence.Hold(st.P, x)) return true;
+            }
+        return false;
+    }
+
+    /// <summary>Net generic-cost change for casting <paramref name="spell"/>: "cost {N} less" minus "cost {N} more".</summary>
+    public static int CostReduction(Game g, Card spell, int caster) => CostChange(g, spell, caster, "ReduceCost") - CostChange(g, spell, caster, "RaiseCost");
+
+    private static int CostChange(Game g, Card spell, int caster, string mode)
     {
         var total = 0;
         foreach (var source in g.State.BattlefieldCards.Append(spell))
@@ -390,7 +436,7 @@ public static class Statics
             var self = source.Id == spell.Id;
             foreach (var st in source.Statics)
             {
-                if (st.Mode != "ReduceCost") continue;
+                if (st.Mode != mode || mode == "RaiseCost" && st["Activator"] == "Opponent") continue;
                 // A card's own "this spell costs less" works from anywhere (EffectZone$ All); others from the battlefield.
                 if (self != (st["EffectZone"] == "All")) continue;
                 if (!self && source.Controller != caster) continue;

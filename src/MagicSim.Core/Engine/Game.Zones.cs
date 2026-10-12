@@ -107,6 +107,63 @@ public sealed partial class Game
     /// <summary>Zone changes since triggers were last checked: "whenever one or more …" triggers see them together.</summary>
     private readonly List<(int CardId, Zone From, Zone To)> _zoneBatch = new();
 
+    /// <summary>Damage dealt since triggers were last checked: (source, player or card dealt damage, amount, combat).</summary>
+    private readonly List<(int Source, int? Player, int? Card, int Amount, bool Combat)> _damageBatch = new();
+
+    /// <summary>"Whenever one or more [sources] deal damage to [a player / this]" (DamageDoneOnce): once per thing dealt damage.</summary>
+    private void FireDamageBatch()
+    {
+        if (_damageBatch.Count == 0) return;
+        var batch = _damageBatch.ToList();
+        _damageBatch.Clear();
+        foreach (var id in State.Battlefield.Concat(State.Players.SelectMany(p => p.Command)).ToList())
+        {
+            var src = State[id];
+            if (src.IsBlank) continue;
+            foreach (var t in src.Triggers)
+            {
+                if (t.Mode != "DamageDoneOnce") continue;
+                var x = new EffectContext
+                {
+                    Game = this, Ability = t.Execute ?? PermanentSpell, FaceOverride = t.Face,
+                    Item = new StackItem { SourceId = id, Ability = t.Execute ?? PermanentSpell, Controller = src.Controller },
+                };
+                var vs = t["ValidSource"] is { } s1 ? Effect.FilterFor(x.SVarFace, s1) : null;
+                var vt = t["ValidTarget"] is { } s2 ? Effect.FilterFor(x.SVarFace, s2) : null;
+                var matching = batch.Where(d => (t["CombatDamage"] is not { } cd || (cd == "True") == d.Combat)
+                                                && (vs is null || vs.MatchesCard(State[d.Source], x))
+                                                && (vt is null || (d.Player is { } p ? vt.MatchesPlayer(p, x) : vt.MatchesCard(State[d.Card!.Value], x))));
+                foreach (var group in matching.GroupBy(d => (d.Player, d.Card)))
+                {
+                    if (!Presence.Hold(t.P, x) || !Triggers.UnderLimit(this, src, t)) continue;
+                    var e = new TriggerEvent(TriggerMode.DamageDoneOnce, CardId: group.Key.Card, Player: group.Key.Player, Amount: group.Sum(d => d.Amount),
+                        Combat: group.First().Combat);
+                    _pending.Add(new PendingTrigger(id, t, e, src.Controller));
+                }
+            }
+        }
+    }
+
+    /// <summary>How many extra times a trigger caused by <paramref name="entering"/> entering triggers (Panharmonicon, rule 603.2d).</summary>
+    private int ExtraEnteringTriggers(Card source, Card? entering)
+    {
+        if (entering is null) return 0;
+        var extra = 0;
+        foreach (var host in State.BattlefieldCards)
+        {
+            if (host.IsBlank || host.Controller != source.Controller) continue;
+            foreach (var st in host.Statics)
+            {
+                if (st.Mode != "Panharmonicon" || st["ValidMode"] is { } vm && !vm.Split(',').Contains("ChangesZone")) continue;
+                var x = ContextFor(host);
+                if (st["ValidCard"] is { } vc && !Effect.FilterFor(host.CurrentFace, vc).MatchesCard(source, x)) continue;
+                if (st["ValidCause"] is { } cause && !Effect.FilterFor(host.CurrentFace, cause).MatchesCard(entering, x)) continue;
+                extra++;
+            }
+        }
+        return extra;
+    }
+
     /// <summary>Fires "one or more cards …" (ChangesZoneAll) triggers once for the zone changes that happened together.</summary>
     private void FireZoneBatch()
     {
@@ -308,12 +365,23 @@ public sealed partial class Game
         if (amount <= 0) return 0;
         amount = Replacements.Amount(this, "DamageDone", amount, source, targetPlayer: player, combat: combat);
         if (amount <= 0) return 0;
+        if (source?.HasKeyword("Infect") ?? false)
+        {
+            // Infect: damage to players is poison counters (rule 702.90b).
+            State.Players[player].Poison += amount;
+            Note($"{source.Name} gives player {player} {amount} poison (total {State.Players[player].Poison})");
+            if (source.HasKeyword("Lifelink")) GainLife(source.Controller, amount);
+            Fire(new TriggerEvent(TriggerMode.DamageDone, CardId: source.Id, Player: player, Amount: amount, Combat: combat));
+            _damageBatch.Add((source.Id, player, null, amount, combat));
+            return amount;
+        }
         State.Players[player].Life -= amount;
         Note($"{source?.Name ?? "damage"} deals {amount} to player {player} (life {State.Players[player].Life})");
         if (source is null) return amount;
         if (player != Me) RememberWinCard(source);
         if (source.HasKeyword("Lifelink")) GainLife(source.Controller, amount);
         Fire(new TriggerEvent(TriggerMode.DamageDone, CardId: source.Id, Player: player, Amount: amount, Combat: combat));
+        _damageBatch.Add((source.Id, player, null, amount, combat));
         return amount;
     }
 
@@ -322,11 +390,14 @@ public sealed partial class Game
         if (amount <= 0 || target.Zone != Zone.Battlefield) return;
         amount = Replacements.Amount(this, "DamageDone", amount, source, targetCard: target, combat: combat);
         if (amount <= 0) return;
-        target.Damage += amount;
+        // Infect and wither: damage to creatures is -1/-1 counters (rules 702.80, 702.90).
+        if (source is not null && (source.HasKeyword("Infect") || source.HasKeyword("Wither"))) PutCounters(target, "M1M1", amount);
+        else target.Damage += amount;
         if (source is null) return;
         if (source.HasKeyword("Lifelink")) GainLife(source.Controller, amount);
         if (source.HasKeyword("Deathtouch") && target.Types.Is(CardType.Creature)) target.Damage = Math.Max(target.Damage, target.Toughness);
         Fire(new TriggerEvent(TriggerMode.DamageDone, CardId: source.Id, TargetCardId: target.Id, Amount: amount, Combat: combat));
+        _damageBatch.Add((source.Id, null, target.Id, amount, combat));
     }
 
     public void LoseLife(int player, int amount, Card? source)
@@ -340,6 +411,7 @@ public sealed partial class Game
     public void GainLife(int player, int amount)
     {
         amount = Replacements.Amount(this, "GainLife", amount, targetPlayer: player);
+        if (amount > 0) State.ThisTurn.LifeGained[player] = State.ThisTurn.LifeGained.GetValueOrDefault(player) + amount;
         if (amount <= 0) return;
         State.Players[player].Life += amount;
         Fire(new TriggerEvent(TriggerMode.LifeGained, Player: player, Amount: amount));
@@ -362,7 +434,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false);
@@ -386,7 +458,8 @@ public sealed partial class Game
             foreach (var t in src.Triggers)
             {
                 if (src.IsBlank || !Triggers.Matches(this, t, src, e) || !Triggers.UnderLimit(this, src, t)) continue;
-                _pending.Add(new PendingTrigger(id, t, e, src.Controller));
+                var times = 1 + (e.Mode == TriggerMode.ChangesZone && e.To == Zone.Battlefield && e.CardId is { } entered ? ExtraEnteringTriggers(src, State[entered]) : 0);
+                for (var i = 0; i < times; i++) _pending.Add(new PendingTrigger(id, t, e, src.Controller));
             }
         }
         // Delayed triggers trigger once, then are gone (rule 603.7c).
@@ -416,6 +489,7 @@ public sealed partial class Game
             {
                 Id = State.NextStackId++, SourceId = pt.SourceId, Ability = exec, Controller = pt.Controller,
                 TriggeredCardId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.TargetCardId : pt.Event.CardId,
+                Sacrificed = pt.Event.Mode == TriggerMode.Sacrificed && pt.Event.CardId is { } sac ? new() { sac } : null,
                 TriggeredPlayer = pt.Event.Player, ChainTargets = ChooseChainTargets(src, exec, pt.Controller), DelayRemembered = pt.DelayRemembered,
                 TriggerAmount = pt.Event.Amount,
                 Description = $"{src.Name} trigger",
@@ -547,6 +621,11 @@ public sealed partial class Game
             }
             if (best is { } chosen) list.Add(chosen);
         }
+        // Convoke: each untapped creature can pay for {1} or one mana of its color (rule 702.51).
+        if (_payingForSpell && _payingFor is { } spell && spell.HasKeyword("Convoke"))
+            foreach (var c in State.BattlefieldCards)
+                if (c.Controller == player && c.Types.Is(CardType.Creature) && !c.Tapped && c.Id != excludeId && !list.Any(m => m.CardId == c.Id))
+                    list.Add(new ManaSource(c.Id, ConvokeAbility, c.Colors == 0 ? ManaColor.C.Mask() : c.Colors | ManaColor.C.Mask(), 1, 0, 8));
         // Cheapest first; among equals, the least flexible so flexible sources stay available.
         list.Sort((a, b) =>
         {
@@ -600,6 +679,12 @@ public sealed partial class Game
     }
 
     /// <summary>Activates an automatic mana source for a payment: pays its costs and adds the mana.</summary>
+    /// <summary>Stands for tapping a creature to convoke.</summary>
+    private static readonly AbilityDef ConvokeAbility = new()
+    {
+        P = new Forge.ForgeParams("AB$ Mana | Cost$ T | Produced$ C"), Api = "Mana", Kind = AbilityKind.Activated, Cost = new Cost { Tap = true },
+    };
+
     private void UseManaSource(ManaSource src, ManaColor color, int player)
     {
         var card = State[src.CardId];
@@ -665,6 +750,12 @@ public sealed partial class Game
                 case CostPartKind.RemoveCounter:
                     if (source.CounterCount(part.Valid) < AmountOf(part)) return false;
                     break;
+                case CostPartKind.Reveal:
+                    if (CostCandidates(part, source, player).Count < AmountOf(part)) return false;
+                    break;
+                case CostPartKind.TapPower:
+                    if (CostCandidates(part, source, player).Sum(id => Math.Max(0, State[id].Power)) < AmountOf(part)) return false;
+                    break;
             }
         // Life can be paid only if the player has at least that much (rule 119.4).
         if (lifeNeeded > p.Life) return false;
@@ -675,8 +766,7 @@ public sealed partial class Game
 
     private List<int> CostCandidates(CostPart part, Card source, int player)
     {
-        var ctx = new CompileContext { Face = source.CurrentFace, Missing = new() };
-        var filter = part.Valid is "Card" or "" ? null : Filter.Parse(part.Valid, ctx);
+        var filter = part.Valid is "Card" or "" || part.Kind == CostPartKind.TapPower ? null : Effect.FilterFor(source.CurrentFace, part.Valid);
         var x = new EffectContext { Game = this, Ability = PermanentSpell, Item = new StackItem { SourceId = source.Id, Ability = PermanentSpell, Controller = player } };
         IEnumerable<Card> pool = part.Kind switch
         {
@@ -686,6 +776,8 @@ public sealed partial class Game
             CostPartKind.ExileFromGraveyard => State.Players[player].Graveyard.Select(id => State[id]).Where(c => c.Id != source.Id),
             CostPartKind.ExileFromHand => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
             CostPartKind.ReturnToHand => State.BattlefieldCards.Where(c => c.Controller == player),
+            CostPartKind.Reveal => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
+            CostPartKind.TapPower => State.BattlefieldCards.Where(c => c.Controller == player && !c.Tapped && c.Id != source.Id && c.Types.Is(CardType.Creature)),
             _ => Enumerable.Empty<Card>(),
         };
         return pool.Where(c => filter is null || filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
@@ -706,8 +798,12 @@ public sealed partial class Game
         finally { _payingFor = saved; }
     }
 
+    /// <summary>Permanents sacrificed to pay the last cost paid ("Sacrificed$CardPower").</summary>
+    public List<int> LastSacrificed { get; } = new();
+
     private bool PayCostCore(Cost cost, Card source, int player, int x, bool excludeSourceFromMana)
     {
+        LastSacrificed.Clear();
         var p = State.Players[player];
         var lifeNeeded = cost.Parts.Where(q => q.Kind == CostPartKind.PayLife).Sum(AmountOf);
         var plan = PlanManaPayment(player, cost.Mana, x, excludeSourceFromMana ? source.Id : -1, Math.Max(0, p.Life - lifeNeeded));
@@ -727,10 +823,13 @@ public sealed partial class Game
                     PayLife(player, n);
                     break;
                 case CostPartKind.Sacrifice:
-                    if (part.Valid == "CARDNAME") Sacrifice(source);
+                    if (part.Valid == "CARDNAME") { LastSacrificed.Add(source.Id); Sacrifice(source); }
                     else
                         foreach (var id in Decider.ChooseCards(this, player, Choice.Sacrifice, source, CostCandidates(part, source, player), n, n))
+                        {
+                            LastSacrificed.Add(id);
                             Sacrifice(State[id]);
+                        }
                     break;
                 case CostPartKind.Discard:
                     if (part.Valid == "Hand")
@@ -771,6 +870,19 @@ public sealed partial class Game
                     break;
                 case CostPartKind.RemoveCounter:
                     source.Counters![part.Valid] -= n;
+                    break;
+                case CostPartKind.Reveal:
+                    break;   // revealing changes nothing in a goldfish game
+                case CostPartKind.TapPower:
+                    // Crew with the fewest, weakest creatures that reach the power needed.
+                    var power = 0;
+                    foreach (var id in CostCandidates(part, source, player).OrderBy(id => State[id].Power).ToList())
+                    {
+                        if (power >= n) break;
+                        if (State[id].Power <= 0) continue;
+                        Tap(State[id]);
+                        power += State[id].Power;
+                    }
                     break;
                 case CostPartKind.AddCounter:
                     source.Counters ??= new();

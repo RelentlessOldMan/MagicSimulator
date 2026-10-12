@@ -146,6 +146,26 @@ public class MechanicsTests
         "Name:Grief\nManaCost:0\nTypes:Enchantment\n" +
         "T:Mode$ ChangesZoneAll | ValidCards$ Creature.YouCtrl | Origin$ Battlefield | Destination$ Graveyard | TriggerZones$ Battlefield | Execute$ TrigGain | ActivationLimit$ 1\n" +
         "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:TriggerCount$Amount\n",
+        "Name:Cart\nManaCost:0\nTypes:Artifact Vehicle\nPT:4/4\nK:Crew:2\n",
+        "Name:Elf\nManaCost:G\nTypes:Creature Elf\nPT:1/1\n",
+        "Name:Call\nManaCost:2 G\nTypes:Sorcery\nK:Convoke\nA:SP$ Draw | NumCards$ 1 | Defined$ You\n",
+        "Name:Blight\nManaCost:0\nTypes:Creature Phyrexian\nPT:2/2\nK:Infect\nK:Haste\n",
+        "Name:Brute\nManaCost:0\nTypes:Creature Ogre\nPT:3/3\nA:AB$ Fight | Cost$ 0 | Defined$ Self | ValidTgts$ Creature.Other\n",
+        "Name:Fork\nManaCost:0\nTypes:Sorcery\n" +
+        "A:SP$ Branch | BranchConditionSVar$ X | BranchConditionSVarCompare$ GE2 | TrueSubAbility$ DBA | FalseSubAbility$ DBB\n" +
+        "SVar:X:Count$CardsInYourHand\nSVar:DBA:DB$ GainLife | Defined$ You | LifeAmount$ 5\nSVar:DBB:DB$ GainLife | Defined$ You | LifeAmount$ 1\n",
+        "Name:Tax\nManaCost:0\nTypes:Creature Human\nPT:2/1\nS:Mode$ RaiseCost | ValidCard$ Card.nonCreature | Type$ Spell | Amount$ 1\n",
+        "Name:Quick\nManaCost:0\nTypes:Enchantment\nS:Mode$ CastWithFlash | ValidCard$ Card | ValidSA$ Spell | Caster$ You\n",
+        "Name:Harmony\nManaCost:0\nTypes:Artifact\n" +
+        "S:Mode$ Panharmonicon | ValidMode$ ChangesZone,ChangesZoneAll | ValidCard$ Permanent.YouCtrl | ValidCause$ Artifact,Creature | Destination$ Battlefield\n",
+        "Name:Greeter\nManaCost:0\nTypes:Creature Human\nPT:1/1\n" +
+        "T:Mode$ ChangesZone | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ TrigGain\nSVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 1\n",
+        "Name:Raid\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ DamageDoneOnce | ValidSource$ Creature.YouCtrl | ValidTarget$ Player | CombatDamage$ True | TriggerZones$ Battlefield | Execute$ TrigGain\n" +
+        "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:TriggerCount$DamageAmount\n",
+        "Name:Day\nManaCost:0\nTypes:Creature Human\nPT:1/1\nA:AB$ SetState | Cost$ 0 | Defined$ Self | Mode$ Transform\nAlternateMode:DoubleFaced\n" +
+        "ALTERNATE\nName:Night\nManaCost:no cost\nTypes:Creature Werewolf\nPT:5/5\n",
+        "Name:Pit\nManaCost:0\nTypes:Artifact\nA:AB$ GainLife | Cost$ Sac<1/Creature> | Defined$ You | LifeAmount$ X\nSVar:X:Sacrificed$CardPower\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -840,6 +860,111 @@ public class MechanicsTests
     {
         var g = Setup(new[] { "Wrath" }, battlefield: new[] { "Grief", "Bear", "Sneak", "Bog", "Bog" });
         g.CastSpell(g.State[InHand(g, "Wrath")], 0);
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void CrewTapsCreaturesToMakeTheVehicleACreature()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Cart", "Bear" });
+        var cart = OnBattlefield(g, "Cart");
+        g.ActivateAbility(cart, 0);
+        ResolveAll(g);
+        g.CheckStateBasedActions();
+        Assert.True(cart.Types.Is(CardType.Creature));
+        Assert.True(OnBattlefield(g, "Bear").Tapped);
+    }
+
+    [Fact]
+    public void ConvokeTapsCreaturesToPay()
+    {
+        var g = Setup(new[] { "Call" }, battlefield: new[] { "Elf", "Bear", "Bog" }, library: new[] { "Filler" });
+        var call = g.State[InHand(g, "Call")];
+        Assert.True(g.CanCast(call, 0));
+        g.CastSpell(call, 0);
+        Assert.True(OnBattlefield(g, "Elf").Tapped);
+    }
+
+    [Fact]
+    public void InfectGivesPoisonInsteadOfLifeLoss()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Blight" }, library: new[] { "Filler", "Filler" });
+        g.ResumeTurn();
+        Assert.Equal(2, g.State.Players.Max(p => p.Poison));
+        Assert.All(g.State.Players, p => Assert.Equal(40, p.Life));
+    }
+
+    [Fact]
+    public void FightDealsDamageBothWays()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Brute", "Bear" });
+        g.ActivateAbility(OnBattlefield(g, "Brute"), 0);
+        ResolveAll(g);
+        g.CheckStateBasedActions();
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Bear").Zone);
+        Assert.Equal(2, OnBattlefield(g, "Brute").Damage);
+    }
+
+    [Fact]
+    public void BranchPicksTheMatchingSide()
+    {
+        var g = Setup(new[] { "Fork" });
+        g.CastSpell(g.State[InHand(g, "Fork")], 0);
+        ResolveAll(g);
+        Assert.Equal(41, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void RaiseCostMakesNoncreatureSpellsCostMore()
+    {
+        var g = Setup(new[] { "Sig", "Bear" }, battlefield: new[] { "Tax", "Bog", "Bog" });
+        g.CheckStateBasedActions();
+        Assert.False(g.CanCast(g.State[InHand(g, "Sig")], -1));
+        Assert.True(g.CanCast(g.State[InHand(g, "Bear")], -1));
+    }
+
+    [Fact]
+    public void CastWithFlashAllowsCastingAtInstantSpeed()
+    {
+        var g = Setup(new[] { "Bear" }, battlefield: new[] { "Quick", "Bog", "Bog" });
+        g.State.Step = Step.BeginCombat;
+        Assert.Contains(g.LegalActions(Game.Me), a => a is GameAction.Cast);
+    }
+
+    [Fact]
+    public void PanharmoniconDoublesEnterTriggers()
+    {
+        var g = Setup(new[] { "Greeter" }, battlefield: new[] { "Harmony" });
+        g.CastSpell(g.State[InHand(g, "Greeter")], -1);
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void OneOrMoreCombatDamageTriggersOncePerPlayer()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Raid", "Bear", "Sneak" }, library: new[] { "Filler", "Filler", "Filler" });
+        g.ResumeTurn();
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void TransformTurnsTheCardOver()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Day" });
+        var card = OnBattlefield(g, "Day");
+        g.ActivateAbility(card, 0);
+        ResolveAll(g);
+        Assert.Equal("Night", card.Name);
+        Assert.Equal(5, card.Power);
+    }
+
+    [Fact]
+    public void SacrificedCreaturesPowerIsKnown()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Pit", "Bear" });
+        g.ActivateAbility(OnBattlefield(g, "Pit"), 0);
         ResolveAll(g);
         Assert.Equal(42, g.State.Players[Game.Me].Life);
     }

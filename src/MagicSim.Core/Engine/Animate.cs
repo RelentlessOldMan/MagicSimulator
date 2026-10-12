@@ -122,7 +122,11 @@ sealed class AnimateEffect : Effect
         return m;
     }
 
-    public override void Resolve(EffectContext x)
+    public override void Resolve(EffectContext x) =>
+        AnimateCards(x, Defined.Cards(x.Ability["Defined"], x, "Targeted").Select(id => x.S[id]).ToList());
+
+    /// <summary>Applies this ability's "becomes …" effect to each of <paramref name="cards"/> on the battlefield.</summary>
+    public static void AnimateCards(EffectContext x, List<Card> cards)
     {
         var ab = x.Ability;
         int? power = ab["Power"] is { } p ? Amount(x, p, 0) : null;
@@ -135,9 +139,8 @@ sealed class AnimateEffect : Effect
         };
         var types = ab["Types"] is { } ty ? TypeChange.Words(ty, x.Host) : null;
         var anim = new Animation(ab, types, power, toughness, colors, ab["Duration"] ?? "EOT", x.Host.Id, x.S.Turn);
-        foreach (var id in Defined.Cards(ab["Defined"], x, "Targeted"))
+        foreach (var c in cards)
         {
-            var c = x.S[id];
             if (c.Zone != Zone.Battlefield) continue;
             (c.Animations ??= new()).Add(anim);
             if (ab["AtEOT"] is { } eot) x.S.ThisTurn.AtEndStep.Add((c.Id, eot));
