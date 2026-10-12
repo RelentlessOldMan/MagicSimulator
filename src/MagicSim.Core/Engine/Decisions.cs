@@ -27,6 +27,14 @@ public interface IDecider
     GameAction ChooseAction(Game g, int player, IReadOnlyList<GameAction> legal);
     /// <summary>Pass without looking at the legal actions outside the main phases when the stack is empty (cheap rollouts).</summary>
     bool PassesQuietSteps => false;
+    /// <summary>Whether to choose with <see cref="ChooseActionLazily"/> instead of <see cref="ChooseAction"/>.</summary>
+    bool ChoosesActionsLazily => false;
+    /// <summary>
+    /// Chooses among <paramref name="candidates"/>: everything that might be legal now, with the costs and targets not
+    /// yet checked. <paramref name="isLegal"/> checks one; the choice must be one it accepts (Pass always is).
+    /// </summary>
+    GameAction ChooseActionLazily(Game g, int player, IReadOnlyList<GameAction> candidates, Func<GameAction, bool> isLegal) =>
+        throw new NotSupportedException();
     bool KeepHand(Game g, int player, int mulligansTaken);
     List<int> ChooseCards(Game g, int player, Choice kind, Card? source, IReadOnlyList<int> candidates, int min, int max);
     List<TargetRef> ChooseTargets(Game g, int player, Card source, AbilityDef ability, IReadOnlyList<TargetRef> candidates, int min, int max);

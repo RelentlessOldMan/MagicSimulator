@@ -23,6 +23,27 @@ public sealed class RolloutPolicy : ChoiceDecider
         "DealDamage", "LoseLife", "Mill", "Discard", "Destroy", "Sacrifice", "Tap", "RevealHand", "LosesGame",
     };
 
+    /// <summary>
+    /// The same weighted random pick, among the actions that pass <paramref name="isLegal"/>: draw from all the
+    /// candidates, and draw again without any that fail. Each legal action comes up in proportion to its weight, as
+    /// when drawing from the legal ones only, and usually only the drawn action is checked.
+    /// </summary>
+    public override bool ChoosesActionsLazily => true;
+
+    public override GameAction ChooseActionLazily(Game g, int player, IReadOnlyList<GameAction> candidates, Func<GameAction, bool> isLegal)
+    {
+        if (candidates.Count == 1) return candidates[0];
+        var d = new Decision { Kind = DecisionKind.Action, Options = candidates, Player = player };
+        var weights = new double[candidates.Count];
+        for (var i = 0; i < weights.Length; i++) weights[i] = Weight(g, d, candidates[i]);
+        while (true)
+        {
+            var i = WeightedPick(weights);
+            if (isLegal(candidates[i])) return candidates[i];
+            weights[i] = 0;
+        }
+    }
+
     protected override int Pick(Game g, Decision d)
     {
         switch (d.Kind)
@@ -182,6 +203,11 @@ public sealed class ReplayDecider : ChoiceDecider
     public bool Exhausted => _next >= _script.Count;
 
     public override bool PassesQuietSteps => Exhausted && _after.PassesQuietSteps;
+
+    public override bool ChoosesActionsLazily => Exhausted && _after.ChoosesActionsLazily;
+
+    public override GameAction ChooseActionLazily(Game g, int player, IReadOnlyList<GameAction> candidates, Func<GameAction, bool> isLegal) =>
+        _after.ChooseActionLazily(g, player, candidates, isLegal);
 
     protected override int Pick(Game g, Decision d)
     {

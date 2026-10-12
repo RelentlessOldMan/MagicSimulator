@@ -418,7 +418,6 @@ public sealed partial class Game
             if (OnCheckpoint is not null && State.Stack.Count == 0 && State.Step is Step.Main1 or Step.Main2)
                 OnCheckpoint(this);
 
-            var legal = LegalActions(Me);
             if (_actionsThisTurn >= Math.Min(Settings.MaxActionsPerTurn, ActionLimit) + MandatoryLoopActions)
             {
                 Note("the stack never empties: a mandatory loop, so the game is a draw");
@@ -427,9 +426,9 @@ public sealed partial class Game
                 State.WinReason = null;
                 return;
             }
-            GameAction action = PastActionLimit
-                ? GameAction.PassAction
-                : Decider.ChooseAction(this, Me, legal);
+            GameAction action = PastActionLimit ? GameAction.PassAction
+                : Decider.ChoosesActionsLazily ? ChooseActionLazily(Me)
+                : Decider.ChooseAction(this, Me, LegalActions(Me));
             _actionsThisTurn++;
             if (action is GameAction.Pass && State.Stack.Count == 0) return;
             InPriorityAction = true;
@@ -481,13 +480,46 @@ public sealed partial class Game
     private bool _cacheStaticPairs;
     internal bool CachesStaticPairs => _cacheStaticPairs;
 
-    public List<GameAction> LegalActions(int player)
+    public List<GameAction> LegalActions(int player) => WithLegalActionCaches(() => LegalActionsCore(player, check: true));
+
+    /// <summary>
+    /// Lets the decider choose from the actions that might be legal, checking costs and targets only for those it
+    /// considers: those checks are most of the work of finding the legal actions.
+    /// </summary>
+    private GameAction ChooseActionLazily(int player) => WithLegalActionCaches(() =>
+    {
+        var sorcerySpeed = IsMainPhaseEmptyStack(player);
+        var candidates = LegalActionsCore(player, check: false);
+        return Decider.ChooseActionLazily(this, player, candidates, a => IsLegal(a, sorcerySpeed));
+    });
+
+    /// <summary>Checks the costs and targets of an action <see cref="LegalActionsCore"/> found without checking them.</summary>
+    private bool IsLegal(GameAction action, bool sorcerySpeed)
+    {
+        switch (action)
+        {
+            case GameAction.Cast cast:
+                var c = State[cast.CardId];
+                var face = c.Face;
+                c.Face = cast.Face;
+                try { return CanCast(c, cast.SpellIndex); }
+                finally { c.Face = face; }
+            case GameAction.Activate act:
+                var source = State[act.CardId];
+                return CanActivate(source, source.Activated[act.AbilityIndex], sorcerySpeed);
+            default:
+                return true;
+        }
+    }
+
+    // The game doesn't change while the legal actions are worked out, so mana sources and static abilities are found once.
+    private T WithLegalActionCaches<T>(Func<T> f)
     {
         var saved = _autoSourceCache;
         var (savedPairs, savedCaching) = (StaticPairs, _cacheStaticPairs);
         _autoSourceCache = new();
         (StaticPairs, _cacheStaticPairs) = (null, true);
-        try { return LegalActionsCore(player); }
+        try { return f(); }
         finally
         {
             _autoSourceCache = saved;
@@ -495,59 +527,65 @@ public sealed partial class Game
         }
     }
 
-    private List<GameAction> LegalActionsCore(int player)
+    /// <param name="check">False: leave out the cost and target checks (see <see cref="IsLegal"/>).</param>
+    private List<GameAction> LegalActionsCore(int player, bool check)
     {
         var result = new List<GameAction> { GameAction.PassAction };
         var p = State.Players[player];
         var sorcerySpeed = IsMainPhaseEmptyStack(player);
 
-        // Identical cards in hand are interchangeable; offer each name once.
-        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        // Identical cards are interchangeable; offer each name once (per place it's played from). The lists are
+        // short, so a scan beats hashing each name.
+        var seenNames = new List<string>();
         foreach (var id in p.Hand.Concat(p.Command))
         {
             var c = State[id];
-            if (c.Zone == Zone.Hand && !seenNames.Add(c.Name)) continue;
+            if (c.Zone == Zone.Hand && !AddName(seenNames, c.Name)) continue;
             if (c.IsBlank || c.IsEffect) continue;
-            AddPlayOrCast(result, c, p, sorcerySpeed);
+            AddPlayOrCast(result, c, p, sorcerySpeed, check);
 
             // Abilities usable from hand (e.g. "exile this from your hand: add {R}").
             if (c.Zone == Zone.Hand)
                 for (var i = 0; i < c.Activated.Count; i++)
                 {
                     var ab = c.Activated[i];
-                    if (ab["ActivationZone"] == "Hand" && !IsAutoManaAbility(ab) && CanActivate(c, ab, sorcerySpeed)) result.Add(new GameAction.Activate(id, i));
+                    if (ab["ActivationZone"] == "Hand" && !IsAutoManaAbility(ab) && (!check || CanActivate(c, ab, sorcerySpeed))) result.Add(new GameAction.Activate(id, i));
                 }
         }
 
         // The creature half of a card on an adventure.
+        List<string>? seenAdventures = null;
         foreach (var id in p.Exile)
         {
             var c = State[id];
-            if (c.OnAdventure && !c.IsBlank && seenNames.Add("adventure:" + c.Name)) AddPlayOrCast(result, c, p, sorcerySpeed);
+            if (c.OnAdventure && !c.IsBlank && AddName(seenAdventures ??= new(), c.Name)) AddPlayOrCast(result, c, p, sorcerySpeed, check);
         }
 
         // Cards an effect lets you play from exile, the graveyard or the top of your library.
+        List<string>? seenMayPlay = null;
         foreach (var id in Statics.MayPlay(this, player).Keys)
         {
             var c = State[id];
-            if (c.Zone is Zone.Hand or Zone.Stack || c.IsBlank || !seenNames.Add("mayplay:" + c.Name)) continue;
-            AddPlayOrCast(result, c, p, sorcerySpeed);
+            if (c.Zone is Zone.Hand or Zone.Stack || c.IsBlank || !AddName(seenMayPlay ??= new(), c.Name)) continue;
+            AddPlayOrCast(result, c, p, sorcerySpeed, check);
         }
 
         // Abilities activated from the graveyard ("Exile this card from your graveyard: …").
+        List<string>? seenGraveyardAbilities = null;
         foreach (var id in p.Graveyard)
         {
             var c = State[id];
-            if (c.IsBlank || !HasAbility(c, ab => ab["ActivationZone"] == "Graveyard") || !seenNames.Add("graveyard-ability:" + c.Name)) continue;
+            if (c.IsBlank || !HasAbility(c, ab => ab["ActivationZone"] == "Graveyard") || !AddName(seenGraveyardAbilities ??= new(), c.Name)) continue;
             for (var i = 0; i < c.Activated.Count; i++)
             {
                 var ab = c.Activated[i];
-                if (ab["ActivationZone"] == "Graveyard" && CanActivate(c, ab, sorcerySpeed)) result.Add(new GameAction.Activate(id, i));
+                if (ab["ActivationZone"] == "Graveyard" && (!check || CanActivate(c, ab, sorcerySpeed))) result.Add(new GameAction.Activate(id, i));
             }
         }
 
         // Flashback and escape: cast from the graveyard.
         bool? escapeGranted = null;
+        List<string>? seenGraveyard = null;
         foreach (var id in p.Graveyard)
         {
             var c = State[id];
@@ -557,26 +595,42 @@ public sealed partial class Game
                 escapeGranted ??= Statics.GrantsEscape(this, player);
                 if (escapeGranted == false || Statics.EscapeCost(this, c) is null) continue;
             }
-            if (!seenNames.Add("graveyard:" + c.Name)) continue;
+            if (!AddName(seenGraveyard ??= new(), c.Name)) continue;
             if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed)) continue;
             if (c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0)
             {
-                if (CanCast(c, -1)) result.Add(new GameAction.Cast(id, -1));
+                if (!check || CanCast(c, -1)) result.Add(new GameAction.Cast(id, -1));
             }
             else
                 for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
-                    if (CanCast(c, i)) result.Add(new GameAction.Cast(id, i));
+                    if (!check || CanCast(c, i)) result.Add(new GameAction.Cast(id, i));
         }
 
-        var seenPermanents = new HashSet<(string, bool, bool)>();
+        List<(string Name, bool FaceDown, bool Tapped, bool Sick)>? seenPermanents = null;
         foreach (var c in State.BattlefieldCards)
         {
             if (c.Controller != player || c.IsBlank || !HasAbility(c, Offerable)) continue;
-            if (c.Counters is null && c.Animations is null && c.StaticActivated is null && !seenPermanents.Add((c.FaceDown ? "face-down " + c.Def.Name : c.Name, c.Tapped, IsSick(c)))) continue;
+            if (c.Counters is null && c.Animations is null && c.StaticActivated is null)
+            {
+                // Untouched permanents with the same name, tapped or not and sick or not, have the same abilities.
+                var key = (c.FaceDown ? c.Def.Name : c.Name, c.FaceDown, c.Tapped, IsSick(c));
+                seenPermanents ??= new();
+                if (seenPermanents.Contains(key)) continue;
+                seenPermanents.Add(key);
+            }
             for (var i = 0; i < c.Activated.Count; i++)
-                if (Offerable(c.Activated[i]) && CanActivate(c, c.Activated[i], sorcerySpeed)) result.Add(new GameAction.Activate(c.Id, i));
+                if (Offerable(c.Activated[i]) && (!check || CanActivate(c, c.Activated[i], sorcerySpeed))) result.Add(new GameAction.Activate(c.Id, i));
         }
         return result;
+    }
+
+    /// <summary>Adds <paramref name="name"/> unless it's already there; false if it was.</summary>
+    private static bool AddName(List<string> seen, string name)
+    {
+        foreach (var n in seen)
+            if (string.Equals(n, name, StringComparison.Ordinal)) return false;
+        seen.Add(name);
+        return true;
     }
 
     private static bool HasAbility(Card c, Func<AbilityDef, bool> pred)
@@ -590,7 +644,7 @@ public sealed partial class Game
     private static bool Offerable(AbilityDef ab) => ab["ActivationZone"] is null && !IsAutoManaAbility(ab) && ab["RestrictValid"] is null;
 
     /// <summary>Adds playing <paramref name="c"/> as a land, or casting it with each of its spell abilities, if allowed now.</summary>
-    private void AddPlayOrCast(List<GameAction> result, Card c, Player p, bool sorcerySpeed)
+    private void AddPlayOrCast(List<GameAction> result, Card c, Player p, bool sorcerySpeed, bool check)
     {
         // A modal double-faced card can be played as either face (rule 712.12); an adventurer card can be
         // cast as its Adventure from hand (rule 715.3).
@@ -598,12 +652,12 @@ public sealed partial class Game
         for (var f = 0; f < faces; f++)
         {
             c.Face = f;
-            AddPlayOrCastFace(result, c, p, sorcerySpeed, f);
+            AddPlayOrCastFace(result, c, p, sorcerySpeed, f, check);
         }
         c.Face = 0;
     }
 
-    private void AddPlayOrCastFace(List<GameAction> result, Card c, Player p, bool sorcerySpeed, int face)
+    private void AddPlayOrCastFace(List<GameAction> result, Card c, Player p, bool sorcerySpeed, int face, bool check)
     {
         if (c.Types.Is(CardType.Land))
         {
@@ -614,11 +668,11 @@ public sealed partial class Game
         if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || c.HasKeyword("MayFlashSac") || sorcerySpeed || Statics.CastWithFlash(this, c, p.Index))) return;
         if (c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0)
         {
-            if (CanCast(c, -1)) result.Add(new GameAction.Cast(c.Id, -1, face));
+            if (!check || CanCast(c, -1)) result.Add(new GameAction.Cast(c.Id, -1, face));
         }
         else
             for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
-                if (CanCast(c, i)) result.Add(new GameAction.Cast(c.Id, i, face));
+                if (!check || CanCast(c, i)) result.Add(new GameAction.Cast(c.Id, i, face));
     }
 
     private bool CanActivate(Card c, AbilityDef ab, bool sorcerySpeed)

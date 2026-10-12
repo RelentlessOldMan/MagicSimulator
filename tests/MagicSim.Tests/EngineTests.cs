@@ -294,4 +294,22 @@ public class EngineTests
         Assert.True(g.State.GameOver);
         Assert.Null(g.State.Winner);
     }
+
+    [Fact]
+    public void ALazyRolloutChoicePicksOnlyLegalActionsInProportionToTheirWeights()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Chant" });
+        var chant = g.State.BattlefieldCards.Single().Id;
+        // Pass weighs 1 and an ability 3; the land (weight 20) fails its check.
+        var candidates = new GameAction[] { GameAction.PassAction, new GameAction.Activate(chant, 0), new GameAction.PlayLand(chant) };
+        var policy = new RolloutPolicy(7);
+        var activations = 0;
+        for (var i = 0; i < 4000; i++)
+        {
+            var a = policy.ChooseActionLazily(g, Game.Me, candidates, x => x is not GameAction.PlayLand);
+            Assert.IsNotType<GameAction.PlayLand>(a);
+            if (a is GameAction.Activate) activations++;
+        }
+        Assert.InRange(activations / 4000.0, 0.70, 0.80);
+    }
 }

@@ -44,6 +44,11 @@ public abstract class ChoiceDecider : IDecider
     public GameAction ChooseAction(Game g, int player, IReadOnlyList<GameAction> legal) =>
         legal.Count == 1 ? legal[0] : legal[Pick(g, new Decision { Kind = DecisionKind.Action, Options = legal, Player = player })];
 
+    public virtual bool ChoosesActionsLazily => false;
+
+    public virtual GameAction ChooseActionLazily(Game g, int player, IReadOnlyList<GameAction> candidates, Func<GameAction, bool> isLegal) =>
+        throw new NotSupportedException();
+
     public bool KeepHand(Game g, int player, int mulligansTaken) =>
         Pick(g, new Decision { Kind = DecisionKind.Keep, Options = new object?[] { true, false }, Player = player }) == 0;
 
