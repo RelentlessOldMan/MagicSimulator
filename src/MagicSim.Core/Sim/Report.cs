@@ -7,7 +7,8 @@ namespace MagicSim.Core.Sim;
 public static class Report
 {
     public const string SimVersion = "0.1.0";
-    public const double PlayWeight = 1.0 / 3.0;
+    /// <summary>Your share of being first: 1/2 at a 2-player table, 1/3 at a 3-player one.</summary>
+    public static double PlayWeight(string table) => 1.0 / (Runner.OpponentsAt(table) + 1);
 
     public static readonly JsonSerializerOptions Json = new()
     {
@@ -24,17 +25,21 @@ public static class Report
     public static object RunDocument(Runner.PreparedDeck deck, string deckPath, RunOptions o, IReadOnlyList<GameResult> games)
     {
         var rows = new List<object>();
-        foreach (var grp in games.GroupBy(g => (g.Mulligan, g.Seat)))
-            rows.Add(Row(grp.Key.Mulligan, grp.Key.Seat, grp.Select(g => (g, 1.0)).ToList(), o.MaxTurn));
-        if (o.Seats.Contains("play") && o.Seats.Contains("draw"))
-            foreach (var grp in games.GroupBy(g => g.Mulligan))
+        foreach (var table in games.GroupBy(g => g.Table))
+        {
+            foreach (var grp in table.GroupBy(g => (g.Mulligan, g.Seat)))
+                rows.Add(Row(table.Key, grp.Key.Mulligan, grp.Key.Seat, grp.Select(g => (g, 1.0)).ToList(), o.MaxTurn));
+            if (!o.Seats.Contains("play") || !o.Seats.Contains("draw")) continue;
+            var w = PlayWeight(table.Key);
+            foreach (var grp in table.GroupBy(g => g.Mulligan))
             {
                 var play = grp.Where(g => g.Seat == "play").ToList();
                 var draw = grp.Where(g => g.Seat == "draw").ToList();
-                var weighted = play.Select(g => (g, PlayWeight / play.Count))
-                    .Concat(draw.Select(g => (g, (1 - PlayWeight) / draw.Count))).ToList();
-                rows.Add(Row(grp.Key, "weighted", weighted, o.MaxTurn));
+                var weighted = play.Select(g => (g, w / play.Count))
+                    .Concat(draw.Select(g => (g, (1 - w) / draw.Count))).ToList();
+                rows.Add(Row(table.Key, grp.Key, "weighted", weighted, o.MaxTurn));
             }
+        }
 
         return new
         {
@@ -53,7 +58,7 @@ public static class Report
     }
 
     /// <summary>One results row from weighted games (weights sum to 1 for weighted rows, else 1 each).</summary>
-    private static Dictionary<string, object?> Row(string mulligan, string seat, List<(GameResult G, double W)> games, int maxTurn)
+    private static Dictionary<string, object?> Row(string table, string mulligan, string seat, List<(GameResult G, double W)> games, int maxTurn)
     {
         var totalW = games.Sum(x => x.W);
         double Frac(Func<GameResult, bool> f) => Math.Round(games.Where(x => f(x.G)).Sum(x => x.W) / totalW, 4);
@@ -79,6 +84,7 @@ public static class Report
 
         return new Dictionary<string, object?>
         {
+            ["table"] = table,
             ["mulligan"] = mulligan,
             ["seat"] = seat,
             ["games"] = seat == "weighted" ? games.Count : (int)totalW,
@@ -138,6 +144,7 @@ public static class Report
         schema = "magicsim.game/1",
         variant = g.Variant,
         game = g.Game,
+        table = g.Table,
         mulligan = g.Mulligan,
         seat = g.Seat,
         mulligans = g.Mulligans,

@@ -2,7 +2,7 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.6.2** (2026-10-11).
+Status: **draft v0.7** (2026-10-11).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
@@ -10,6 +10,7 @@ Status: **draft v0.6.2** (2026-10-11).
 - v0.6: the card index gains `edhrec_rank` (§2). It is additive, so older readers are unaffected.
 - v0.6.1: states that turn numbers in results are rounds, so extra turns don't add to them (§3). No field changes.
 - v0.6.2: states what the goldfish opponents are assumed to have for effects that look at them: 7 cards in hand, lands of every color (§3). No field changes.
+- v0.7: games are played at two table sizes, 1v1 and 1v1v1 (`--table`, default `both`). Result rows and per-game rows gain a `table` field (§3). Readers that ignore it will see two rows per (mulligan, seat) and must filter on `table`.
 - Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
 
@@ -119,16 +120,17 @@ sim cards [--deck x.txt] [--forge dir] [--cards path] [--json out.json]
 
 ```
 sim run <deck.txt> [--profile p.yaml] [--games N] [--seed S]
-        [--mull A|B|C|all] [--seat play|draw|both] [--max-turn T] [--json out.json]
+        [--mull A|B|C|all] [--seat play|draw|both] [--table 1v1|1v1v1|both]
+        [--max-turn T] [--json out.json]
         [--per-game games.jsonl]
 sim compare <base.txt> --swap "Out=>In" [--swap ...] [same options as run]
 sim compare <a.txt> <b.txt> [<c.txt> ...]           [same options as run]
-sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--profile p.yaml]
+sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--table 1v1|1v1v1] [--profile p.yaml]
 ```
 
-`replay` prints a readable turn-by-turn log of one game: the mulligans, each spell and ability, each trigger, what's on the stack and when it resolves, the mana pool, and how the game ended. The same (deck, seed, `--game`, mulligan, seat) gives the same game as row `game` in the `--per-game` output, so any interesting row can be replayed. This is for checking by hand that the engine plays correctly. Its text output isn't a stable format.
+`replay` prints a readable turn-by-turn log of one game: the mulligans, each spell and ability, each trigger, what's on the stack and when it resolves, the mana pool, and how the game ended. The same (deck, seed, `--game`, mulligan, seat, table) gives the same game as row `game` in the `--per-game` output, so any interesting row can be replayed. This is for checking by hand that the engine plays correctly. Its text output isn't a stable format.
 
-**Defaults:** `--games 10000`, `--seed 1`, `--mull all`, `--seat both`, `--max-turn 10`.
+**Defaults:** `--games 10000`, `--seed 1`, `--mull all`, `--seat both`, `--table both`, `--max-turn 10`. `replay` defaults to `--mull C --seat play --table 1v1v1`.
 
 **Determinism:**
 - The same deck, seed, options and simulator version always give the same JSON.
@@ -136,11 +138,14 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
 
 **Play or draw:**
 - `play` means no draw on turn 1. `draw` means a draw on turn 1.
-- `both` reports each, plus a `weighted` row: 1/3 play, 2/3 draw, which is your share of being first at a 3-player table.
+- `both` reports each, plus a `weighted` row: your share of being first at that table, so 1/2 play and 1/2 draw at `1v1`, and 1/3 play and 2/3 draw at `1v1v1`.
 
-**The goldfish table:**
-- 2 opponents, 40 life each, 99-card libraries, no interaction.
+**The goldfish table (`--table`):**
+- `1v1`: 1 opponent. `1v1v1`: 2 opponents. `both` (the default) plays every game at each size and reports each separately.
+- Each opponent has 40 life and a 99-card library, and never interacts or takes a turn.
 - You start at 40 life.
+- A win means every opponent is out, so `1v1` needs 40 damage where `1v1v1` needs 80.
+- Game *i* uses the same shuffle at both sizes, so the two can be paired game by game.
 - Effects that look at an opponent assume a typical table: each opponent holds 7 cards (Jeska's Will adds 7 mana), and their lands can make every color (Exotic Orchard, Fellwar Stone).
 
 **Mulligans:**
@@ -173,7 +178,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
   "settings": {"games": 10000, "seed": 1, "max_turn": 10},
   "results": [
     {
-      "mulligan": "A", "seat": "play", "games": 10000,
+      "table": "1v1v1", "mulligan": "A", "seat": "play", "games": 10000,
       "win_by_turn":        {"1": 0.312, "2": 0.201, "3": 0.090},
       "cumulative_by_turn": {"1": 0.312, "2": 0.513, "3": 0.603},
       "no_win": 0.105,
@@ -195,8 +200,8 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
 - **`mean_turn` / `median_turn`:** counted over winning games only.
 - **`mean_turn_capped`:** counted over all games, with each game that wasn't won counted as `max_turn + 1`. Use this to rank variants: a deck that wins less often but faster can't look better than it is.
 - **`win_lines`:** fractions of the wins. The keys come from the deck profile.
-- **`results`:** one row per (mulligan, seat) pair, plus `seat: "weighted"` rows when `--seat both`.
-- **`cards`:** per-game fractions, across all games in the run:
+- **`results`:** one row per (table, mulligan, seat), plus `seat: "weighted"` rows when `--seat both`. `table` is `1v1` or `1v1v1`.
+- **`cards`:** per-game fractions, across all games in the run (both table sizes together):
   - `drawn`: the card was seen in hand.
   - `cast`: it was cast or played.
   - `in_win`: it was cast in a game that was won. Planned later: `in_win_line`, meaning the card was part of the actual winning line.
@@ -206,7 +211,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
 `--per-game <path>` writes one JSON object per game, as JSONL, alongside the summary. Callers can compute any measure they want from it. It works with `run` and `compare`.
 
 ```json
-{"schema":"magicsim.game/1","variant":"base","game":17,"mulligan":"A","seat":"play",
+{"schema":"magicsim.game/1","variant":"base","game":17,"table":"1v1v1","mulligan":"A","seat":"play",
  "mulligans":1,"kept":6,"hand_kept":["Dark Ritual","…"],"bottomed":["Island"],
  "won":true,"win_turn":2,"win_line":"consult_oracle","fail_reason":null,
  "life_end":{"you":36,"opponents":[40,40]},"turns_played":2,
@@ -235,8 +240,8 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
 - **`mana_by_turn`:** the most mana available in each turn played, counting rituals and fast mana.
 - **`life_paid`:** life you spent on purpose, e.g. on Ad Nauseam, Necropotence, Doomsday or painlands. **`storm_max`:** the most spells cast in one turn.
 - **`notes`:** rules events worth checking, e.g. "Tainted Pact stopped: duplicate Island". It's free text: show it to people, don't parse it.
-- **Row order:** one row per (variant, mulligan, seat, game). Rows are sorted in that order, so files can be compared byte for byte.
-- **Size:** with the defaults, `run` writes 10,000 games × 3 mulligan settings × 2 seats = 60,000 rows. Use `--mull` and `--seat` to cut that down.
+- **Row order:** one row per (variant, table, mulligan, seat, game), with `1v1` before `1v1v1`. Rows are sorted in that order, so files can be compared byte for byte.
+- **Size:** with the defaults, `run` writes 10,000 games × 2 tables × 3 mulligan settings × 2 seats = 120,000 rows. Use `--table`, `--mull` and `--seat` to cut that down.
 
 #### `compare` output (`magicsim.compare/1`)
 
@@ -251,7 +256,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
       "unreliable": false,
       "unsupported_added": [],
       "results": [
-        {"mulligan": "A", "seat": "play",
+        {"table": "1v1v1", "mulligan": "A", "seat": "play",
          "t1_rate": 0.318, "delta_t1": 0.006, "delta_t1_ci95": [-0.002, 0.014],
          "p_value": 0.14,
          "delta_cumulative_by_turn": {"1": 0.006, "2": 0.004, "3": -0.001},
@@ -265,7 +270,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--p
 
 - **The test:** each base game is paired with the variant game that used the same shuffle. `p_value` comes from McNemar's test on turn-1 wins, a test suited to paired results.
 - **`unreliable: true`** means the variant adds a card the simulator can't play. Don't optimize toward it.
-- **Rows:** one per (mulligan, seat) pair, including the `seat: "weighted"` rows. `delta_cumulative_by_turn` covers turns 1 through `max_turn`.
+- **Rows:** one per (table, mulligan, seat), including the `seat: "weighted"` rows. `delta_cumulative_by_turn` covers turns 1 through `max_turn`.
 - **Swap rules:** a `--swap` is a usage error (exit 2) if its `Out` card isn't in the deck or its `In` card isn't in the card index.
 - **Not checked by compare:** bans and color identity. Callers check those first (MagicDecks uses `validate_deck.py`).
 

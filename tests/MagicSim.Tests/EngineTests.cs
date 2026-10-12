@@ -1,6 +1,7 @@
 using MagicSim.Core.Engine;
 using MagicSim.Core.Forge;
 using MagicSim.Core.Players;
+using MagicSim.Core.Sim;
 
 namespace MagicSim.Tests;
 
@@ -208,5 +209,26 @@ public class EngineTests
         var pool = new CardPool(lib, null);
         Assert.Contains("Api:Frobnicate", pool.Compile("Weird")!.Missing);
         Assert.True(pool.Resolve("Weird")!.IsBlank);
+    }
+
+    [Fact]
+    public void RunsBothTableSizesOnTheSameShuffles()
+    {
+        var library = Enumerable.Repeat(Def("Bog"), 50).Concat(Enumerable.Repeat(Def("Bear"), 49)).ToList();
+        var deck = new Runner.PreparedDeck("Bears", library, new List<CardDef>(), new List<string>(), 99);
+        var o = new RunOptions { Games = 3, MaxTurn = 3, Mulligans = new[] { MulliganPolicy.C }, Rollouts = 1, Threads = 1 };
+        var games = Runner.Run(deck, o);
+        Assert.Equal(new[] { "1v1", "1v1v1" }, games.Select(g => g.Table).Distinct());
+        Assert.All(games.Where(g => g.Table == "1v1"), g => Assert.Single(g.OpponentsLifeEnd));
+        Assert.All(games.Where(g => g.Table == "1v1v1"), g => Assert.Equal(2, g.OpponentsLifeEnd.Count));
+        // Same shuffle, same opening hand at both sizes.
+        foreach (var g in games.Where(g => g.Table == "1v1"))
+            Assert.Equal(g.HandKept, games.Single(h => h.Table == "1v1v1" && h.Game == g.Game && h.Seat == g.Seat).HandKept);
+
+        var doc = System.Text.Json.JsonSerializer.SerializeToElement(Report.RunDocument(deck, "bears.txt", o, games), Report.Json);
+        var rows = doc.GetProperty("results").EnumerateArray().Select(r => (r.GetProperty("table").GetString(), r.GetProperty("seat").GetString())).ToList();
+        Assert.Equal(new[] { ("1v1", "play"), ("1v1", "draw"), ("1v1", "weighted"), ("1v1v1", "play"), ("1v1v1", "draw"), ("1v1v1", "weighted") }, rows);
+        Assert.Equal(0.5, Report.PlayWeight("1v1"));
+        Assert.Equal(1.0 / 3, Report.PlayWeight("1v1v1"));
     }
 }

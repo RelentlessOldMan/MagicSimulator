@@ -167,11 +167,18 @@ public static class Program
             "play" or "draw" => new[] { seat },
             _ => throw new UsageException(single ? "--seat must be play or draw" : "--seat must be play, draw or both"),
         };
+        var table = o.Get("--table") ?? (single ? "1v1v1" : "both");
+        var tables = table switch
+        {
+            "both" when !single => new[] { "1v1", "1v1v1" },
+            "1v1" or "1v1v1" => new[] { table },
+            _ => throw new UsageException(single ? "--table must be 1v1 or 1v1v1" : "--table must be 1v1, 1v1v1 or both"),
+        };
         var seedText = o.Get("--seed") ?? "1";
         if (!ulong.TryParse(seedText, out var seed)) throw new UsageException("--seed must be a non-negative integer");
         return new RunOptions
         {
-            Games = Int("--games", 10000), Seed = seed, MaxTurn = Int("--max-turn", 10), Mulligans = mulls, Seats = seats,
+            Games = Int("--games", 10000), Seed = seed, MaxTurn = Int("--max-turn", 10), Mulligans = mulls, Seats = seats, Tables = tables,
             Rollouts = Int("--rollouts", 6), Threads = Int("--threads", Environment.ProcessorCount),
         };
     }
@@ -188,7 +195,7 @@ public static class Program
     {
         var opts = RunOptionsFrom(o);
         var (deck, path) = LoadDeck(o);
-        var total = opts.Games * opts.Mulligans.Count * opts.Seats.Count;
+        var total = opts.Games * opts.Tables.Count * opts.Mulligans.Count * opts.Seats.Count;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var games = Runner.Run(deck, opts, progress: new Progress<int>(n =>
             Console.Error.Write($"\r{n}/{total} games ({sw.Elapsed.TotalSeconds:F0}s)")));
@@ -206,7 +213,7 @@ public static class Program
             throw new UsageException("replay needs --game <index>");
         var (deck, _) = LoadDeck(o);
         var log = new List<string>();
-        var r = Runner.PlayOne(deck, opts, game, opts.Mulligans[0], opts.Seats[0], log: log);
+        var r = Runner.PlayOne(deck, opts, game, opts.Mulligans[0], opts.Seats[0], opts.Tables[0], log: log);
         foreach (var line in log) Console.WriteLine(line);
         Console.WriteLine();
         Console.WriteLine(r.Won ? $"WON on turn {r.WinTurn} ({r.WinLine})" : $"no win by turn {opts.MaxTurn} ({r.FailReason})");
@@ -246,9 +253,10 @@ public static class Program
               cards [--deck x.txt] [--top N] [--forge dir] [--cards path] [--json out.json]
                                                    card support: whole-pool coverage, per-deck tiers
 
-              run <deck.txt> [--games N] [--seed S] [--mull A|B|C|all] [--seat play|draw|both] [--max-turn T]
-                  [--rollouts R] [--threads N] [--json out.json] [--per-game games.jsonl]
-              replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--max-turn T]
+              run <deck.txt> [--games N] [--seed S] [--mull A|B|C|all] [--seat play|draw|both]
+                  [--table 1v1|1v1v1|both] [--max-turn T] [--rollouts R] [--threads N] [--json out.json] [--per-game games.jsonl]
+              replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--table 1v1|1v1v1]
+                  [--max-turn T]
 
             Planned (see CONTRACT.md): compare.
             Card index path: --cards, else %MAGICSIM_CARDS%, else %LOCALAPPDATA%\MagicSim\oracle-cards.jsonl.gz

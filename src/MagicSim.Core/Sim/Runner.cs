@@ -11,6 +11,8 @@ public sealed class RunOptions
     public int MaxTurn { get; init; } = 10;
     public IReadOnlyList<MulliganPolicy> Mulligans { get; init; } = new[] { MulliganPolicy.A, MulliganPolicy.B, MulliganPolicy.C };
     public IReadOnlyList<string> Seats { get; init; } = new[] { "play", "draw" };
+    /// <summary>Table sizes: "1v1" (one goldfish opponent) and "1v1v1" (two).</summary>
+    public IReadOnlyList<string> Tables { get; init; } = new[] { "1v1", "1v1v1" };
     public int Rollouts { get; init; } = 6;
     public int Threads { get; init; } = Environment.ProcessorCount;
 }
@@ -20,6 +22,7 @@ public sealed record GameResult
 {
     public required string Variant { get; init; }
     public required int Game { get; init; }
+    public required string Table { get; init; }
     public required string Mulligan { get; init; }
     public required string Seat { get; init; }
     public int Mulligans { get; init; }
@@ -65,10 +68,17 @@ public static class Runner
         return new PreparedDeck(deck.Name, library, commanders, unsupported.ToList(), deck.TotalCount);
     }
 
-    public static GameResult PlayOne(PreparedDeck deck, RunOptions o, int gameIndex, MulliganPolicy mull, string seat,
-        string variant = "base", List<string>? log = null)
+    public static int OpponentsAt(string table) => table switch
     {
-        var settings = new GameSettings { OnThePlay = seat == "play", MaxTurn = o.MaxTurn };
+        "1v1" => 1,
+        "1v1v1" => 2,
+        _ => throw new ArgumentException($"unknown table size {table}"),
+    };
+
+    public static GameResult PlayOne(PreparedDeck deck, RunOptions o, int gameIndex, MulliganPolicy mull, string seat,
+        string table = "1v1v1", string variant = "base", List<string>? log = null)
+    {
+        var settings = new GameSettings { OnThePlay = seat == "play", MaxTurn = o.MaxTurn, Opponents = OpponentsAt(table) };
         var searchSeed = Rng.ForGame(o.Seed, gameIndex, salt: 1).NextULong();
         var decider = new SearchDecider(new SearchSettings { Rollouts = o.Rollouts, Mulligan = mull }, searchSeed);
         var g = Game.NewGoldfish(deck.Library, deck.Commanders, settings, Rng.ForGame(o.Seed, gameIndex), decider);
@@ -90,7 +100,7 @@ public static class Runner
         }
         return new GameResult
         {
-            Variant = variant, Game = gameIndex, Mulligan = mull.ToString(), Seat = seat,
+            Variant = variant, Game = gameIndex, Table = table, Mulligan = mull.ToString(), Seat = seat,
             Mulligans = g.MulligansTaken, Kept = g.KeptHand.Count, HandKept = g.KeptHand.ToList(), Bottomed = g.Bottomed.ToList(),
             Won = won, WinTurn = won ? s.Round : null, WinLine = won ? s.WinReason : null, FailReason = fail,
             LifeEnd = me.Life, OpponentsLifeEnd = s.Players.Where(p => p.Index != Game.Me).Select(p => p.Life).ToList(),
@@ -100,16 +110,16 @@ public static class Runner
         };
     }
 
-    /// <summary>All games for every (mulligan, seat), in contract row order.</summary>
+    /// <summary>All games for every (table, mulligan, seat), in contract row order.</summary>
     public static List<GameResult> Run(PreparedDeck deck, RunOptions o, string variant = "base", IProgress<int>? progress = null)
     {
-        var combos = o.Mulligans.SelectMany(m => o.Seats.Select(seat => (m, seat))).ToList();
+        var combos = o.Tables.SelectMany(t => o.Mulligans.SelectMany(m => o.Seats.Select(seat => (t, m, seat)))).ToList();
         var results = new GameResult[combos.Count * o.Games];
         var done = 0;
         Parallel.For(0, results.Length, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, o.Threads) }, i =>
         {
-            var (m, seat) = combos[i / o.Games];
-            results[i] = PlayOne(deck, o, i % o.Games, m, seat, variant);
+            var (t, m, seat) = combos[i / o.Games];
+            results[i] = PlayOne(deck, o, i % o.Games, m, seat, t, variant);
             var n = Interlocked.Increment(ref done);
             if (n % 100 == 0) progress?.Report(n);
         });
