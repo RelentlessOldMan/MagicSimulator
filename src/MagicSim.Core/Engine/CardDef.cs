@@ -124,6 +124,8 @@ public sealed class StaticDef
     public FaceDef? Face { get; init; }
     /// <summary>Abilities a Continuous static gives (AddAbility$/AddTrigger$).</summary>
     public Grants? Grants { get; set; }
+    /// <summary>OptionalAttackCost: "when you do" — what happens once the cost is paid as it attacks.</summary>
+    public TriggerDef? Reflexive { get; set; }
     public string? this[string key] => P[key];
 }
 
@@ -166,6 +168,8 @@ public sealed class FaceDef
     public Cost? Flashback { get; set; }
     /// <summary>Retrace: its graveyard cost (in <see cref="Flashback"/>) doesn't exile it afterwards.</summary>
     public bool Retrace { get; set; }
+    /// <summary>Strive: "this spell costs [this] more to cast for each target beyond the first" (rule 702.124).</summary>
+    public ManaCost? Strive { get; set; }
     public Dictionary<string, string> SVars { get; init; } = new();
     public string Oracle { get; init; } = "";
     /// <summary>"You may have this enter as a copy of …" (K:ETBReplacement:Copy).</summary>
@@ -205,7 +209,7 @@ public sealed class FaceDef
         var f = new FaceDef
         {
             Name = Name, ManaCost = ManaCost, Types = types, Power = power, Toughness = toughness, Colors = colors, Loyalty = Loyalty,
-            AuraSpell = AuraSpell, DoesntUntap = DoesntUntap, AttachedDoesntUntap = AttachedDoesntUntap, Flashback = Flashback, Retrace = Retrace, SVars = SVars, Oracle = Oracle, EtbCopy = EtbCopy,
+            AuraSpell = AuraSpell, DoesntUntap = DoesntUntap, AttachedDoesntUntap = AttachedDoesntUntap, Flashback = Flashback, Retrace = Retrace, Strive = Strive, SVars = SVars, Oracle = Oracle, EtbCopy = EtbCopy,
             EscapeCost = EscapeCost, Splice = Splice,
         };
         f.KeywordNames.UnionWith(KeywordNames);
@@ -684,6 +688,28 @@ public static partial class CardCompiler
                 return true;
             case "Entwine":
                 face.Entwine = ParseCost(Part(1), ctx);
+                return true;
+            case "Strive":
+                if (ManaCost.Parse(Part(1)) is not { } strive) { ctx.Need("Keyword:Strive+" + Part(1)); return true; }
+                face.Strive = strive;
+                return true;
+            case "Mentor":
+                // "Whenever this creature attacks, put a +1/+1 counter on target attacking creature with lesser power."
+                face.SVars["__Mentor"] = "DB$ PutCounter | ValidTgts$ Creature.attacking+powerLT__MentorX | CounterType$ P1P1 | CounterNum$ 1";
+                face.SVars["__MentorX"] = "Count$CardPower";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ Attacks | ValidCard$ Card.Self | Execute$ __Mentor"), ctx));
+                return true;
+            case "Dethrone":
+                // "Whenever this creature attacks the player with the most life or tied for most life, put a +1/+1 counter on it."
+                face.SVars["__Dethrone"] = "DB$ PutCounter | Defined$ Self | CounterType$ P1P1 | CounterNum$ 1";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ Attacks | ValidCard$ Card.Self | Condition$ AttackedPlayerWithMostLife | Execute$ __Dethrone"), ctx));
+                return true;
+            case "Hideaway":
+                // "When this enters, look at the top N cards of your library, exile one face down, then put the rest on the
+                // bottom in a random order" (rule 702.75).
+                if (!int.TryParse(Part(1), out var hide)) { ctx.Need("Keyword:Hideaway+" + Part(1)); return true; }
+                face.SVars["__Hideaway"] = $"DB$ Dig | DigNum$ {hide} | ChangeNum$ 1 | DestinationZone$ Exile | ExileFaceDown$ True | RestRandomOrder$ True";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ __Hideaway"), ctx));
                 return true;
             case "Exploit":
                 // "When this creature enters, you may sacrifice a creature."

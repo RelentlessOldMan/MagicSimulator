@@ -108,6 +108,8 @@ sealed class CopyPermanentEffect : Effect
     {
         "Defined", "Choices", "ChoiceZone", "NumCopies", "TokenTapped", "TokenAttacking", "PumpKeywords", "PumpDuration",
         "AtEOT", "RememberTokens", "Controller", "Populate",
+        // The token has "at the beginning of the end step, exile this permanent" (Heat Shimmer): the next end step.
+        "AtEOTTrig",
     }.Concat(Copies.ExceptParams).ToArray());
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
@@ -121,7 +123,7 @@ sealed class CopyPermanentEffect : Effect
         if (ab["PumpKeywords"] is { } kws)
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
                 if (!Keywords.Supported.Contains(ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + k);
-        if (ab["AtEOT"] is { } eot && eot is not ("Exile" or "Sacrifice")) ctx.Need("CopyPermanent.AtEOT:" + eot);
+        if ((ab["AtEOT"] ?? ab["AtEOTTrig"]) is { } eot && eot is not ("Exile" or "Sacrifice")) ctx.Need("CopyPermanent.AtEOT:" + eot);
     }
 
     public override void Resolve(EffectContext x)
@@ -150,7 +152,7 @@ sealed class CopyPermanentEffect : Effect
                     foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries)) token.TempKeywords.Add(ForgeRequirements.KeywordName(k));
                 }
                 if (ab["TokenAttacking"] == "True" && x.S.Step == Step.DeclareAttackers) x.S.Attackers.Add(token.Id);
-                if (ab["AtEOT"] is { } eot) x.S.ThisTurn.AtEndStep.Add((token.Id, eot));
+                if ((ab["AtEOT"] ?? ab["AtEOTTrig"]) is { } eot) x.S.ThisTurn.AtEndStep.Add((token.Id, eot));
             }
         }
     }

@@ -600,10 +600,18 @@ sealed class BecomeMonarchEffect : Effect
 sealed class AddPhaseEffect : Effect
 {
     public override string Api => "AddPhase";
-    public override IReadOnlySet<string> Params { get; } = P("ExtraPhase", "AfterPhase", "FollowedBy");
+    public override IReadOnlySet<string> Params { get; } = P("ExtraPhase", "AfterPhase", "FollowedBy",
+        // "At the beginning of that combat, …" (Moraug); Forge spells it both ways.
+        "ExtraPhaseDelayedTrigger", "ExtraPhaseDelayedTriggerExcute", "ExtraPhaseDelayedTriggerExecute");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
+        if (ab["ExtraPhaseDelayedTrigger"] is { } del)
+        {
+            var exec = ab["ExtraPhaseDelayedTriggerExecute"] ?? ab["ExtraPhaseDelayedTriggerExcute"];
+            if (exec is null || !ctx.Face.SVars.TryGetValue(del, out var body)) ctx.Need("AddPhase.ExtraPhaseDelayedTrigger:" + del);
+            else ab.Delayed = CardCompiler.CompileTrigger(new Forge.ForgeParams(body + " | Execute$ " + exec), ctx);
+        }
         if (ab["ExtraPhase"] != "Combat") ctx.Need("AddPhase.ExtraPhase:" + ab["ExtraPhase"]);
         if (ab["AfterPhase"] is { } a && a != "EndCombat") ctx.Need("AddPhase.AfterPhase:" + a);
         if (ab["FollowedBy"] is { } f && f != "Main2") ctx.Need("AddPhase.FollowedBy:" + f);
@@ -617,6 +625,9 @@ sealed class AddPhaseEffect : Effect
         var after = x.Ability["AfterPhase"] == "EndCombat" || x.S.Step is Step.BeginCombat or Step.DeclareAttackers or Step.CombatDamage
             ? Step.EndCombat : x.S.Step;
         x.S.ThisTurn.ExtraPhases.Add((after, steps.ToArray()));
+        // Added in a main phase, the extra combat is the next one this turn.
+        if (x.Ability.Delayed is { } delayed)
+            x.S.Delayed.Add(new DelayedTrigger(delayed, x.Host.Id, x.Controller, new(), x.S.Turn, ThisTurn: true, NextTurn: false));
     }
 }
 

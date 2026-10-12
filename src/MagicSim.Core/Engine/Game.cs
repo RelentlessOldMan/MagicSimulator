@@ -357,6 +357,7 @@ public sealed partial class Game
             case Step.EndCombat:
                 FirePhase("EndCombat");
                 State.Attackers.Clear();
+                ExpireEffects("endcombat");   // "this combat" is over once attacks and damage are done
                 break;
             case Step.Main2: FirePhase("Main2"); break;
             case Step.End:
@@ -458,7 +459,16 @@ public sealed partial class Game
     private void SetStep(Step step)
     {
         State.Step = step;
-        foreach (var p in State.Players) { p.Pool.Clear(); p.RestrictedPool = null; }   // mana empties between steps (rule 500.4)
+        foreach (var p in State.Players)
+        {
+            // Mana empties between steps (rule 500.4), except mana that lasts until end of turn (spent last).
+            if (step == Step.Untap) p.PersistentPool.Clear();
+            var kept = new ManaPool();
+            foreach (var c in ManaColors.All) kept[c] = Math.Min(p.Pool[c], p.PersistentPool[c]);
+            p.PersistentPool = kept;
+            p.Pool = kept;
+            p.RestrictedPool = null;
+        }
     }
 
     /// <summary>
@@ -490,6 +500,7 @@ public sealed partial class Game
         if (attackers.Count == 0) return;
         State.Attackers.AddRange(attackers);
         State.ThisTurn.AttackersDeclared += attackers.Count;
+        foreach (var id in attackers) State.ThisTurn.Attacks[id] = State.ThisTurn.Attacks.GetValueOrDefault(id) + 1;
         // Goldfish opponents never block: everything attacks the opponent with the least life left.
         var defender = State.Players.Where(p => p.Index != Me && !p.Lost).OrderBy(p => p.Life).ThenBy(p => p.Index).FirstOrDefault()?.Index;
         State.ThisTurn.DefendingPlayer = defender;
@@ -498,6 +509,16 @@ public sealed partial class Game
             var a = State[id];
             if (!a.HasKeyword("Vigilance")) Tap(a);
             Fire(new TriggerEvent(TriggerMode.Attacks, CardId: id, Player: defender));
+            // "You may exert it as it attacks. When you do, …": it won't untap during your next untap step (rule 701.39).
+            foreach (var st in a.Statics)
+                if (st.Mode == "OptionalAttackCost" && st.Reflexive is { } reflexive && Presence.Hold(st.P, ContextFor(a))
+                    && Decider.ChooseYesNo(this, Me, a, $"exert {a.Name}?"))
+                {
+                    a.ExertedTurn = State.Turn;
+                    a.SkipNextUntap = true;
+                    Note($"  exert {a.Name}");
+                    _pending.Add(new PendingTrigger(a.Id, reflexive, new TriggerEvent(TriggerMode.Immediate, CardId: a.Id), a.Controller));
+                }
         }
         Fire(new TriggerEvent(TriggerMode.AttackersDeclared, Player: Me));
         Note("attack with " + string.Join(", ", attackers.Select(id => State[id].Name)));
@@ -989,6 +1010,12 @@ public sealed partial class Game
         if (HasX(cost))
             x = Decider.ChooseX(this, player, c, MaxAffordableX(cost, c, player));
         var spliced = ChooseSplices(c, player, x, ref cost);
+        // Strive: as many extra targets as there's mana for.
+        _striveExtra = 0;
+        if (c.CurrentFace.Strive is { } strive)
+            for (var more = cost.Plus(new Cost { Mana = strive }); _striveExtra < 20 && CanPayCost(more, c, player, x, excludeSourceFromMana: true);
+                 more = more.Plus(new Cost { Mana = strive }))
+                _striveExtra++;
         var escaped = from == Zone.Graveyard && c.FlashbackCost is null;
         c.CastFrom = from;
 
@@ -1003,6 +1030,8 @@ public sealed partial class Game
             Description = c.Name + (from != Zone.Graveyard ? "" : escaped ? " (escape)" : c.CurrentFace.Retrace ? " (retrace)" : " (flashback)") + (ability.OptionalCosts is { } oc ? $" ({string.Join(", ", oc).ToLowerInvariant()})" : ""),
             ExileAfter = from == Zone.Graveyard && !escaped && !c.CurrentFace.Retrace || _castExileAfter, Spliced = spliced, CastFrom = from,
         };
+        if (c.CurrentFace.Strive is { } striveCost)
+            for (var i = 1; i < item.ChainTargets.FirstOrDefault()?.Count; i++) cost = cost.Plus(new Cost { Mana = striveCost });
         _payingForSpell = true;
         var paid = PayCost(cost, c, player, x, excludeSourceFromMana: true);
         _payingForSpell = false;
@@ -1066,6 +1095,8 @@ public sealed partial class Game
     // A cast an effect allows mid-resolution ("cast it without paying its mana cost"): which card, and whether it's exiled afterwards.
     private int _freeCast = -1;
     private bool _castExileAfter;
+    /// <summary>Strive: how many targets beyond the first the spell being cast can pay for.</summary>
+    private int _striveExtra;
 
     /// <summary>The spell abilities an effect could cast <paramref name="c"/> with now (-1 = as a permanent spell), ignoring timing.</summary>
     private List<int> CastableFromEffect(Card c, bool free)
@@ -1298,6 +1329,7 @@ public sealed partial class Game
             // "This spell costs {1} more to cast for each target beyond the first" (Fireball): the cost was paid for one
             // target, and dividing damage evenly among more deals no more in all, so it takes exactly one.
             if (source.Statics.Any(st => st.Mode == "RaiseCost" && st["Relative"] == "True")) tmin = tmax = Math.Min(tmax, 1);
+            if (source.Zone == Zone.Stack && source.CurrentFace.Strive is not null && ab == head) tmax = Math.Min(tmax, 1 + _striveExtra);
             var max = Math.Min(tmax, candidates.Count);
             var min = Math.Min(tmin, max);
             result.Add(max == 0 ? new() : Decider.ChooseTargets(this, controller, source, ab, candidates, min, max));

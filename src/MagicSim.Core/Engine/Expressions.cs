@@ -177,7 +177,10 @@ public sealed class Filter
             "Other" or "StrictlyOther" => (c, pl, x) => c is null || c.Id != x.Item.SourceId,
             "token" => (c, pl, x) => c is not null && c.IsToken,
             "tapped" => (c, pl, x) => c is not null && c.Tapped,
+            "exertedThisTurn" => (c, pl, x) => c is not null && c.ExertedTurn == x.S.Turn,
+            "notExertedThisTurn" => (c, pl, x) => c is not null && c.ExertedTurn != x.S.Turn,
             "attacking" => (c, pl, x) => c is not null && x.S.Attackers.Contains(c.Id),
+            "attackedThisTurn" => (c, pl, x) => c is not null && x.S.ThisTurn.Attacks.ContainsKey(c.Id),
             // Goldfish opponents never attack, so nothing ever blocks.
             "blocking" => (c, pl, x) => false,
             "untapped" => (c, pl, x) => c is not null && !c.Tapped,
@@ -529,6 +532,7 @@ public sealed class Amount
         {
             case "xPaid": return new(core, x => x.X);
             case "CardPower": return new(core, x => x.Host.LastKnownPower);
+            case "CardNumAttacksThisTurn": return new(core, x => x.S.ThisTurn.Attacks.GetValueOrDefault(x.Host.Id));
             case var cc when cc.StartsWith("CardCounters.", StringComparison.Ordinal):
                 var counterKind = cc[13..];
                 return new(core, x => x.Host.CounterCount(counterKind));
@@ -538,6 +542,8 @@ public sealed class Amount
             // "Domain": basic land types among lands you control.
             case "Domain": return new(core, x => TypeLine.BasicLandTypes.Count(t => x.S.BattlefieldCards.Any(c => c.Controller == x.Controller && c.Types.Is(CardType.Land) && c.Types.HasSubtype(t))));
             // "The damage dealt to your opponents this turn."
+            // "If an opponent was dealt 7 or more damage this turn" (Spinerock Knoll).
+            case "MaxOppDamageThisTurn": return new(core, x => x.S.ThisTurn.DamageTaken.Where(kv => kv.Key != x.Controller).Select(kv => kv.Value).DefaultIfEmpty(0).Max());
             case "BloodthirstAmount": return new(core, x => x.S.ThisTurn.DamageTaken.Where(kv => kv.Key != x.Controller).Sum(kv => kv.Value));
             case "YourLifeTotal": return new(core, x => x.S.Players[x.Controller].Life);
             case "YourStartingLife": return new(core, x => x.Game.Settings.StartingLife);
@@ -749,7 +755,7 @@ public static class Defined
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
     {
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
-        "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards",
+        "Enchanted", "Equipped", "Imprinted", "ExiledWith", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards",
         "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
         "ReplacedCard", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard", "Parent", "DirectRemembered",
     };
@@ -837,6 +843,8 @@ public static class Defined
             "TriggeredSource" or "TriggeredSourceLKICopy" => x.Item.TriggeredSourceId is { } ts ? new() { ts } : new(),
             "Enchanted" or "Equipped" => x.Host.AttachedTo >= 0 ? new() { x.Host.AttachedTo } : new(),
             "Imprinted" => x.Host.Imprinted?.ToList() ?? new(),
+            // Cards exiled with this one (hideaway) that are still in exile.
+            "ExiledWith" => x.S.Cards.Where(c => c.Zone == Zone.Exile && c.ExiledWith == x.Host.Id).Select(c => c.Id).ToList(),
             "TriggeredObject" or "TriggeredObjectLKICopy" => x.Item.TriggeredObjectId is { } obj ? new() { obj } : new(),
             "ChosenCard" => x.Host.ChosenCards?.ToList() ?? new(),
             "Sacrificed" or "SacrificedCards" => x.Item.Sacrificed?.ToList() ?? new(),

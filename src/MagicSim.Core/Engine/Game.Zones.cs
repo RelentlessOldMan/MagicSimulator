@@ -321,7 +321,8 @@ public sealed partial class Game
                 if (!e.IsEffect) continue;
                 var ends = (moment, e.EffectDuration) switch
                 {
-                    ("cleanup", null or "EndOfTurn" or "UntilHostLeavesPlayOrEOT") => true,
+                    ("cleanup", null or "EndOfTurn" or "UntilHostLeavesPlayOrEOT" or "UntilEndOfCombat") => true,
+                    ("endcombat", "UntilEndOfCombat") => true,
                     ("cleanup", "UntilTheEndOfYourNextTurn") => e.EffectTurn < State.Turn,
                     ("untap", "UntilYourNextTurn") => e.EffectTurn < State.Turn,
                     _ => false,

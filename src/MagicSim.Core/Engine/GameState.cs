@@ -74,6 +74,8 @@ public sealed class Card
     public int EnteredTurn { get; set; } = -1;
     /// <summary>The turn this permanent last activated a loyalty ability: one per turn (rule 606.3).</summary>
     public int LoyaltyActivatedTurn { get; set; }
+    /// <summary>The turn this creature was last exerted (rule 701.39), or -1.</summary>
+    public int ExertedTurn { get; set; } = -1;
     /// <summary>Regeneration shields until end of turn (rule 701.15).</summary>
     public int RegenShields { get; set; }
     /// <summary>Optional additional costs paid when it was last cast ("Kicker", "Bargain"): "if it was kicked".</summary>
@@ -203,7 +205,7 @@ public sealed class Card
         RememberedPlayers = RememberedPlayers is null ? null : new List<int>(RememberedPlayers),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
+        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
         TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
@@ -225,6 +227,8 @@ public sealed class Player
     public Dictionary<string, int>? Counters { get; set; }
     public int CounterCount(string kind) => Counters?.GetValueOrDefault(kind.ToUpperInvariant()) ?? 0;
     public ManaPool Pool;
+    /// <summary>"Until end of turn, you don't lose this mana as steps and phases end" (Birgi): at most this much of the pool stays.</summary>
+    public ManaPool PersistentPool;
     /// <summary>Floating mana with a spending restriction ("spend this mana only to cast creature spells").</summary>
     public List<RestrictedMana>? RestrictedPool;
     public int LandsPlayedThisTurn { get; set; }
@@ -271,7 +275,7 @@ public sealed class Player
 
     public Player Clone() => new()
     {
-        Index = Index, Life = Life, Poison = Poison, Counters = Counters is null ? null : new(Counters), Pool = Pool, RestrictedPool = RestrictedPool?.ToList(), LandsPlayedThisTurn = LandsPlayedThisTurn,
+        Index = Index, Life = Life, Poison = Poison, Counters = Counters is null ? null : new(Counters), Pool = Pool, PersistentPool = PersistentPool, RestrictedPool = RestrictedPool?.ToList(), LandsPlayedThisTurn = LandsPlayedThisTurn,
         LandDropsPerTurn = LandDropsPerTurn, StaticLandDrops = StaticLandDrops, StaticUntapLimits = StaticUntapLimits?.ToList(), StaticMaxHandSize = StaticMaxHandSize, StaticMaxHandSizeRaise = StaticMaxHandSizeRaise, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary, AbstractHand = AbstractHand,
         IsGoldfish = IsGoldfish, CommanderDamageTaken = new Dictionary<int, int>(CommanderDamageTaken),
         LifePaidTotal = LifePaidTotal, DrewFromEmpty = DrewFromEmpty, KnownTop = KnownTop, CityBlessing = CityBlessing,
@@ -359,6 +363,8 @@ public sealed class TurnInfo
     public List<(Step After, Step[] Steps)> ExtraPhases { get; set; } = new();
     /// <summary>Creatures that attacked this turn, over all combats.</summary>
     public int AttackersDeclared { get; set; }
+    /// <summary>How many times each creature has attacked this turn.</summary>
+    public Dictionary<int, int> Attacks { get; set; } = new();
     /// <summary>The player this turn's attackers attack, once they're declared.</summary>
     public int? DefendingPlayer { get; set; }
     /// <summary>Combat phases so far this turn.</summary>
@@ -388,7 +394,7 @@ public sealed class TurnInfo
     public TurnInfo Clone() => new()
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, Ended = Ended, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
-        ExtraPhases = new(ExtraPhases), Combats = Combats, AttackersDeclared = AttackersDeclared, DefendingPlayer = DefendingPlayer,
+        ExtraPhases = new(ExtraPhases), Combats = Combats, AttackersDeclared = AttackersDeclared, Attacks = new(Attacks), DefendingPlayer = DefendingPlayer,
         Drawn = new(Drawn), Cast = new(Cast), DamageTaken = new(DamageTaken), CombatDamageTypes = new(CombatDamageTypes, StringComparer.OrdinalIgnoreCase), CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
     };
 }

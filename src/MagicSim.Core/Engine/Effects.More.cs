@@ -667,7 +667,7 @@ sealed class EffectEffect : Effect
 
     private static readonly HashSet<string> Durations = new(StringComparer.Ordinal)
     {
-        "Permanent", "EndOfTurn", "UntilYourNextTurn", "UntilTheEndOfYourNextTurn", "UntilHostLeavesPlay", "UntilHostLeavesPlayOrEOT",
+        "Permanent", "EndOfTurn", "UntilYourNextTurn", "UntilTheEndOfYourNextTurn", "UntilHostLeavesPlay", "UntilHostLeavesPlayOrEOT", "UntilEndOfCombat",
     };
 
     public override void Validate(AbilityDef ab, CompileContext ctx)

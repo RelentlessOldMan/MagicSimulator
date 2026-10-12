@@ -13,13 +13,15 @@ public static class Presence
         "IsPresent", "PresentCompare", "PresentZone", "PresentDefined", "CheckSVar", "SVarCompare", "Condition",
         // "Metalcraft — when this enters, if you control three or more artifacts" (Metalcraft$ True).
         "Metalcraft", "Threshold", "Delirium", "Hellbent",
+        // "As long as the top card of your library is a Goblin card" (Conspicuous Snoop).
+        "TopCardOfLibraryIs",
     };
 
     private static readonly string[] FlagConditions = { "Metalcraft", "Threshold", "Delirium", "Hellbent" };
 
     private static readonly HashSet<string> KnownConditions = new(StringComparer.Ordinal)
     {
-        "PlayerTurn", "NotPlayerTurn", "Threshold", "Hellbent", "Metalcraft", "Delirium", "Kicked", "Bargain", "Revolt", "Blessing",
+        "PlayerTurn", "NotPlayerTurn", "Threshold", "Hellbent", "Metalcraft", "Delirium", "Kicked", "Bargain", "Revolt", "Blessing", "AttackedPlayerWithMostLife",
     };
 
     public static bool IsKnownCondition(string cond) => KnownConditions.Contains(cond);
@@ -42,6 +44,9 @@ public static class Presence
             "Bargain" => x.Host.PaidOptional?.Contains("Bargain") ?? false,
             // "If a permanent you controlled left the battlefield this turn."
             "Revolt" => g.State.ThisTurn.PermanentLeft.Contains(you),
+            // "If it's attacking the player with the most life or tied for most life" (dethrone).
+            "AttackedPlayerWithMostLife" => g.State.ThisTurn.DefendingPlayer is { } d
+                && g.State.Players[d].Life >= g.State.Players.Where(p => !p.Lost).Max(p => p.Life),
             "Blessing" => me.CityBlessing,
             _ => false,
         };
@@ -60,6 +65,7 @@ public static class Presence
             ValidateCompare(p["SVarCompare"] ?? "GE1", ctx);
         }
         if (p["Condition"] is { } cond && !KnownConditions.Contains(cond)) ctx.Need("Condition:" + cond);
+        if (p["TopCardOfLibraryIs"] is { } top) Filter.Parse(top, ctx);
     }
 
     private static void ValidateCompare(string cmp, CompileContext ctx)
@@ -84,6 +90,8 @@ public static class Presence
         if (p["CheckSVar"] is { } sv && !CompareTo(Effect.EvalAmount(x, sv), p["SVarCompare"] ?? "GE1", x)) return false;
         foreach (var flag in FlagConditions)
             if (p[flag] == "True" && !ConditionHolds(flag, x)) return false;
+        if (p["TopCardOfLibraryIs"] is { } top
+            && !(g.State.Players[you].Library is [var first, ..] && Effect.FilterFor(x.SVarFace, top).MatchesCard(g.State[first], x))) return false;
         if (p["Condition"] is { } cond && !ConditionHolds(cond, x)) return false;
         return true;
     }
@@ -139,6 +147,7 @@ public static class Statics
     private static readonly HashSet<string> CantAttackParams = new(StringComparer.Ordinal) { "ValidCard", "EffectZone" };
     private static readonly HashSet<string> ValidPlayerParams = new(StringComparer.Ordinal) { "ValidPlayer", "EffectZone" };
     private static readonly HashSet<string> CastWithFlashParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Caster" };
+    private static readonly HashSet<string> OptionalAttackCostParams = new(StringComparer.Ordinal) { "ValidCard", "Trigger", "Cost" };
     private static readonly HashSet<string> PanharmoniconParams = new(StringComparer.Ordinal) { "ValidMode", "ValidCard", "ValidCause", "Origin", "Destination", "ValidActivator" };
 
     private static readonly HashSet<string> CantBeCastParams = new(StringComparer.Ordinal) { "ValidCard", "Caster", "NumLimitEachTurn" };
@@ -174,6 +183,8 @@ public static class Statics
         if (s.Mode is "CantBeCast" or "CantBeActivated" && (s["Caster"] ?? s["Activator"]) == "Opponent") return;
         // "Creatures can't attack you unless …" (Ghostly Prison), "can't attack you": goldfish opponents never attack.
         if (s.Mode is "CantAttackUnless" or "CantAttack" && s["Target"] is "You" or "You,Planeswalker.YouCtrl") return;
+        // "Creatures you control can boast twice" (Birgi): boast isn't supported, so no card has a boast ability to use twice.
+        if (s.Mode == "Activations" && s["ValidSA"] == "Activated.Boast" && !Keywords.Supported.Contains("Boast")) return;
         // "No more than two creatures can attack you each combat" (Crawlspace).
         if (s.Mode == "AttackRestrict" && s["ValidDefender"] == "You") return;
         HashSet<string> own;
@@ -241,6 +252,14 @@ public static class Statics
                 if (s["ValidCard"] is { } vc) Filter.Parse(vc, ctx);
                 Amount.Parse(s["Amount"] ?? "1", ctx);
                 break;
+            case "OptionalAttackCost":
+                // "You may exert it as it attacks. When you do, …" (Combat Celebrant).
+                own = OptionalAttackCostParams;
+                if (s["ValidCard"] != "Card.Self" || s["Cost"] != "Exert<1/CARDNAME>") { ctx.Need("OptionalAttackCost:" + s["Cost"]); return; }
+                if (s["Trigger"] is not { } reflexive || !ctx.Face.SVars.TryGetValue(reflexive, out var body)) { ctx.Need("OptionalAttackCost:NoTrigger"); return; }
+                if (CardCompiler.CompileAbility(new Forge.ForgeParams(body), ctx, AbilityKind.TriggerEffect, 0) is { } exec)
+                    s.Reflexive = new TriggerDef { P = new Forge.ForgeParams("Mode$ Exerted"), Mode = "Exerted", Execute = exec, Face = ctx.Face };
+                break;
             default:
                 ctx.Need("Static:" + s.Mode);
                 return;
@@ -275,7 +294,7 @@ public static class Statics
             if (s[key] is { } v && v != "Unlimited") Amount.Parse(v, ctx);
         if (s["SetMaxHandSize"] is { } mh && mh != "Unlimited") Amount.Parse(mh, ctx);
         if (s["GainsAbilitiesOf"] is { } gao) Filter.Parse(gao, ctx);
-        if (s["GainsAbilitiesOfZones"] is { } gaz && !gaz.Split(',').All(z => z.Trim() is "Graveyard" or "Battlefield" or "Exile"))
+        if (s["GainsAbilitiesOfZones"] is { } gaz && !gaz.Split(',').All(z => z.Trim() is "Graveyard" or "Battlefield" or "Exile" or "Library"))
             ctx.Need("GainsAbilitiesOfZones:" + gaz);
         if (s["RaiseMaxHandSize"] is { } rmh) Amount.Parse(rmh, ctx);
         if (s["AddKeyword"] is { } adjust && adjust.StartsWith("UntapAdjust:", StringComparison.Ordinal))
@@ -493,8 +512,21 @@ public static class Statics
         for (var i = 0; i < holding.Count; i++)
         {
             var (source, st, x) = holding[i];
-            var addPower = st["AddPower"] is { } ap ? Effect.EvalAmount(x, ap) : 0;
-            var addToughness = st["AddToughness"] is { } at ? Effect.EvalAmount(x, at) : 0;
+            // "AffectedX": worked out for each affected card (Moraug: +1/+0 for each time it attacked this turn).
+            var perCard = st["AddPower"] is { } apc && apc.StartsWith("Affected", StringComparison.Ordinal)
+                          || st["AddToughness"] is { } atc && atc.StartsWith("Affected", StringComparison.Ordinal);
+            var addPower = st["AddPower"] is { } ap && !perCard ? Effect.EvalAmount(x, ap) : 0;
+            var addToughness = st["AddToughness"] is { } at && !perCard ? Effect.EvalAmount(x, at) : 0;
+            if (perCard)
+            {
+                foreach (var card in Affected(i))
+                {
+                    var each = ContextFor(g, card, st);
+                    if (st["AddPower"] is { } p1) card.StaticPower += Effect.EvalAmount(each, p1);
+                    if (st["AddToughness"] is { } t1) card.StaticToughness += Effect.EvalAmount(each, t1);
+                }
+                if (st["AddKeyword"] is null) continue;
+            }
             if (st["AddKeyword"] is { } adjust && adjust.StartsWith("UntapAdjust:", StringComparison.Ordinal))
             {
                 var parts = adjust.Split(':');

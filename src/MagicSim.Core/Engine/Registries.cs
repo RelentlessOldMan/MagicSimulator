@@ -35,7 +35,9 @@ public static class Triggers
         // "If an opponent is the monarch": some player fits.
         "CheckDefinedPlayer",
         // Conditions aren't checked again on resolution here anyway.
-        "NoResolvingCheck",
+        "NoResolvingCheck", "AILogic",
+        // "If it's your main phase" on a trigger of another kind (Moraug's landfall).
+        "PlayerTurn", "Phase",
     };
 
     private static readonly Dictionary<string, HashSet<string>> ModeParams = new()
@@ -44,7 +46,7 @@ public static class Triggers
         ["Phase"] = new(StringComparer.Ordinal) { "Phase", "ValidPlayer" },
         ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ActivatorThisTurnCast" },
         ["CounterAddedOnce"] = new(StringComparer.Ordinal) { "CounterType", "ValidSource" },
-        ["Attacks"] = new(StringComparer.Ordinal) { "Attacked" },
+        ["Attacks"] = new(StringComparer.Ordinal) { "Attacked", "FirstAttack" },
         ["BecomeMonarch"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["Sacrificed"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["ChangesZoneAll"] = new(StringComparer.Ordinal) { "ValidCards", "Origin", "Destination" },
@@ -166,6 +168,8 @@ public static class Triggers
         if (!sourceActive) return false;
         if (t["CheckDefinedPlayer"] is { } check && !g.State.Players.Any(p => !p.Lost && FilterOf(x, check).MatchesPlayer(p.Index, x))) return false;
         if (!ModeMatches(g, t, source, e, x)) return false;
+        if (t.Mode != "Phase" && t["Phase"] is { } phases && !phases.Split(',').Any(ph => Conditions.PhaseIs(g.State.Step, ph.Trim()))) return false;
+        if (t["PlayerTurn"] == "True" && g.State.ActivePlayer != source.Controller) return false;
         return Presence.Hold(t.P, x);
     }
 
@@ -232,6 +236,8 @@ public static class Triggers
                 return CardMatches(g, t, e.CardId, x, source);
             case "SpellCast" when e.Mode == TriggerMode.SpellCast:
                 return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller, x, t.Face) && CardMatches(g, t, e.CardId, x, source);
+            case "Attacks" when e.Mode == TriggerMode.Attacks && t["FirstAttack"] == "True" && g.State.ThisTurn.Attacks.GetValueOrDefault(e.CardId!.Value) != 1:
+                return false;   // "attacks for the first time each turn"
             case "Attacks" when e.Mode == TriggerMode.Attacks:
                 // "Attacks you or a planeswalker you control": the player part (planeswalkers are never attacked here).
                 if (t["Attacked"] is { } attacked && !attacked.Split(',').Any(part => !part.StartsWith("Planeswalker", StringComparison.Ordinal)

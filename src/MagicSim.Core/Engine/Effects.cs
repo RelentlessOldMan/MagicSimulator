@@ -105,7 +105,7 @@ sealed class ManaEffect : Effect
 {
     public override string Api => "Mana";
     public override IReadOnlySet<string> Params { get; } =
-        P(new[] { "Produced", "Amount", "ActivationZone", "RestrictValid", "Defined",
+        P(new[] { "Produced", "Amount", "ActivationZone", "RestrictValid", "Defined", "PersistentMana",
             // "If that mana is spent on a creature spell, it gains haste": applied when paying (Game.UseManaSource).
             "AddsKeywords", "AddsKeywordsValid",
             // "When that mana is spent to cast a creature spell …, scry 1": also when paying.
@@ -173,6 +173,7 @@ sealed class ManaEffect : Effect
             // "Spend this mana only to cast creature spells" (Food Chain): it floats apart from the rest.
             if (x.Ability["RestrictValid"] is { } rv) (p.RestrictedPool ??= new()).Add(new RestrictedMana(x.Host.Id, rv, color, amount));
             else p.Pool.Add(color, amount);
+            if (x.Ability["PersistentMana"] == "True") p.PersistentPool.Add(color, amount);
         }
         else
             for (var i = 0; i < amount; i++)
