@@ -460,6 +460,8 @@ public sealed partial class Game
     private bool CanActivate(Card c, AbilityDef ab, bool sorcerySpeed)
     {
         if (ab["SorcerySpeed"] == "True" && !sorcerySpeed) return false;
+        // A Class gains its levels in order (rule 716.2a).
+        if (ab.Api == "ClassLevelUp" && c.ClassLevel != int.Parse(ab["ClassLevel"]!) - 1) return false;
         // Loyalty abilities: sorcery speed, one per planeswalker per turn (rule 606.3).
         if (ab["Planeswalker"] == "True" && (!sorcerySpeed || c.LoyaltyActivatedTurn == State.Turn)) return false;
         if (!CanPayCost(ab.Cost, c, c.Controller, 0, excludeSourceFromMana: ab.Cost.Tap)) return false;
@@ -646,6 +648,7 @@ public sealed partial class Game
         if (ab.IsManaAbility)
         {
             RunChain(item);   // mana abilities don't use the stack (rule 605.3)
+            if (ab.Cost.Tap) Fire(new TriggerEvent(TriggerMode.TapsForMana, CardId: c.Id, Player: player));
             Note($"  pool {State.Players[player].Pool}");
         }
         else State.Stack.Add(item);

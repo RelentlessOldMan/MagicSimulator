@@ -53,6 +53,7 @@ public sealed partial class Game
             c.CopyDef = null;
             c.CopyUntilCleanup = false;
             c.Animations = null;
+            c.ClassLevel = 1;
             c.Controller = c.Owner;
             c.RegenShields = 0;
             c.ClearStaticEffects();
@@ -440,7 +441,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);
@@ -529,7 +530,7 @@ public sealed partial class Game
         if (!ab.P.Values.Keys.All(k => k is "AB" or "Cost" or "Produced" or "Amount" or "SpellDescription" or "AILogic"
                 or "AIPreference" or "SubAbility" or "ActivationZone" or "ColorOrType" or "Valid" or "ReflectProperty" or "RestrictValid"
                 or "PrecostDesc" || Presence.Params.Contains(k))) return false;
-        if (ab.Api == "Mana" && ProducedMask(ab["Produced"]) is null && ab["Produced"] != "Combo ColorIdentity") return false;
+        if (ab.Api == "Mana" && ProducedMask(ab["Produced"]) is null && ab["Produced"] is not ("Combo ColorIdentity" or "Chosen")) return false;
         if (ab["Amount"] is not null && !int.TryParse(ab["Amount"], out _)) return false;
         foreach (var part in ab.Cost.Parts)
             if (!(part.Kind == CostPartKind.PayLife && int.TryParse(part.Amount, out _)
@@ -610,7 +611,9 @@ public sealed partial class Game
                 if (ab["RestrictValid"] is { } rv && !ManaRestriction.Allows(this, c, rv, _payingFor, _payingForSpell)) continue;
                 if (ab.P.Values.Keys.Any(Presence.Params.Contains) && !Presence.Hold(ab.P, ContextFor(c))) continue;
                 var mask = ab.Api == "ManaReflected" ? ReflectedMask(this, c, ab)
-                    : ab["Produced"] == "Combo ColorIdentity" ? CommanderIdentity(player) : ProducedMask(ab["Produced"])!.Value;
+                    : ab["Produced"] == "Combo ColorIdentity" ? CommanderIdentity(player)
+                    : ab["Produced"] == "Chosen" ? c.ChosenColor?.Mask() ?? 0
+                    : ProducedMask(ab["Produced"])!.Value;
                 if (mask == 0) continue;
                 var life = ab.Cost.Parts.Where(q => q.Kind == CostPartKind.PayLife).Sum(q => int.Parse(q.Amount));
                 for (var sub = ab.Sub; sub is not null; sub = sub.Sub) life += SelfLife(sub)!.Value;
@@ -704,6 +707,7 @@ public sealed partial class Game
                 case CostPartKind.ExileSelf: MoveTo(card, Zone.Exile); break;
             }
         State.Players[player].Pool.Add(color, src.Amount);
+        if (ab.Cost.Tap && ab != ConvokeAbility) Fire(new TriggerEvent(TriggerMode.TapsForMana, CardId: card.Id, Player: player));
         for (var sub = ab.Sub; sub is not null; sub = sub.Sub)
         {
             var n = SelfLife(sub)!.Value;

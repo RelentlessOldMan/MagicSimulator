@@ -183,6 +183,16 @@ public class MechanicsTests
         "Name:Wake\nManaCost:0\nTypes:Instant\nA:SP$ UntapAll | ValidCards$ Land.YouCtrl\n",
         "Name:Drain\nManaCost:0\nTypes:Instant\nA:SP$ RemoveCounter | ValidTgts$ Creature | CounterType$ P1P1 | CounterNum$ All\n",
         "Name:Bounce\nManaCost:0\nTypes:Instant\nA:SP$ ChangeZone | Origin$ Stack | Destination$ Hand | ValidTgts$ Card | TgtZone$ Stack | TargetType$ Spell\n",
+        "Name:Lesson\nManaCost:0\nTypes:Enchantment Class\n" +
+        "K:Class:2:0:AddTrigger$ LvlTrig\nSVar:LvlTrig:Mode$ Phase | Phase$ End of Turn | ValidPlayer$ You | TriggerZones$ Battlefield | Execute$ TrigGain\n" +
+        "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 2\n" +
+        "K:Class:3:0:AddStaticAbility$ LvlAnthem\nSVar:LvlAnthem:Mode$ Continuous | Affected$ Creature.YouCtrl | AddPower$ 1\n",
+        "Name:Reflect\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ TapsForMana | ValidCard$ Land | Activator$ You | Execute$ TrigMana | TriggerZones$ Battlefield | Static$ True\nSVar:TrigMana:DB$ Mana | Produced$ B\n",
+        "Name:Legion\nManaCost:0\nTypes:Creature Soldier\nPT:2/2\nK:Haste\nK:Myriad\n",
+        "Name:Dice\nManaCost:0\nTypes:Sorcery\nA:SP$ RollDice | Sides$ 20 | ResultSubAbilities$ 1-9:DBLow,10-20:DBHigh\n" +
+        "SVar:DBLow:DB$ GainLife | Defined$ You | LifeAmount$ 1\nSVar:DBHigh:DB$ GainLife | Defined$ You | LifeAmount$ 2\n",
+        "Name:Prism\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseC\nSVar:ChooseC:DB$ ChooseColor | Defined$ You\nA:AB$ Mana | Cost$ T | Produced$ Chosen\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -1086,6 +1096,69 @@ public class MechanicsTests
         ResolveAll(g);
         Assert.Equal(Zone.Hand, g.State.Cards.First(c => c.Name == "Toll").Zone);
         Assert.All(g.State.Players, p => Assert.Equal(40, p.Life));
+    }
+
+    [Fact]
+    public void ClassLevelsGainAbilitiesInOrder()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Lesson", "Bear" }, library: new[] { "Filler", "Filler" });
+        var lesson = OnBattlefield(g, "Lesson");
+        Assert.Single(g.LegalActions(Game.Me).OfType<GameAction.Activate>(), a => a.CardId == lesson.Id);
+        g.ActivateAbility(lesson, 0);
+        ResolveAll(g);
+        Assert.Equal(2, lesson.ClassLevel);
+        g.ActivateAbility(lesson, 1);
+        ResolveAll(g);
+        g.CheckStateBasedActions();
+        Assert.Equal(3, OnBattlefield(g, "Bear").Power);
+        Assert.DoesNotContain(g.LegalActions(Game.Me), a => a is GameAction.Activate act && act.CardId == lesson.Id);
+        g.ResumeTurn();
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void TapsForManaTriggerAddsMana()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Reflect", "Bog" });
+        g.ActivateAbility(OnBattlefield(g, "Bog"), 0);
+        ResolveAll(g);
+        Assert.Equal(2, g.State.Players[Game.Me].Pool[ManaColor.B]);
+    }
+
+    [Fact]
+    public void MyriadCopiesJoinTheAttack()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Legion" }, library: new[] { "Filler", "Filler" });
+        g.ResumeTurn();
+        var opponents = g.State.Players.Count(p => p.Index != Game.Me);   // one copy per other opponent
+        Assert.Equal(40 - 2 * opponents, g.State.Players.Where(p => p.Index != Game.Me).Min(p => p.Life));
+        Assert.Single(g.State.BattlefieldCards, c => c.Name == "Legion");
+    }
+
+    [Fact]
+    public void DiceRollPicksAResult()
+    {
+        var lives = new HashSet<int>();
+        for (var seed = 1UL; seed <= 30; seed++)
+        {
+            var g = Setup(new[] { "Dice" });
+            g.State.Rng = new Rng(seed);
+            g.CastSpell(g.State[InHand(g, "Dice")], 0);
+            ResolveAll(g);
+            lives.Add(g.State.Players[Game.Me].Life);
+        }
+        Assert.Equal(new HashSet<int> { 41, 42 }, lives);
+    }
+
+    [Fact]
+    public void ManaOfTheChosenColor()
+    {
+        var decider = new TestDecider { Choose = (game, d) => d.Kind == DecisionKind.Color ? d.Options.ToList().IndexOf(ManaColor.G) : null };
+        var g = Setup(new[] { "Prism", "Sprout" }, decider: decider);
+        g.CastSpell(g.State[InHand(g, "Prism")], -1);
+        ResolveAll(g);
+        Assert.Equal(ManaColor.G, OnBattlefield(g, "Prism").ChosenColor);
+        Assert.True(g.CanCast(g.State[InHand(g, "Sprout")], 0));
     }
 
     [Fact]

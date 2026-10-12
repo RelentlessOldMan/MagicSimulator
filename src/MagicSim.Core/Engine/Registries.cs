@@ -13,7 +13,7 @@ public static class Keywords
         // Deck-building only.
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
-        "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity",
+        "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class",
     };
 }
 
@@ -41,6 +41,7 @@ public static class Triggers
         ["Sacrificed"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["ChangesZoneAll"] = new(StringComparer.Ordinal) { "ValidCards", "Origin", "Destination" },
         ["DamageDoneOnce"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
+        ["TapsForMana"] = new(StringComparer.Ordinal) { "Activator" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer" },
         ["Drawn"] = new(StringComparer.Ordinal) { "Number" },
@@ -120,6 +121,8 @@ public static class Triggers
                 // "Whenever you cast your second spell each turn": this is that spell.
                 if (!Filter.Compare(g.State.ThisTurn.SpellsCast, nth[..2], int.Parse(nth[2..]))) return false;
                 return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
+            case "TapsForMana" when e.Mode == TriggerMode.TapsForMana:
+                return PlayerMatches(t["Activator"], e.Player, source.Controller) && CardMatches(g, t, e.CardId, x, source);
             case "CounterAddedOnce" when e.Mode == TriggerMode.CounterAddedOnce:
                 if (t["CounterType"] is { } ct && ct != e.CounterType) return false;
                 if (t["ValidSource"] is { } vsrc && vsrc != "You") return false;

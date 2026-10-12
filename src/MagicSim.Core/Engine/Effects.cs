@@ -60,7 +60,7 @@ public static class Effects
         new CopyPermanentEffect(), new CloneEffect(), new AnimateEffect(), new ProliferateEffect(),
         new DelayedTriggerEffect(), new RepeatEachEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
         new AnimateAllEffect(), new FightEffect(), new BranchEffect(), new MultiplyCounterEffect(), new SetStateEffect(),
-        new UntapAllEffect(), new RemoveCounterEffect(),
+        new UntapAllEffect(), new RemoveCounterEffect(), new ClassLevelUpEffect(), new ProtectionEffect(), new RollDiceEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -114,7 +114,7 @@ sealed class ManaEffect : Effect
             ManaRestriction.Validate(rv, ctx);
         }
         var produced = ab["Produced"];
-        if (produced is "Combo ColorIdentity") return;
+        if (produced is "Combo ColorIdentity" or "Chosen") return;
         if (Game.ProducedMask(produced) is null && FixedMana(produced) is null) ctx.Need("ManaProduced:" + produced);
     }
 
@@ -128,7 +128,12 @@ sealed class ManaEffect : Effect
             foreach (var c in several) p.Pool.Add(c, amount);
             return;
         }
-        var mask = produced == "Combo ColorIdentity" ? x.Game.CommanderIdentity(x.Controller) : Game.ProducedMask(produced)!.Value;
+        var mask = produced switch
+        {
+            "Combo ColorIdentity" => x.Game.CommanderIdentity(x.Controller),
+            "Chosen" => x.Host.ChosenColor?.Mask() ?? 0,
+            _ => Game.ProducedMask(produced)!.Value,
+        };
         if (mask == 0) return;
         var combo = produced.StartsWith("Combo", StringComparison.Ordinal);
         if (!combo)
@@ -193,7 +198,7 @@ sealed class ChangeZoneEffect : Effect
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         foreach (var key in new[] { "Origin", "Destination" })
-            if (ab[key] is { } z && !z.Split(',').All(s => Zones.Contains(s.Trim()) || key == "Origin" && s.Trim() == "Stack" && (ab["Defined"] is not null || ab.TargetFilter is not null)))
+            if (ab[key] is { } z && !z.Split(',').All(s => Zones.Contains(s.Trim()) || key == "Origin" && s.Trim() is "Stack" or "All" && (ab["Defined"] is not null || ab.TargetFilter is not null)))
                 ctx.Need($"ChangeZone.{key}:{z}");
         ValidateAmount(ab, "WithCountersAmount", ctx);
         if (ab["Destination"] is null) ctx.Need("ChangeZone.Destination:none");
@@ -232,7 +237,9 @@ sealed class ChangeZoneEffect : Effect
     {
         var ab = x.Ability;
         var dest = Enum.Parse<Zone>(ab["Destination"]!);
-        var origins = (ab["Origin"] ?? "Battlefield").Split(',').Select(s => Enum.Parse<Zone>(s.Trim())).ToList();
+        var origins = ab["Origin"] == "All"
+            ? new List<Zone> { Zone.Battlefield, Zone.Graveyard, Zone.Exile, Zone.Hand, Zone.Library, Zone.Stack, Zone.Command }
+            : (ab["Origin"] ?? "Battlefield").Split(',').Select(s => Enum.Parse<Zone>(s.Trim())).ToList();
         var position = ab["LibraryPosition"] is { } lp ? int.Parse(lp) : 0;
         var tapped = ab["Tapped"] == "True";
 

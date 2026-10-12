@@ -165,3 +165,66 @@ sealed class RemoveCounterEffect : CardsEffect
         }
     }
 }
+
+/// <summary>A Class gains its next level.</summary>
+sealed class ClassLevelUpEffect : Effect
+{
+    public override string Api => "ClassLevelUp";
+    public override IReadOnlySet<string> Params { get; } = P("ClassLevel");
+
+    public override void Resolve(EffectContext x)
+    {
+        x.Host.ClassLevel = int.Parse(x.Ability["ClassLevel"]!);
+        x.Game.StaticsApplied = true;
+        x.Game.Note($"  {x.Host.Name} is now level {x.Host.ClassLevel}");
+    }
+}
+
+/// <summary>"… gains protection from …": nothing a goldfish opponent does is affected by protection.</summary>
+sealed class ProtectionEffect : Effect
+{
+    public override string Api => "Protection";
+    public override IReadOnlySet<string> Params { get; } = P("Gains", "Choices", "Defined", "Duration", "AILogic");
+    public override void Resolve(EffectContext x) { }
+}
+
+/// <summary>Rolls a die (Sides$) and runs the ResultSubAbilities$ entry for the result ("1-9:DBA,10-20:DBB").</summary>
+sealed class RollDiceEffect : Effect
+{
+    public override string Api => "RollDice";
+    public override IReadOnlySet<string> Params { get; } = P("Sides", "ResultSubAbilities", "ResultSVar", "Amount");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (!int.TryParse(ab["Sides"] ?? "6", out _)) ctx.Need("RollDice.Sides:" + ab["Sides"]);
+        if (ab["Amount"] is { } a && a != "1") ctx.Need("RollDice.Amount:" + a);
+        if (ab["ResultSubAbilities"] is not { } results) { if (ab["ResultSVar"] is null) ctx.Need("RollDice:NoResult"); return; }
+        foreach (var entry in results.Split(',', StringSplitOptions.TrimEntries))
+        {
+            var colon = entry.IndexOf(':');
+            if (colon < 0 || Range(entry[..colon]) is null) { ctx.Need("RollDice.Result:" + entry); continue; }
+            var name = entry[(colon + 1)..];
+            if (!ctx.Face.SVars.TryGetValue(name, out var body)) { ctx.Need("SVarMissing:" + name); continue; }
+            if (CardCompiler.CompileAbility(new Forge.ForgeParams(body), ctx, AbilityKind.Sub, CardCompiler.SideChainIndex) is { } chain)
+                (ab.SideChains ??= new())[entry[..colon]] = chain;
+        }
+    }
+
+    private static (int Lo, int Hi)? Range(string text)
+    {
+        var parts = text.Split('-');
+        if (parts.Length == 1 && int.TryParse(parts[0], out var one)) return (one, one);
+        if (parts.Length == 2 && int.TryParse(parts[0], out var lo) && int.TryParse(parts[1], out var hi)) return (lo, hi);
+        return null;
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var sides = int.Parse(x.Ability["Sides"] ?? "6");
+        var roll = x.S.Rng.Next(sides) + 1;
+        x.Game.Note($"  rolled {roll} (d{sides})");
+        if (x.Ability["ResultSVar"] is { } sv) (x.Host.StoredVars ??= new())[sv] = roll;
+        foreach (var (range, chain) in x.Ability.SideChains ?? new())
+            if (Range(range) is var (lo, hi) && roll >= lo && roll <= hi) x.Game.RunSideChain(x, chain);
+    }
+}

@@ -55,6 +55,8 @@ public sealed class Card
     public int? TokenToughness { get; init; }
     /// <summary>Triggers with a per-turn limit (ActivationLimit$) and the turn and times each last triggered.</summary>
     public Dictionary<TriggerDef, (int Turn, int Count)>? TriggerUses { get; set; }
+    /// <summary>A Class's current level (rule 716).</summary>
+    public int ClassLevel { get; set; } = 1;
     /// <summary>The turn this permanent last entered the battlefield.</summary>
     public int EnteredTurn { get; set; } = -1;
     /// <summary>The turn this permanent last activated a loyalty ability: one per turn (rule 606.3).</summary>
@@ -88,9 +90,11 @@ public sealed class Card
     {
         get
         {
-            if (Animations is null) return CurrentFace.Statics;
-            var own = Animations.Any(a => a.Ability["RemoveAllAbilities"] == "True") ? Enumerable.Empty<StaticDef>() : CurrentFace.Statics;
-            return own.Concat(Animations.SelectMany(a => a.Ability.Grants?.Statics ?? Enumerable.Empty<StaticDef>()));
+            if (Animations is null && ClassLevel <= 1) return CurrentFace.Statics;
+            var own = Animations?.Any(a => a.Ability["RemoveAllAbilities"] == "True") ?? false ? Enumerable.Empty<StaticDef>() : CurrentFace.Statics;
+            return own
+                .Concat(CurrentFace.ClassLevels.Where(l => l.Level <= ClassLevel).SelectMany(l => l.Grants.Statics))
+                .Concat(Animations?.SelectMany(a => a.Ability.Grants?.Statics ?? Enumerable.Empty<StaticDef>()) ?? Enumerable.Empty<StaticDef>());
         }
     }
 
@@ -142,7 +146,7 @@ public sealed class Card
         Remembered = Remembered is null ? null : new List<int>(Remembered),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn,
+        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel,
         TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),

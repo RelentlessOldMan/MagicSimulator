@@ -94,6 +94,8 @@ public static class Statics
     {
         "CantBlockBy", "CantBlock", "MinMaxBlocker", "MustBlock", "CantBlockUnless", "BlockRestrict", "CanBlockIfShadow",
         "IgnoreLandWalk", "MustAttack",
+        // Untapping during other players' untap steps: the simulation only plays your turns.
+        "UntapOtherPlayer",
     };
 
     private static readonly HashSet<string> CommonParams = new(StringComparer.Ordinal) { "Mode", "Description", "Secondary" };
@@ -105,6 +107,8 @@ public static class Statics
         "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
         "AddSVar",
+        // Goaded creatures must attack someone else: only opponents' creatures get goaded, and they never attack.
+        "Goad",
     };
 
     private static readonly HashSet<string> ReduceCostParams = new(StringComparer.Ordinal)
@@ -125,6 +129,8 @@ public static class Statics
         if (NoEffectInGoldfish.Contains(s.Mode)) return;
         // "Your opponents can't cast spells / activate abilities": goldfish opponents never do anyway.
         if (s.Mode is "CantBeCast" or "CantBeActivated" && (s["Caster"] ?? s["Activator"]) == "Opponent") return;
+        // "Creatures can't attack you unless …" (Ghostly Prison): goldfish opponents never attack.
+        if (s.Mode == "CantAttackUnless" && s["Target"] is "You" or "You,Planeswalker.YouCtrl") return;
         HashSet<string> own;
         switch (s.Mode)
         {
@@ -223,8 +229,9 @@ public static class Statics
             foreach (var st in c.Statics)
                 if (st.Mode == "Continuous" && st["MayPlay"] is null) active.Add((c, st, ContextFor(g, c, st)));
         var animated = s.BattlefieldCards.Where(c => c.Animations is not null).ToList();
-        if (active.Count == 0 && animated.Count == 0 && !g.StaticsApplied) return;
-        g.StaticsApplied = active.Count > 0 || animated.Count > 0;
+        var leveled = s.BattlefieldCards.Where(c => c.ClassLevel > 1).ToList();
+        if (active.Count == 0 && animated.Count == 0 && leveled.Count == 0 && !g.StaticsApplied) return;
+        g.StaticsApplied = active.Count > 0 || animated.Count > 0 || leveled.Count > 0;
 
         foreach (var c in s.BattlefieldCards) c.ClearStaticEffects();
         foreach (var p in s.Players) { p.StaticLandDrops = 0; p.StaticMaxHandSize = null; }
@@ -283,6 +290,9 @@ public static class Statics
                         .UnionWith(kws.Split('&', StringSplitOptions.TrimEntries).Select(ForgeRequirements.KeywordName));
                 Grant(card, a.Ability.Grants);
             }
+        foreach (var card in leveled)
+            foreach (var (level, grants) in card.CurrentFace.ClassLevels)
+                if (level <= card.ClassLevel) Grant(card, grants);
         for (var i = 0; i < holding.Count; i++)
             if (holding[i].Static.Grants is { } grants)
                 foreach (var card in Affected(i)) Grant(card, grants);
@@ -350,7 +360,7 @@ public static class Statics
     public static IEnumerable<Card> Sources(Game g)
     {
         foreach (var c in g.State.BattlefieldCards)
-            if (!c.IsBlank && (c.CurrentFace.Statics.Count > 0 || c.Animations is not null)) yield return c;
+            if (!c.IsBlank && (c.CurrentFace.Statics.Count > 0 || c.Animations is not null || c.ClassLevel > 1)) yield return c;
         foreach (var p in g.State.Players)
             foreach (var id in p.Command)
                 if (g.State[id].IsEffect) yield return g.State[id];

@@ -129,6 +129,8 @@ public sealed class FaceDef
     public List<TriggerDef> Chapters { get; } = new();
     /// <summary>Replacement effects that modify events (damage, tokens, counters, zone changes).</summary>
     public List<ReplacementDef> Replacements { get; } = new();
+    /// <summary>A Class's levels 2+: what each level gives (rule 716).</summary>
+    public List<(int Level, Grants Grants)> ClassLevels { get; } = new();
 
     /// <summary>This face as a copy effect changes it ("except it's an artifact", "except it has haste").</summary>
     public FaceDef CopyWith(TypeLine types, int? power, int? toughness, ColorMask colors, IReadOnlyList<string> extraKeywords)
@@ -153,6 +155,7 @@ public sealed class FaceDef
         f.EtbCounters.AddRange(EtbCounters);
         f.Chapters.AddRange(Chapters);
         f.Replacements.AddRange(Replacements);
+        f.ClassLevels.AddRange(ClassLevels);
         return f;
     }
 }
@@ -374,6 +377,26 @@ public static partial class CardCompiler
                 if (name == "Toxic" && !int.TryParse(Part(1), out _)) ctx.Need("Keyword:Toxic+" + Part(1));
                 if (name == "Affinity") Filter.Parse(Part(1), ctx);
                 return true;
+            case "Class":
+            {
+                // K:Class:Level:Cost:AddTrigger$ … | AddStaticAbility$ … — gaining a level is a sorcery-speed activated ability.
+                if (!int.TryParse(Part(1), out var level)) { ctx.Need("Keyword:Class+" + Part(1)); return true; }
+                var grantText = string.Join(':', parts.Skip(3));
+                var gp = new ForgeParams(grantText);
+                foreach (var key in gp.Values.Keys)
+                    if (key is not ("AddTrigger" or "AddStaticAbility" or "AddAbility")) ctx.Need("Class:" + key);
+                face.ClassLevels.Add((level, Engine.Grants.Compile(gp, ctx, "AddAbility", "AddTrigger", "AddStaticAbility") ?? new Grants()));
+                AddGenerated(face, ctx, $"AB$ ClassLevelUp | Cost$ {Part(2)} | SorcerySpeed$ True | ClassLevel$ {level} | SpellDescription$ Level {level}");
+                return true;
+            }
+            case "Myriad":
+                // Attacking creates a copy attacking each other opponent; here they join the attack.
+                face.SVars["__MyriadCopies"] = "DB$ CopyPermanent | Defined$ Self | NumCopies$ __MyriadX | TokenTapped$ True | TokenAttacking$ True | AtEOT$ Exile";
+                face.SVars["__MyriadX"] = "PlayerCountOpponents$Amount/Minus.1";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ Attacks | ValidCard$ Card.Self | TriggerZones$ Battlefield | Execute$ __MyriadCopies"), ctx));
+                return true;
+            case "Annihilator":
+                return true;   // the defending goldfish opponent has no permanents to sacrifice
             case "Changeling":
                 face.Types = new TypeLine { Types = face.Types.Types, Supers = face.Types.Supers, Subtypes = face.Types.Subtypes, AllCreatureTypes = true };
                 return true;
@@ -385,8 +408,12 @@ public static partial class CardCompiler
                 face.EtbCopy = CompileAbility(new ForgeParams(copyBody), ctx, AbilityKind.Sub, 0);
                 return true;
             case "ETBReplacement":
-                // "As this enters, choose …": K:ETBReplacement:Other:SVarName
-                if (Part(1) != "Other" || Part(3).Length > 0) { ctx.Need("Keyword:ETBReplacement:" + Part(1) + (Part(3).Length > 0 ? "+" + Part(3) : "")); return true; }
+                // "As this enters, choose …": K:ETBReplacement:Other:SVarName[:Mandatory]
+                if (Part(1) != "Other" || Part(3) is not ("" or "Mandatory") || Part(5).Length > 0)
+                {
+                    ctx.Need("Keyword:ETBReplacement:" + Part(1) + (Part(3).Length > 0 ? "+" + Part(3) : "") + (Part(5).Length > 0 ? "+Condition" : ""));
+                    return true;
+                }
                 if (!face.SVars.TryGetValue(Part(2), out var etb)) { ctx.Need("SVarMissing:" + Part(2)); return true; }
                 if (CompileAbility(new ForgeParams(etb), ctx, AbilityKind.Sub, 0) is { } etbAb) face.EtbReplacements.Add(etbAb);
                 return true;
