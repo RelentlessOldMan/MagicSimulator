@@ -10,7 +10,7 @@ namespace MagicSim.Core.Engine;
 public static class Copies
 {
     /// <summary>The "except …" parameters a copy effect may carry.</summary>
-    public static readonly string[] ExceptParams = { "AddTypes", "SetPower", "SetToughness", "AddKeywords", "NonLegendary", "SetColor", "SetCreatureTypes" };
+    public static readonly string[] ExceptParams = { "AddTypes", "SetPower", "SetToughness", "AddKeywords", "NonLegendary", "SetColor", "SetCreatureTypes", "GainThisAbility" };
 
     public static void ValidateExcept(AbilityDef ab, CompileContext ctx)
     {
@@ -52,6 +52,8 @@ public static class Copies
             }
             var copy = new CardDef { Name = face.Name, Source = printed.Source, IsBlank = printed.IsBlank, ColorIdentity = printed.ColorIdentity };
             copy.Faces.Add(face.CopyWith(types, power, toughness, colors, keywords));
+            // "… except it has this ability" (Thespian's Stage).
+            if (mods?["GainThisAbility"] == "True" && mods.Kind == AbilityKind.Activated) copy.Faces[0].Activated.Add(mods);
             return copy;
         });
     }

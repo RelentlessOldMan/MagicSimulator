@@ -192,6 +192,50 @@ sealed class SacrificeAllEffect : Effect
     }
 }
 
+/// <summary>Exploit: "you may sacrifice a creature"; then "when this exploits a creature" triggers (rule 702.110).</summary>
+sealed class ExploitEffect : Effect
+{
+    public override string Api => "Exploit";
+    public override IReadOnlySet<string> Params { get; } = P();
+
+    public override void Resolve(EffectContext x)
+    {
+        var candidates = x.S.BattlefieldCards.Where(c => c.Controller == x.Controller && c.Types.Is(CardType.Creature)).Select(c => c.Id).ToList();
+        if (candidates.Count == 0) return;
+        var chosen = x.Game.Decider.ChooseCards(x.Game, x.Controller, Choice.Sacrifice, x.Host, candidates, 0, 1);
+        if (chosen.Count == 0) return;
+        var victim = x.S[chosen[0]];
+        x.Game.Note($"  exploit {victim.Name}");
+        x.Game.Sacrifice(victim);
+        x.Game.Fire(new TriggerEvent(TriggerMode.Exploited, CardId: victim.Id, TargetCardId: x.Host.Id, Player: x.Controller));
+    }
+}
+
+/// <summary>"Change the target of target spell with a single target."</summary>
+sealed class ChangeTargetsEffect : Effect
+{
+    public override string Api => "ChangeTargets";
+    public override IReadOnlySet<string> Params { get; } = P();
+
+    public override void Resolve(EffectContext x)
+    {
+        foreach (var t in x.Targets)
+        {
+            if (t.CardId is not { } id || x.S.Stack.LastOrDefault(i => i.IsSpell && i.SourceId == id) is not { } item) continue;
+            var spell = x.S[id];
+            foreach (var ab in item.Ability.Chain())
+            {
+                if (ab.TargetFilter is null || ab.ChainIndex >= item.ChainTargets.Count || item.ChainTargets[ab.ChainIndex].Count != 1) continue;
+                var old = item.ChainTargets[ab.ChainIndex][0];
+                var options = x.Game.TargetCandidates(spell, ab, item.Controller).Where(o => o != old).ToList();
+                if (options.Count == 0) continue;
+                item.ChainTargets[ab.ChainIndex] = x.Game.Decider.ChooseTargets(x.Game, x.Controller, x.Host, ab, options, 1, 1);
+                x.Game.Note($"  {spell.Name} now targets {string.Join(", ", item.ChainTargets[ab.ChainIndex])}");
+            }
+        }
+    }
+}
+
 /// <summary>"Choose a card …": each defined player chooses cards from a zone; later effects use them as ChosenCard.</summary>
 sealed class ChooseCardEffect : Effect
 {

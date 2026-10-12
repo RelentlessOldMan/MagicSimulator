@@ -482,8 +482,12 @@ public sealed partial class Game
         if (source is not null && player != Me) RememberWinCard(source);
     }
 
+    /// <summary>Summoning sickness for {T} abilities, unless something lets it activate them as though it had haste.</summary>
+    public bool IsSickForAbilities(Card c) => IsSick(c) && !Statics.ActivatesAsIfHaste(this, c);
+
     public void GainLife(int player, int amount)
     {
+        if (Statics.CantGainLife(this, player)) return;
         amount = Replacements.Amount(this, "GainLife", amount, targetPlayer: player);
         if (amount > 0) State.ThisTurn.LifeGained[player] = State.ThisTurn.LifeGained.GetValueOrDefault(player) + amount;
         if (amount <= 0) return;
@@ -508,7 +512,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);
@@ -606,7 +610,7 @@ public sealed partial class Game
         if (!ab.IsManaAbility || !ab.Cost.Mana.IsZero || ab.Cost.Untap) return false;
         if (!ab.P.Values.Keys.All(k => k is "AB" or "Cost" or "Produced" or "Amount" or "SpellDescription" or "AILogic"
                 or "AIPreference" or "SubAbility" or "ActivationZone" or "ColorOrType" or "Valid" or "ReflectProperty" or "RestrictValid"
-                or "PrecostDesc" or "Activation" || Presence.Params.Contains(k))) return false;
+                or "PrecostDesc" or "Activation" or "AddsKeywords" or "AddsKeywordsValid" || Presence.Params.Contains(k))) return false;
         if (ab.Api == "Mana" && ProducedMask(ab["Produced"]) is null && ab["Produced"] is not ("Combo ColorIdentity" or "Chosen")) return false;
         if (ab["Amount"] is not null && !int.TryParse(ab["Amount"], out _)) return false;
         foreach (var part in ab.Cost.Parts)
@@ -684,7 +688,7 @@ public sealed partial class Game
                 if (!IsAutoManaAbility(ab)) continue;
                 var fromHand = ab["ActivationZone"] == "Hand";
                 if (fromHand != (c.Zone == Zone.Hand)) continue;
-                if (ab.Cost.Tap && (c.Tapped || IsSick(c))) continue;
+                if (ab.Cost.Tap && (c.Tapped || IsSickForAbilities(c))) continue;
                 if (ab["RestrictValid"] is { } rv && !ManaRestriction.Allows(this, c, rv, _payingFor, _payingForSpell)) continue;
                 if (ab.P.Values.Keys.Any(Presence.Params.Contains) && !Presence.Hold(ab.P, ContextFor(c))) continue;
                 if (ab["Activation"] is { } activation && !Presence.ConditionHolds(activation, ContextFor(c))) continue;
@@ -802,6 +806,13 @@ public sealed partial class Game
                 case CostPartKind.ExileSelf: MoveTo(card, Zone.Exile); break;
             }
         State.Players[player].Pool.Add(color, src.Amount);
+        // "If that mana is spent on a creature spell, it gains haste."
+        if (ab["AddsKeywords"] is { } adds && _payingForSpell && _payingFor is { } spell
+            && (ab["AddsKeywordsValid"] is not { } addsValid || Effect.FilterFor(card.CurrentFace, addsValid).MatchesCard(spell, ContextFor(card))))
+        {
+            spell.TempKeywords ??= new HashSet<string>(StringComparer.Ordinal);
+            foreach (var k in adds.Split('&', StringSplitOptions.TrimEntries)) spell.TempKeywords.Add(k);
+        }
         if (ab.Cost.Tap && ab != ConvokeAbility) Fire(new TriggerEvent(TriggerMode.TapsForMana, CardId: card.Id, Player: player));
         for (var sub = ab.Sub; sub is not null; sub = sub.Sub)
         {
@@ -826,7 +837,7 @@ public sealed partial class Game
     private bool CanPayCostCore(Cost cost, Card source, int player, int x, bool excludeSourceFromMana)
     {
         var p = State.Players[player];
-        if (cost.Tap && (source.Tapped || source.Zone != Zone.Battlefield || IsSick(source))) return false;
+        if (cost.Tap && (source.Tapped || source.Zone != Zone.Battlefield || IsSickForAbilities(source))) return false;
         var lifeNeeded = 0;
         foreach (var part in cost.Parts)
             switch (part.Kind)

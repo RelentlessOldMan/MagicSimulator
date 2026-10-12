@@ -141,7 +141,7 @@ sealed class UntapAllEffect : Effect
 sealed class RemoveCounterEffect : CardsEffect
 {
     public override string Api => "RemoveCounter";
-    public override IReadOnlySet<string> Params { get; } = P("Defined", "CounterType", "CounterNum");
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "CounterType", "CounterNum", "RememberRemoved");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -157,10 +157,18 @@ sealed class RemoveCounterEffect : CardsEffect
         {
             if (c.Counters is null) continue;
             var kinds = kind == "Any" || kind == "All" ? c.Counters.Keys.ToList() : new List<string> { kind };
+            // "Remove up to N counters" of any kinds: N in all.
+            var budget = kind == "Any" && x.Ability["CounterNum"] != "All" ? Amount(x, x.Ability["CounterNum"], 1) : int.MaxValue;
             foreach (var k in kinds)
             {
                 var n = x.Ability["CounterNum"] == "All" ? c.CounterCount(k) : Amount(x, x.Ability["CounterNum"], 1);
-                if (c.Counters.ContainsKey(k)) c.Counters[k] = Math.Max(0, c.CounterCount(k) - n);
+                var removed = Math.Min(Math.Min(n, budget), c.CounterCount(k));
+                if (removed <= 0) continue;
+                c.Counters[k] -= removed;
+                budget -= removed;
+                // RememberRemoved$: "for each counter removed this way" counts what's remembered.
+                if (x.Ability["RememberRemoved"] == "True")
+                    for (var i = 0; i < removed; i++) (x.Host.Remembered ??= new()).Add(c.Id);
             }
         }
     }

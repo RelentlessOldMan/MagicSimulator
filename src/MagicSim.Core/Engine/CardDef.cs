@@ -16,11 +16,14 @@ public sealed class Cost
     public bool Untap { get; init; }
     public IReadOnlyList<CostPart> Parts { get; init; } = Array.Empty<CostPart>();
     public bool HasNonManaParts => Tap || Untap || Parts.Count > 0;
+    /// <summary>A triggered ability's cost that must be paid if it can be ("Mandatory": Dark Depths sacrificing itself).</summary>
+    public bool Mandatory { get; init; }
 
     /// <summary>This cost and another together (kicker, splice, escape's "plus exile …").</summary>
     public Cost Plus(Cost other) => new()
     {
         Mana = Mana.Plus(other.Mana), Tap = Tap || other.Tap, Untap = Untap || other.Untap, Parts = Parts.Concat(other.Parts).ToList(),
+        Mandatory = Mandatory || other.Mandatory,
     };
 
     public static readonly Cost Free = new();
@@ -536,6 +539,11 @@ public static partial class CardCompiler
                 // "{cost}, discard this: search for a card with the same mana value. Transmute only as a sorcery."
                 AddGenerated(face, ctx, $"AB$ ChangeZone | Cost$ {Part(1)} Discard<1/CARDNAME> | ActivationZone$ Hand | Origin$ Library | Destination$ Hand | ChangeType$ Card.cmcEQ{face.ManaCost.ManaValue} | ChangeNum$ 1 | SorcerySpeed$ True | SpellDescription$ Transmute");
                 return true;
+            case "Exploit":
+                // "When this creature enters, you may sacrifice a creature."
+                face.SVars["__Exploit"] = "DB$ Exploit";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ __Exploit"), ctx));
+                return true;
             case "Rebound":
                 // "If you cast this from your hand, exile it as it resolves. At your next upkeep, you may cast it from exile free."
                 face.SVars["__Rebound"] = "DB$ Play | Defined$ Self | WithoutManaCost$ True | Optional$ True";
@@ -852,11 +860,12 @@ public static partial class CardCompiler
     public static Cost ParseCost(string text, CompileContext ctx)
     {
         var manaTokens = new List<string>();
-        bool tap = false, untap = false;
+        bool tap = false, untap = false, mandatory = false;
         var parts = new List<CostPart>();
         foreach (var token in SplitCost(text))
         {
             if (token == "T") { tap = true; continue; }
+            if (token == "Mandatory") { mandatory = true; continue; }
             if (token == "Q") { untap = true; ctx.Need("Cost:Untap"); continue; }
             var m = CostPartRx().Match(token);
             if (!m.Success) { manaTokens.Add(token); continue; }
@@ -889,7 +898,7 @@ public static partial class CardCompiler
         }
         var mana = manaTokens.Count == 0 ? ManaCost.Zero : ManaCost.Parse(string.Join(' ', manaTokens));
         if (mana is null) { ctx.Need("CostSymbol:" + string.Join(' ', manaTokens)); mana = ManaCost.Zero; }
-        return new Cost { Mana = mana, Tap = tap, Untap = untap, Parts = parts };
+        return new Cost { Mana = mana, Tap = tap, Untap = untap, Parts = parts, Mandatory = mandatory };
     }
 
     private static int? ParsePT(string? pt, int index)

@@ -376,6 +376,31 @@ public class MechanicsTests
         "Name:Lord\nManaCost:0\nTypes:Legendary Creature Human\nPT:1/1\n",
         "Name:Mire\nManaCost:no cost\nTypes:Legendary Land\n" +
         "A:AB$ Draw | Cost$ 3 B Discard<1/CARDNAME> | ActivationZone$ Hand | NumCards$ 1 | ReduceCost$ Y\nSVar:Y:Count$Valid Creature.Legendary+YouCtrl\n",
+        "Name:Vizier\nManaCost:0\nTypes:Creature Snake\nPT:4/6\nK:Exploit\n" +
+        "T:Mode$ Exploited | ValidCard$ Creature | ValidSource$ Card.Self | TriggerZones$ Battlefield | Execute$ TrigGain\n" +
+        "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 3\n",
+        "Name:Parasite\nManaCost:0\nTypes:Artifact Creature Insect\nPT:1/1\n" +
+        "A:AB$ RemoveCounter | Cost$ X | ValidTgts$ Permanent | CounterType$ Any | CounterNum$ X | RememberRemoved$ True | SubAbility$ DBPump\n" +
+        "SVar:DBPump:DB$ Pump | NumAtt$ +Y | Defined$ Self | SubAbility$ DBClean\nSVar:DBClean:DB$ Cleanup | ClearRemembered$ True\n" +
+        "SVar:X:Count$xPaid\nSVar:Y:Count$RememberedSize\n",
+        "Name:Elixir\nManaCost:0\nTypes:Artifact\nS:Mode$ ActivateAbilityAsIfHaste | ValidCard$ Creature.YouCtrl\n",
+        "Name:Tapper\nManaCost:0\nTypes:Creature Druid\nPT:1/1\nA:AB$ GainLife | Cost$ T | Defined$ You | LifeAmount$ 1\n",
+        "Name:Mischief\nManaCost:0\nTypes:Instant\n" +
+        "A:SP$ ChangeTargets | TargetType$ Spell.singleTarget | ValidTgts$ Card | SubAbility$ DBLose\n" +
+        "SVar:DBLose:DB$ LoseLife | LifeAmount$ X\nSVar:X:Targeted$CardManaCost\n",
+        "Name:Heist\nManaCost:0\nTypes:Sorcery\n" +
+        "A:SP$ Dig | Defined$ You | DigNum$ 1 | ChangeNum$ All | DestinationZone$ Exile | ExileFaceDown$ True | WithMayLook$ True | RememberChanged$ True | SubAbility$ DBEffect\n" +
+        "SVar:DBEffect:DB$ Effect | StaticAbilities$ STPlay | RememberObjects$ Remembered | ForgetOnMoved$ Exile | Duration$ Permanent | SubAbility$ DBClean\n" +
+        "SVar:STPlay:Mode$ Continuous | MayPlay$ True | MayPlayIgnoreType$ True | Affected$ Card.IsRemembered | AffectedZone$ Exile\n" +
+        "SVar:DBClean:DB$ Cleanup | ClearRemembered$ True\n",
+        "Name:Drought\nManaCost:0\nTypes:Enchantment\nS:Mode$ CantGainLife | ValidPlayer$ You\n",
+        "Name:Depths\nManaCost:no cost\nTypes:Legendary Snow Land\nK:etbCounter:ICE:3\n" +
+        "A:AB$ RemoveCounter | Cost$ 1 | CounterType$ ICE | CounterNum$ 1\n" +
+        "T:Mode$ Always | TriggerZones$ Battlefield | IsPresent$ Card.Self+counters_EQ0_ICE | Execute$ TrigToken\n" +
+        "SVar:TrigToken:AB$ Token | TokenScript$ marit_lage | TokenOwner$ You | Cost$ Mandatory Sac<1/CARDNAME>\n",
+        "Name:Stage\nManaCost:no cost\nTypes:Land\nA:AB$ Clone | Cost$ T | ValidTgts$ Land | GainThisAbility$ True\n",
+        "Name:Hall\nManaCost:no cost\nTypes:Legendary Land\nA:AB$ Mana | Cost$ T PayLife<3> | Produced$ C | AddsKeywords$ Haste | AddsKeywordsValid$ Spell.Creature\n",
+        "Name:Sprinter\nManaCost:1\nTypes:Creature Elf\nPT:1/1\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -391,6 +416,7 @@ public class MechanicsTests
         ["c_1_1_a_servo"] = "Name:Servo Token\nManaCost:no cost\nTypes:Artifact Creature Servo\nPT:1/1\n",
         ["role_wicked"] = "Name:Wicked Role\nManaCost:no cost\nTypes:Enchantment Aura Role\nK:Enchant:Creature\n" +
             "S:Mode$ Continuous | Affected$ Creature.EnchantedBy | AddPower$ 1 | AddToughness$ 1\n",
+        ["marit_lage"] = "Name:Avatar Token\nManaCost:no cost\nColors:black\nTypes:Legendary Creature Avatar\nPT:20/20\nK:Flying\nK:Indestructible\n",
         ["b_0_1_serf"] = "Name:Serf Token\nManaCost:no cost\nColors:black\nTypes:Creature Serf\nPT:0/1\n",
     };
 
@@ -2279,5 +2305,129 @@ public class MechanicsTests
         Assert.Contains(g.LegalActions(Game.Me), a => a is GameAction.Activate);
         g = Setup(new[] { "Mire" }, battlefield: new[] { "Bog", "Bog", "Bog" }, library: new[] { "Filler" });
         Assert.DoesNotContain(g.LegalActions(Game.Me), a => a is GameAction.Activate);
+    }
+
+    [Fact]
+    public void ExploitSacrificesForATrigger()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Card ? TestDecider.Named(game, dec, "Bear") : null };
+        var g = Setup(new[] { "Vizier" }, battlefield: new[] { "Bear" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Vizier")], -1);
+        ResolveAll(g);
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Bear").Zone);
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void RemoveUpToXCountersAndCountThem()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.X ? dec.Options.ToList().IndexOf(2)
+            : dec.Kind == DecisionKind.Target ? TestDecider.Named(game, dec, "Bear") : null };
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Parasite", "Bear", "Bog", "Bog" }, decider: d);
+        var bear = OnBattlefield(g, "Bear");
+        g.PutCounters(bear, "P1P1", 3);
+        g.ActivateAbility(OnBattlefield(g, "Parasite"), 0);
+        ResolveAll(g);
+        Assert.Equal(1, bear.CounterCount("P1P1"));
+        Assert.Equal(3, OnBattlefield(g, "Parasite").Power);
+    }
+
+    [Fact]
+    public void ActivateAsThoughItHadHaste()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Tapper" });
+        OnBattlefield(g, "Tapper").ControlledSinceTurn = 1;
+        Assert.DoesNotContain(g.LegalActions(Game.Me), a => a is GameAction.Activate);
+        g = Setup(Array.Empty<string>(), battlefield: new[] { "Tapper", "Elixir" });
+        OnBattlefield(g, "Tapper").ControlledSinceTurn = 1;
+        Assert.Contains(g.LegalActions(Game.Me), a => a is GameAction.Activate);
+    }
+
+    [Fact]
+    public void ChangeTheTargetOfASpell()
+    {
+        var target = "Bear";
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Target ? TestDecider.Named(game, dec, target) : null };
+        var g = Setup(new[] { "Plow", "Mischief" }, battlefield: new[] { "Bear", "Ogre", "Plain" }, decider: d);
+        g.CastSpell(g.State[InHand(g, "Plow")], 0);
+        target = "Plow";
+        g.CastSpell(g.State[InHand(g, "Mischief")], 0);
+        target = "Ogre";
+        ResolveAll(g);
+        Assert.Equal(Zone.Exile, g.State.Cards.First(c => c.Name == "Ogre").Zone);
+        Assert.Equal(Zone.Battlefield, OnBattlefield(g, "Bear").Zone);
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void MayPlayWithAnyTypeOfMana()
+    {
+        var g = Setup(new[] { "Heist" }, battlefield: new[] { "Bog" }, library: new[] { "Sprout" });
+        g.CastSpell(g.State[InHand(g, "Heist")], 0);
+        ResolveAll(g);
+        var sprout = g.State.Cards.First(c => c.Name == "Sprout");
+        Assert.Equal(Zone.Exile, sprout.Zone);
+        Assert.Contains(g.LegalActions(Game.Me), a => a is GameAction.Cast c && c.CardId == sprout.Id);
+    }
+
+    [Fact]
+    public void CantGainLife()
+    {
+        var g = Setup(new[] { "Kicky" }, battlefield: new[] { "Drought" });
+        g.CastSpell(g.State[InHand(g, "Kicky")], 0);
+        ResolveAll(g);
+        Assert.Equal(40, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void StateTriggerWithAMandatoryCost()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Depths" });
+        g.PutCounters(OnBattlefield(g, "Depths"), "ICE", 1);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, OnBattlefield(g, "Depths").Zone);
+        OnBattlefield(g, "Depths").Counters!["ICE"] = 0;
+        ResolveAll(g);
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Depths").Zone);
+        Assert.Single(g.State.BattlefieldCards, c => c.Name == "Avatar Token");
+    }
+
+    [Fact]
+    public void CopyThatKeepsThisAbility()
+    {
+        var target = "Depths";
+        // Legend rule: keep the copy.
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Target ? TestDecider.Named(game, dec, target)
+            : dec.Kind == DecisionKind.Option ? dec.Options.ToList().FindIndex(o => o is string text && text.Contains("copy")) : null };
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Stage", "Depths" }, decider: d);
+        g.PutCounters(OnBattlefield(g, "Depths"), "ICE", 3);
+        var stage = OnBattlefield(g, "Stage");
+        g.ActivateAbility(stage, 0);
+        ResolveAll(g);
+        // The copy has no ice counters: it is sacrificed for the token (the original went to the legend rule).
+        Assert.Equal(Zone.Graveyard, stage.Zone);
+        Assert.Single(g.State.BattlefieldCards, c => c.Name == "Avatar Token");
+    }
+
+    [Fact]
+    public void CopyKeepsTheCloningAbility()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Target ? TestDecider.Named(game, dec, "Bog") : null };
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Stage", "Bog" }, decider: d);
+        var stage = OnBattlefield(g, "Stage");
+        g.ActivateAbility(stage, 0);
+        ResolveAll(g);
+        Assert.Equal("Bog", stage.Name);
+        Assert.Contains(stage.Activated, a => a.Api == "Clone");
+    }
+
+    [Fact]
+    public void ManaThatGivesHaste()
+    {
+        var g = Setup(new[] { "Sprinter" }, battlefield: new[] { "Hall" });
+        g.CastSpell(g.State[InHand(g, "Sprinter")], -1);
+        ResolveAll(g);
+        Assert.False(g.IsSick(OnBattlefield(g, "Sprinter")));
+        Assert.Equal(37, g.State.Players[Game.Me].Life);
     }
 }

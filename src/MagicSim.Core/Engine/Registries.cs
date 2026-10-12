@@ -14,7 +14,7 @@ public static class Keywords
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
         "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade", "Ninjutsu", "Persist", "Undying",
-        "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort",
+        "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit",
         // An Aura's own enchant restriction (Animate Dead swapping its "enchant" ability).
         "Enchant",
     };
@@ -57,6 +57,8 @@ public static class Triggers
         ["Taps"] = new(StringComparer.Ordinal) { },
         ["TurnFaceUp"] = new(StringComparer.Ordinal) { },
         ["Unattached"] = new(StringComparer.Ordinal) { "ValidAttachment", "ValidObject" },
+        ["Exploited"] = new(StringComparer.Ordinal) { "ValidSource" },
+        ["Always"] = new(StringComparer.Ordinal) { },
     };
 
     public static readonly HashSet<string> Supported = new(ModeParams.Keys.Concat(NeverInGoldfish), StringComparer.Ordinal);
@@ -107,6 +109,8 @@ public static class Triggers
             || source.Zone == Zone.Stack && t["TriggerZones"] == "Stack"
             // An Equipment that leaves the battlefield becomes unattached as it goes.
             || e.Mode == TriggerMode.Unattached && e.CardId == source.Id
+            // "When this exploits a creature" even when it exploits itself.
+            || e.Mode == TriggerMode.Exploited && e.TargetCardId == source.Id
             // "When you cycle this card" triggers from wherever cycling put it.
             || e.Mode == TriggerMode.Cycled && e.CardId == source.Id && t["TriggerZones"] is null;
         if (!sourceActive) return false;
@@ -142,6 +146,9 @@ public static class Triggers
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
             case "TurnFaceUp" when e.Mode == TriggerMode.TurnFaceUp:
                 return CardMatches(g, t, e.CardId, x, source);
+            case "Exploited" when e.Mode == TriggerMode.Exploited:
+                return (t["ValidSource"] is not { } exploiter || Effect.FilterFor(t.Face, exploiter).MatchesCard(g.State[e.TargetCardId!.Value], x))
+                    && CardMatches(g, t, e.CardId, x, source);
             case "Unattached" when e.Mode == TriggerMode.Unattached:
                 return (t["ValidAttachment"] is not { } attachment || Effect.FilterFor(t.Face, attachment).MatchesCard(g.State[e.CardId!.Value], x))
                     && (t["ValidObject"] is not { } attachedTo || Effect.FilterFor(t.Face, attachedTo).MatchesCard(g.State[e.TargetCardId!.Value], x));

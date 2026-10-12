@@ -621,6 +621,9 @@ public sealed partial class Game
             cost = new Cost { Mana = ManaCost.Zero, Tap = cost.Tap, Untap = cost.Untap, Parts = cost.Parts };
         else if (grant.AltManaCost is { } alt && c.Zone == Zone.Library)
             cost = new Cost { Tap = cost.Tap, Untap = cost.Untap, Parts = cost.Parts }.Plus(Statics.AltManaCost(c, alt));
+        // "Mana of any type can be spent to cast that spell": its colored symbols take any mana.
+        if (grant.AnyTypeOfMana)
+            cost = new Cost { Mana = new ManaCost { Generic = cost.Mana.ManaValue, XCount = cost.Mana.XCount }, Tap = cost.Tap, Untap = cost.Untap, Parts = cost.Parts };
         // Optional additional costs chosen for this cast (kicker, bargain).
         if (spell?.ExtraCost is { } extraCost) cost = cost.Plus(extraCost);
         var extra = c.Zone == Zone.Command ? 2 * c.CommandCasts : 0;
@@ -852,10 +855,14 @@ public sealed partial class Game
         {
             foreach (var zone in TargetZones(ab))
                 foreach (var c in CardsIn(zone))
-                    if (f.MatchesCard(c, x)) list.Add(TargetRef.OfCard(c.Id));
+                    if (f.MatchesCard(c, x) && (ab["TargetType"] != "Spell.singleTarget" || SingleTarget(c))) list.Add(TargetRef.OfCard(c.Id));
         }
         return list;
     }
+
+    /// <summary>A spell on the stack with exactly one target ("target spell with a single target").</summary>
+    private bool SingleTarget(Card spell) =>
+        State.Stack.LastOrDefault(i => i.IsSpell && i.SourceId == spell.Id) is { } item && item.ChainTargets.Sum(t => t.Count) == 1;
 
     /// <summary>
     /// Where an ability's target cards are: TgtZone$, or for moving a card from somewhere other than the
@@ -864,7 +871,7 @@ public sealed partial class Game
     private static IEnumerable<Zone> TargetZones(AbilityDef ab)
     {
         var spec = ab["TgtZone"] ?? (ab.Api == "ChangeZone" ? ab["Origin"] : null);
-        if (spec is null) return new[] { ab["TargetType"] == "Spell" ? Zone.Stack : Zone.Battlefield };
+        if (spec is null) return new[] { ab["TargetType"]?.StartsWith("Spell", StringComparison.Ordinal) ?? false ? Zone.Stack : Zone.Battlefield };
         var zones = new List<Zone>();
         foreach (var w in spec.Split(','))
             if (Enum.TryParse<Zone>(w.Trim(), out var z) && z is Zone.Graveyard or Zone.Exile or Zone.Hand or Zone.Stack or Zone.Battlefield) zones.Add(z);
@@ -953,6 +960,25 @@ public sealed partial class Game
         }
     }
 
+    /// <summary>
+    /// State triggers ("when this has no ice counters on it", rule 603.8): trigger whenever the condition holds,
+    /// but not again while the ability is waiting or on the stack.
+    /// </summary>
+    private void CheckStateTriggers()
+    {
+        foreach (var c in State.BattlefieldCards.ToList())
+        {
+            if (c.IsBlank) continue;
+            foreach (var t in c.Triggers)
+            {
+                if (t.Mode != "Always" || t.Execute is null) continue;
+                if (_pending.Any(p => p.SourceId == c.Id && p.Trigger == t) || State.Stack.Any(i => i.SourceId == c.Id && i.Ability == t.Execute)) continue;
+                var x = new EffectContext { Game = this, Ability = t.Execute, FaceOverride = t.Face, Item = new StackItem { SourceId = c.Id, Ability = t.Execute, Controller = c.Controller } };
+                if (Presence.Hold(t.P, x)) _pending.Add(new PendingTrigger(c.Id, t, new TriggerEvent(TriggerMode.Always, CardId: c.Id), c.Controller));
+            }
+        }
+    }
+
     private bool TargetsAllGone(StackItem item)
     {
         var all = item.ChainTargets.SelectMany(t => t).ToList();
@@ -976,7 +1002,7 @@ public sealed partial class Game
         {
             var host = State[item.SourceId];
             if (!CanPayCost(head.Cost, host, item.Controller, item.X, excludeSourceFromMana: false)
-                || !Decider.ChooseYesNo(this, item.Controller, host, $"pay {string.Join(" ", head.Cost.Parts.Select(q => q.Raw).Prepend(head.Cost.Mana.ToString()))} for {host.Name}?")
+                || !head.Cost.Mandatory && !Decider.ChooseYesNo(this, item.Controller, host, $"pay {string.Join(" ", head.Cost.Parts.Select(q => q.Raw).Prepend(head.Cost.Mana.ToString()))} for {host.Name}?")
                 || !PayCost(head.Cost, host, item.Controller, item.X, excludeSourceFromMana: false))
                 return;
         }
@@ -1079,6 +1105,7 @@ public sealed partial class Game
             }
         }
         CheckEffectLinks();
+        CheckStateTriggers();
         FireZoneBatch();
         FireDamageBatch();
         // A Saga with all its chapters done and none still waiting to resolve is sacrificed (rule 714.4).
@@ -1086,11 +1113,16 @@ public sealed partial class Game
             if (saga.CounterCount("LORE") >= saga.CurrentFace.Chapters.Count && !_pending.Any(t => t.SourceId == saga.Id)
                 && !State.Stack.Any(i => i.SourceId == saga.Id && saga.CurrentFace.Chapters.Any(t => t.Execute == i.Ability || (t.Modes?.Contains(i.Ability) ?? false))))
                 Sacrifice(saga);
-        // Legend rule (704.5j): keep the newest.
+        // Legend rule (704.5j): the controller keeps one (offered newest first; a copy may be the one worth keeping).
         var legends = State.BattlefieldCards.Where(c => c.Types.Has(SuperType.Legendary)).GroupBy(c => (c.Controller, c.Name)).Where(g => g.Count() > 1);
         foreach (var grp in legends.ToList())
-            foreach (var old in grp.OrderBy(c => c.ControlledSinceTurn).ThenBy(c => c.Id).SkipLast(1).ToList())
+        {
+            var ordered = grp.OrderByDescending(c => c.ControlledSinceTurn).ThenByDescending(c => c.Id).ToList();
+            var keep = ordered.Count == 1 || State.Players[grp.Key.Controller].IsGoldfish ? 0
+                : Decider.ChooseOption(this, grp.Key.Controller, ordered[0], ordered.Select(c => "keep " + c.Name + (c.CopyDef is not null ? $" (copy: {c.Def.Name})" : "")).ToList());
+            foreach (var old in ordered.Where((_, i) => i != keep).ToList())
                 MoveTo(old, Zone.Graveyard);
+        }
 
         if (!State.GameOver && State.Players.Where(p => p.Index != Me).All(p => p.Lost))
             Win(Me, State.Record.LastHitBy ?? "opponents eliminated");

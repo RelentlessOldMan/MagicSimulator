@@ -64,7 +64,7 @@ public static class Effects
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
         new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
-        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ChooseCardEffect(),
+        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -105,7 +105,9 @@ sealed class ManaEffect : Effect
 {
     public override string Api => "Mana";
     public override IReadOnlySet<string> Params { get; } =
-        P(new[] { "Produced", "Amount", "ActivationZone", "RestrictValid", "Defined" }.Concat(Presence.Params).ToArray());
+        P(new[] { "Produced", "Amount", "ActivationZone", "RestrictValid", "Defined",
+            // "If that mana is spent on a creature spell, it gains haste": applied when paying (Game.UseManaSource).
+            "AddsKeywords", "AddsKeywordsValid" }.Concat(Presence.Params).ToArray());
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -328,7 +330,9 @@ sealed class DigEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "DigNum", "ChangeNum", "DestinationZone", "DestinationZone2", "LibraryPosition", "LibraryPosition2", "RestRandomOrder",
         "ChangeValid", "Optional", "AnyNumber", "Reveal", "Defined", "NoMove", "SkipReorder", "ForceRevealToController",
-        "RememberChanged", "Imprint", "NoReveal");
+        "RememberChanged", "Imprint", "NoReveal",
+        // Face-down exile and who may look at it: hidden information doesn't matter against goldfish opponents.
+        "ExileFaceDown", "WithMayLook");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {

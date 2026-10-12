@@ -115,7 +115,7 @@ public static class Statics
         "Affected", "AffectedDefined", "AddPower", "AddToughness", "AddKeyword", "SetPower", "SetToughness",
         "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize", "MayPlay", "MayPlayWithoutManaCost",
         "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
-        "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost",
+        "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost", "MayPlayIgnoreType",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
         "AddSVar",
         // Goaded creatures must attack someone else: only opponents' creatures get goaded, and they never attack.
@@ -128,6 +128,7 @@ public static class Statics
     };
 
     private static readonly HashSet<string> CantAttackParams = new(StringComparer.Ordinal) { "ValidCard", "EffectZone" };
+    private static readonly HashSet<string> ValidPlayerParams = new(StringComparer.Ordinal) { "ValidPlayer", "EffectZone" };
     private static readonly HashSet<string> CastWithFlashParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Caster" };
     private static readonly HashSet<string> PanharmoniconParams = new(StringComparer.Ordinal) { "ValidMode", "ValidCard", "ValidCause", "Origin", "Destination" };
 
@@ -161,6 +162,14 @@ public static class Statics
                 if (s["Caster"] is { } caster && caster is not ("You" or "Player")) ctx.Need("CastWithFlash.Caster:" + caster);
                 if (s["EffectZone"] is { } fez && fez is not ("Battlefield" or "Command" or "All")) ctx.Need("EffectZone:" + fez);
                 if (s["ValidCard"] is { } fvc) Filter.Parse(fvc, ctx);
+                break;
+            case "CantGainLife":
+                own = ValidPlayerParams;
+                if (s["ValidPlayer"] is { } gvp) Filter.Parse(gvp, ctx);
+                break;
+            case "ActivateAbilityAsIfHaste":
+                own = CantAttackParams;
+                if (s["ValidCard"] is { } hvc) Filter.Parse(hvc, ctx);
                 break;
             case "CantAttack":
                 own = CantAttackParams;
@@ -454,7 +463,7 @@ public static class Statics
     }
 
     /// <summary>How a card outside the hand may be played: free, or for another cost instead of its mana cost.</summary>
-    public readonly record struct MayPlayGrant(bool Free, string? AltManaCost);
+    public readonly record struct MayPlayGrant(bool Free, string? AltManaCost, bool AnyTypeOfMana = false);
 
     /// <summary>Cards outside the hand that <paramref name="player"/> may play now, and how.</summary>
     public static Dictionary<int, MayPlayGrant> MayPlay(Game g, int player)
@@ -473,7 +482,7 @@ public static class Statics
                 foreach (var c in g.CardsIn(zone))
                     if (c.Owner == player && !c.IsEffect && (filter is null || filter.MatchesCard(c, x)))
                     {
-                        var grant = new MayPlayGrant(st["MayPlayWithoutManaCost"] == "True", st["MayPlayAltManaCost"]);
+                        var grant = new MayPlayGrant(st["MayPlayWithoutManaCost"] == "True", st["MayPlayAltManaCost"], st["MayPlayIgnoreType"] == "True");
                         // The cheapest way wins: free, then an alternative cost, then the normal cost.
                         result[c.Id] = result.TryGetValue(c.Id, out var had) && (had.Free || had.AltManaCost is not null && !grant.Free) ? had : grant;
                     }
@@ -516,6 +525,32 @@ public static class Statics
     }
 
     /// <summary>"[This creature] can't attack" (Pacifism-style auras, "CARDNAME can't attack").</summary>
+    /// <summary>"[Players] can't gain life" (Erebos).</summary>
+    public static bool CantGainLife(Game g, int player)
+    {
+        foreach (var source in Sources(g))
+            foreach (var st in source.Statics)
+            {
+                if (st.Mode != "CantGainLife" || !WorksFrom(source, st)) continue;
+                var x = ContextFor(g, source, st);
+                if ((st["ValidPlayer"] is not { } vp || Effect.FilterFor(x.SVarFace, vp).MatchesPlayer(player, x)) && Presence.Hold(st.P, x)) return true;
+            }
+        return false;
+    }
+
+    /// <summary>"You may activate abilities of creatures you control as though they had haste" (Thousand-Year Elixir).</summary>
+    public static bool ActivatesAsIfHaste(Game g, Card creature)
+    {
+        foreach (var source in Sources(g))
+            foreach (var st in source.Statics)
+            {
+                if (st.Mode != "ActivateAbilityAsIfHaste" || !WorksFrom(source, st)) continue;
+                var x = ContextFor(g, source, st);
+                if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(creature, x)) && Presence.Hold(st.P, x)) return true;
+            }
+        return false;
+    }
+
     public static bool CantAttack(Game g, Card creature)
     {
         foreach (var source in Sources(g))
