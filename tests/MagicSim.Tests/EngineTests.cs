@@ -32,6 +32,9 @@ public class EngineTests
         "A:SP$ LoseLife | ValidTgts$ Player | LifeAmount$ 2 | SubAbility$ Gain\nSVar:Gain:DB$ GainLife | Defined$ You | LifeAmount$ 2\n",
         "Name:Bear\nManaCost:2\nTypes:Creature Bear\nPT:2/2\nK:Haste\n",
         "Name:Chant\nManaCost:0\nTypes:Artifact\nA:AB$ GainLife | Cost$ 0 | Defined$ You | LifeAmount$ 1\n",
+        // Gaining life makes it gain more: a loop nothing can stop.
+        "Name:Echo Spring\nManaCost:0\nTypes:Enchantment\n" +
+        "T:Mode$ LifeGained | ValidPlayer$ You | TriggerZones$ Battlefield | Execute$ TrigGain\nSVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ 1\n",
     };
 
     private static readonly ForgeLibrary Lib = ForgeLibrary.FromScripts(Scripts);
@@ -260,5 +263,35 @@ public class EngineTests
         g.ActionLimit = 10;
         g.ResumeTurn();
         Assert.InRange(g.State.Players[Game.Me].Life - g.Settings.StartingLife, 1, 10);
+    }
+
+    [Fact]
+    public void PastTheActionLimitOptionalThingsAreDeclined()
+    {
+        var d = new TestDecider { Choose = (_, _) => 0 };   // always "yes"
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Chant" }, decider: d);
+        Assert.True(d.ChooseYesNo(g, Game.Me, null, "?"));
+        g.ActionLimit = 0;
+        Assert.False(d.ChooseYesNo(g, Game.Me, null, "?"));
+    }
+
+    [Fact]
+    public void AMandatoryLoopEndsTheGameAsADraw()
+    {
+        var activated = false;
+        var d = new TestDecider
+        {
+            Choose = (game, dec) =>
+            {
+                if (dec.Kind != DecisionKind.Action || activated || TestDecider.Named(game, dec, "Chant") is not (var i and >= 0)) return null;
+                activated = true;
+                return i;
+            },
+        };
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Chant", "Echo Spring" }, decider: d);
+        g.ActionLimit = 20;
+        g.ResumeTurn();
+        Assert.True(g.State.GameOver);
+        Assert.Null(g.State.Winner);
     }
 }

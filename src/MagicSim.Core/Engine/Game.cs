@@ -53,6 +53,15 @@ public sealed partial class Game
     /// <summary>Stop acting this turn once <see cref="ActionsThisTurn"/> reaches this (search rollouts use it so a loop can't run on).</summary>
     public int ActionLimit { get; set; } = int.MaxValue;
 
+    /// <summary>
+    /// Past the action limit: the player only passes, and declines anything optional ("you may"), the way a
+    /// player stops a loop that isn't getting anywhere.
+    /// </summary>
+    public bool PastActionLimit => _actionsThisTurn >= Math.Min(Settings.MaxActionsPerTurn, ActionLimit);
+
+    /// <summary>Resolving goes on this long past the action limit only when nothing can stop it: a mandatory loop, a draw (rule 104.4b).</summary>
+    private const int MandatoryLoopActions = 200;
+
     public Game(GameState state, GameSettings settings, IDecider decider)
     {
         State = state;
@@ -410,7 +419,15 @@ public sealed partial class Game
                 OnCheckpoint(this);
 
             var legal = LegalActions(Me);
-            GameAction action = _actionsThisTurn >= Math.Min(Settings.MaxActionsPerTurn, ActionLimit)
+            if (_actionsThisTurn >= Math.Min(Settings.MaxActionsPerTurn, ActionLimit) + MandatoryLoopActions)
+            {
+                Note("the stack never empties: a mandatory loop, so the game is a draw");
+                State.GameOver = true;
+                State.Winner = null;
+                State.WinReason = null;
+                return;
+            }
+            GameAction action = PastActionLimit
                 ? GameAction.PassAction
                 : Decider.ChooseAction(this, Me, legal);
             _actionsThisTurn++;

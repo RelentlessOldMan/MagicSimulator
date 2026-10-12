@@ -119,7 +119,7 @@ public abstract class ChoiceDecider : IDecider
     }
 
     public bool ChooseYesNo(Game g, int player, Card? source, string question) =>
-        Pick(g, new Decision { Kind = DecisionKind.YesNo, Options = new object?[] { true, false }, Source = source, Player = player }) == 0;
+        !g.PastActionLimit && Pick(g, new Decision { Kind = DecisionKind.YesNo, Options = new object?[] { true, false }, Source = source, Player = player }) == 0;
 
     public ManaColor ChooseColor(Game g, int player, Card? source, ColorMask options)
     {

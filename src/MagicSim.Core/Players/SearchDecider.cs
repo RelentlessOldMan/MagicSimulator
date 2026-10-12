@@ -57,7 +57,8 @@ public sealed class SearchDecider : ChoiceDecider
         }
 
         int choice;
-        if (!d.Searchable || d.Options.Count == 1 || _settings.Rollouts == 0) choice = _fallback.PickPublic(g, d);
+        // Deep into a turn the game is going round a loop: searching every step of it costs more and more as the board fills.
+        if (!d.Searchable || d.Options.Count == 1 || _settings.Rollouts == 0 || g.ActionsThisTurn >= RolloutActions) choice = _fallback.PickPublic(g, d);
         else choice = Best(g, d);
         _prefix.Add(choice);
         return choice;
