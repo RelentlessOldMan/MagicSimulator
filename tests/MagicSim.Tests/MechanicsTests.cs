@@ -94,6 +94,13 @@ public class MechanicsTests
         "S:Mode$ Continuous | Affected$ Artifact.nonCreature+YouCtrl | AddType$ Creature & Golem | SetPower$ 2 | SetToughness$ 2\n",
         "Name:Shifter\nManaCost:1\nTypes:Creature Shapeshifter\nPT:1/1\nK:Changeling\n",
         "Name:Totem\nManaCost:1\nTypes:Artifact\nS:Mode$ Continuous | Affected$ Bear.YouCtrl | AddPower$ 1\n",
+        "Name:Tale\nManaCost:0\nTypes:Enchantment Saga\nK:Chapter:2:DBGain,DBDraw\n" +
+        "SVar:DBGain:DB$ GainLife | Defined$ You | LifeAmount$ 2\nSVar:DBDraw:DB$ Draw | Defined$ You | NumCards$ 1\n",
+        "Name:Spread\nManaCost:0\nTypes:Sorcery\nA:SP$ Proliferate\n",
+        "Name:Lotus\nManaCost:0\nTypes:Artifact\nA:AB$ Mana | Cost$ T | Produced$ Any | Amount$ 3 | RestrictValid$ Spell.Creature\n",
+        "Name:Grove\nManaCost:no cost\nTypes:Land\nA:AB$ Mana | Cost$ T | Produced$ G | IsPresent$ Creature.YouCtrl\n",
+        "Name:Spell Side\nManaCost:1\nTypes:Sorcery\nA:SP$ GainLife | Defined$ You | LifeAmount$ 3\nAlternateMode:Modal\n" +
+        "ALTERNATE\nName:Land Side\nManaCost:no cost\nTypes:Land\nA:AB$ Mana | Cost$ T | Produced$ W\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -534,6 +541,81 @@ public class MechanicsTests
         var g = Setup(Array.Empty<string>(), battlefield: new[] { "Totem", "Shifter" });
         g.CheckStateBasedActions();
         Assert.Equal(2, OnBattlefield(g, "Shifter").Power);
+    }
+
+    [Fact]
+    public void SagaTriggersEachChapterThenIsSacrificed()
+    {
+        var g = Setup(new[] { "Tale" }, library: new[] { "Filler", "Filler", "Filler" });
+        g.CastSpell(g.State[InHand(g, "Tale")], -1);
+        ResolveAll(g);
+        var tale = OnBattlefield(g, "Tale");
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+        Assert.Equal(1, tale.CounterCount("LORE"));
+        g.ResumeTurn();
+        g.RunTurn();   // chapter II after the next draw step
+        Assert.Equal(Zone.Graveyard, tale.Zone);
+        Assert.Equal(2, g.State.Players[Game.Me].Hand.Count);   // the draw step and chapter II
+    }
+
+    [Fact]
+    public void ProliferateAddsOneOfEachKind()
+    {
+        var g = Setup(new[] { "Spread" }, battlefield: new[] { "Bear" });
+        var bear = OnBattlefield(g, "Bear");
+        Game.AddCounters(bear, "P1P1", 1);
+        g.State.Players[2].Poison = 1;
+        g.CastSpell(g.State[InHand(g, "Spread")], 0);
+        ResolveAll(g);
+        Assert.Equal(2, bear.CounterCount("P1P1"));
+        Assert.Equal(2, g.State.Players[2].Poison);
+        Assert.Equal(0, g.State.Players[1].Poison);
+    }
+
+    [Fact]
+    public void RestrictedManaOnlyPaysForWhatItAllows()
+    {
+        var g = Setup(new[] { "Bear", "Sig" }, battlefield: new[] { "Lotus" });
+        Assert.True(g.CanCast(g.State[InHand(g, "Bear")], -1));
+        Assert.False(g.CanCast(g.State[InHand(g, "Sig")], -1));
+        Assert.DoesNotContain(g.LegalActions(Game.Me), a => a is GameAction.Activate);
+        g.CastSpell(g.State[InHand(g, "Bear")], -1);
+        Assert.True(OnBattlefield(g, "Lotus").Tapped);
+    }
+
+    [Fact]
+    public void ManaAbilityWithAConditionNeedsItToHold()
+    {
+        var g = Setup(new[] { "Sprout" }, battlefield: new[] { "Grove" });
+        Assert.False(g.CanCast(g.State[InHand(g, "Sprout")], 0));
+        g = Setup(new[] { "Sprout" }, battlefield: new[] { "Grove", "Bear" });
+        Assert.True(g.CanCast(g.State[InHand(g, "Sprout")], 0));
+    }
+
+    [Fact]
+    public void ModalDoubleFacedCardPlaysEitherFace()
+    {
+        var g = Setup(new[] { "Spell Side" }, battlefield: new[] { "Bog" });
+        var card = g.State[InHand(g, "Spell Side")];
+        var legal = g.LegalActions(Game.Me);
+        Assert.Contains(legal, a => a is GameAction.Cast { Face: 0 } c && c.CardId == card.Id);
+        var play = legal.OfType<GameAction.PlayLand>().Single(a => a.CardId == card.Id);
+        Assert.Equal(1, play.Face);
+        g.Perform(play);
+        Assert.Equal("Land Side", card.Name);
+        Assert.True(card.Types.Is(CardType.Land));
+    }
+
+    [Fact]
+    public void ModalDoubleFacedSpellGoesToTheGraveyardAsItsFrontFace()
+    {
+        var g = Setup(new[] { "Spell Side" }, battlefield: new[] { "Bog" });
+        var card = g.State[InHand(g, "Spell Side")];
+        g.Perform(g.LegalActions(Game.Me).OfType<GameAction.Cast>().Single());
+        ResolveAll(g);
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+        Assert.Equal(Zone.Graveyard, card.Zone);
+        Assert.Equal(0, card.Face);
     }
 
     [Fact]

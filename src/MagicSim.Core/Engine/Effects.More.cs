@@ -229,7 +229,7 @@ sealed class PutCounterAllEffect : Effect
         var filter = FilterFor(x.SVarFace, x.Ability["ValidCards"] ?? "Card");
         var n = Amount(x, x.Ability["CounterNum"], 1);
         var kind = x.Ability["CounterType"]!;
-        foreach (var c in x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).ToList()) Game.AddCounters(c, kind, n);
+        foreach (var c in x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).ToList()) x.Game.PutCounters(c, kind, n);
     }
 }
 
@@ -537,5 +537,64 @@ sealed class ChoosePlayerEffect : Effect
         if (players.Count == 0) return;
         var labels = players.Select(p => $"player {p}").ToList();
         x.Host.ChosenPlayer = players[x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, labels)];
+    }
+}
+
+/// <summary>"Spend this mana only to …" (RestrictValid$): which payments a restricted mana ability may be used for.</summary>
+public static class ManaRestriction
+{
+    public static void Validate(string restriction, CompileContext ctx)
+    {
+        foreach (var term in restriction.Split(',', StringSplitOptions.TrimEntries))
+        {
+            var dot = term.IndexOf('.');
+            var kind = dot < 0 ? term : term[..dot];
+            if (kind is not ("Spell" or "Activated")) { ctx.Need("RestrictValid:" + term); continue; }
+            if (dot >= 0) Filter.Parse("Card." + term[(dot + 1)..], ctx);
+        }
+    }
+
+    public static bool Allows(Game g, Card manaSource, string restriction, Card? payingFor, bool forSpell)
+    {
+        if (payingFor is null) return false;
+        foreach (var term in restriction.Split(',', StringSplitOptions.TrimEntries))
+        {
+            var dot = term.IndexOf('.');
+            var kind = dot < 0 ? term : term[..dot];
+            if ((kind == "Spell") != forSpell) continue;
+            if (dot < 0 || Effect.FilterFor(manaSource.CurrentFace, "Card." + term[(dot + 1)..]).MatchesCard(payingFor, g.ContextFor(manaSource)))
+                return true;
+        }
+        return false;
+    }
+}
+
+// ---- counters ------------------------------------------------------------------------
+
+/// <summary>
+/// Proliferate: each permanent and player with counters gets another of each kind. The engine
+/// picks for the player: your permanents (except harmful counters), opponents' poison counters.
+/// </summary>
+sealed class ProliferateEffect : Effect
+{
+    public override string Api => "Proliferate";
+    public override IReadOnlySet<string> Params { get; } = P("Amount");
+
+    private static readonly HashSet<string> Harmful = new(StringComparer.Ordinal) { "M1M1", "AGE", "DOOM", "DEPLETION", "TIME" };
+
+    public override void Validate(AbilityDef ab, CompileContext ctx) => ValidateAmount(ab, "Amount", ctx);
+
+    public override void Resolve(EffectContext x)
+    {
+        for (var i = Amount(x, x.Ability["Amount"], 1); i > 0; i--)
+        {
+            foreach (var c in x.S.BattlefieldCards.Where(c => c.Counters is not null).ToList())
+                foreach (var kind in c.Counters!.Where(kv => kv.Value > 0).Select(kv => kv.Key).ToList())
+                    if (c.Controller == x.Controller ? !Harmful.Contains(kind) : kind == "M1M1")
+                        x.Game.PutCounters(c, kind, 1);
+            foreach (var p in x.S.Players)
+                if (p.Index != x.Controller && !p.Lost && p.Poison > 0) p.Poison++;
+            x.Game.Note("  proliferate");
+        }
     }
 }

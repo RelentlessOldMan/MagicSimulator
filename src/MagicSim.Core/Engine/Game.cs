@@ -203,7 +203,12 @@ public sealed partial class Game
                 if (!(State.Turn == 1 && Settings.OnThePlay)) Draw(Me, 1);
                 FirePhase("Draw");
                 break;
-            case Step.Main1: FirePhase("Main1"); break;
+            case Step.Main1:
+                // "After your draw step, add a lore counter" (rule 714.3b).
+                foreach (var saga in State.BattlefieldCards.Where(c => c.Controller == State.ActivePlayer && c.CurrentFace.Chapters.Count > 0).ToList())
+                    PutCounters(saga, "LORE", 1);
+                FirePhase("Main1");
+                break;
             case Step.BeginCombat: FirePhase("BeginCombat"); break;
             case Step.DeclareAttackers: DeclareAttackers(); break;
             case Step.CombatDamage: CombatDamage(); break;
@@ -329,8 +334,14 @@ public sealed partial class Game
     {
         switch (action)
         {
-            case GameAction.PlayLand pl: PlayLand(State[pl.CardId]); break;
-            case GameAction.Cast cast: CastSpell(State[cast.CardId], cast.SpellIndex); break;
+            case GameAction.PlayLand pl:
+                State[pl.CardId].Face = pl.Face;
+                PlayLand(State[pl.CardId]);
+                break;
+            case GameAction.Cast cast:
+                State[cast.CardId].Face = cast.Face;
+                CastSpell(State[cast.CardId], cast.SpellIndex);
+                break;
             case GameAction.Activate act: ActivateAbility(State[act.CardId], act.AbilityIndex); break;
         }
     }
@@ -400,7 +411,7 @@ public sealed partial class Game
             {
                 var ab = c.Activated[i];
                 if (ab["ActivationZone"] is not null) continue;
-                if (IsAutoManaAbility(ab)) continue;   // used automatically when paying
+                if (IsAutoManaAbility(ab) || ab["RestrictValid"] is not null) continue;   // used automatically when paying
                 if (CanActivate(c, ab, sorcerySpeed)) result.Add(new GameAction.Activate(c.Id, i));
             }
         }
@@ -410,20 +421,32 @@ public sealed partial class Game
     /// <summary>Adds playing <paramref name="c"/> as a land, or casting it with each of its spell abilities, if allowed now.</summary>
     private void AddPlayOrCast(List<GameAction> result, Card c, Player p, bool sorcerySpeed)
     {
+        // A modal double-faced card can be played as either face (rule 712.12).
+        var faces = c.Def.Layout == "Modal" ? c.Def.Faces.Count : 1;
+        for (var f = 0; f < faces; f++)
+        {
+            c.Face = f;
+            AddPlayOrCastFace(result, c, p, sorcerySpeed, f);
+        }
+        c.Face = 0;
+    }
+
+    private void AddPlayOrCastFace(List<GameAction> result, Card c, Player p, bool sorcerySpeed, int face)
+    {
         if (c.Types.Is(CardType.Land))
         {
             if (c.Zone != Zone.Command && sorcerySpeed && p.LandsPlayedThisTurn < p.LandDropsPerTurn + p.StaticLandDrops)
-                result.Add(new GameAction.PlayLand(c.Id));
+                result.Add(new GameAction.PlayLand(c.Id, face));
             return;
         }
         if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed)) return;
         if (c.Types.IsPermanent && c.CurrentFace.SpellAbilities.Count == 0)
         {
-            if (CanCast(c, -1)) result.Add(new GameAction.Cast(c.Id, -1));
+            if (CanCast(c, -1)) result.Add(new GameAction.Cast(c.Id, -1, face));
         }
         else
             for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
-                if (CanCast(c, i)) result.Add(new GameAction.Cast(c.Id, i));
+                if (CanCast(c, i)) result.Add(new GameAction.Cast(c.Id, i, face));
     }
 
     private bool CanActivate(Card c, AbilityDef ab, bool sorcerySpeed)
@@ -477,6 +500,13 @@ public sealed partial class Game
 
     public bool CanCast(Card c, int spellIndex)
     {
+        _payingForSpell = true;
+        try { return CanCastCore(c, spellIndex); }
+        finally { _payingForSpell = false; }
+    }
+
+    private bool CanCastCore(Card c, int spellIndex)
+    {
         var cost = SpellCost(c, spellIndex);
         if (cost.Mana.NoCost) return false;
         if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].AltCostOf is { } altStatic && !Presence.Hold(altStatic.P, ContextFor(c)))
@@ -506,8 +536,10 @@ public sealed partial class Game
             ChainTargets = ChooseChainTargets(c, ability, player), Description = c.Name + (from == Zone.Graveyard ? " (flashback)" : ""),
             ExileAfter = from == Zone.Graveyard,
         };
-        if (!PayCost(cost, c, player, x, excludeSourceFromMana: true))
-            throw new InvalidOperationException($"could not pay for {c.Name} after checking it was castable");
+        _payingForSpell = true;
+        var paid = PayCost(cost, c, player, x, excludeSourceFromMana: true);
+        _payingForSpell = false;
+        if (!paid) throw new InvalidOperationException($"could not pay for {c.Name} after checking it was castable");
         if (from == Zone.Command) c.CommandCasts++;
         c.XPaid = x;
         State.Stack.Add(item);
@@ -738,6 +770,11 @@ public sealed partial class Game
             else if (c.AttachedTo >= 0 && (!attachedOk || c.Types.HasSubtype("Equipment") && !host!.Types.Is(CardType.Creature))) c.AttachedTo = -1;
         }
         CheckEffectLinks();
+        // A Saga with all its chapters done and none still waiting to resolve is sacrificed (rule 714.4).
+        foreach (var saga in State.BattlefieldCards.Where(c => c.CurrentFace.Chapters.Count > 0).ToList())
+            if (saga.CounterCount("LORE") >= saga.CurrentFace.Chapters.Count && !_pending.Any(t => t.SourceId == saga.Id)
+                && !State.Stack.Any(i => i.SourceId == saga.Id && saga.CurrentFace.Chapters.Any(t => t.Execute == i.Ability || (t.Modes?.Contains(i.Ability) ?? false))))
+                MoveTo(saga, Zone.Graveyard);
         // Legend rule (704.5j): keep the newest.
         var legends = State.BattlefieldCards.Where(c => c.Types.Has(SuperType.Legendary)).GroupBy(c => (c.Controller, c.Name)).Where(g => g.Count() > 1);
         foreach (var grp in legends.ToList())
@@ -794,6 +831,17 @@ public sealed partial class Game
         if (n <= 0) return;
         c.Counters ??= new();
         c.Counters[kind] = c.CounterCount(kind) + n;
+    }
+
+    /// <summary>Puts counters on a permanent; lore counters on a Saga trigger its chapters (rule 714.2b).</summary>
+    public void PutCounters(Card c, string kind, int n)
+    {
+        var before = c.CounterCount(kind);
+        AddCounters(c, kind, n);
+        if (kind != "LORE" || c.Zone != Zone.Battlefield) return;
+        var chapters = c.CurrentFace.Chapters;
+        for (var k = before + 1; k <= Math.Min(c.CounterCount(kind), chapters.Count); k++)
+            _pending.Add(new PendingTrigger(c.Id, chapters[k - 1], new TriggerEvent(TriggerMode.Chapter, CardId: c.Id), c.Controller));
     }
 
     /// <summary>Creates a token on the battlefield under its owner's control.</summary>

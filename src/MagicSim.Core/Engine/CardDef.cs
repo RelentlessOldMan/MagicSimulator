@@ -121,6 +121,8 @@ public sealed class FaceDef
     public string Oracle { get; init; } = "";
     /// <summary>"You may have this enter as a copy of …" (K:ETBReplacement:Copy).</summary>
     public AbilityDef? EtbCopy { get; set; }
+    /// <summary>A Saga's chapter abilities, chapter I first (rule 714).</summary>
+    public List<TriggerDef> Chapters { get; } = new();
 
     /// <summary>This face as a copy effect changes it ("except it's an artifact", "except it has haste").</summary>
     public FaceDef CopyWith(TypeLine types, int? power, int? toughness, ColorMask colors, IReadOnlyList<string> extraKeywords)
@@ -143,6 +145,7 @@ public sealed class FaceDef
         f.Statics.AddRange(Statics);
         f.EtbReplacements.AddRange(EtbReplacements);
         f.EtbCounters.AddRange(EtbCounters);
+        f.Chapters.AddRange(Chapters);
         return f;
     }
 }
@@ -201,7 +204,7 @@ public static partial class CardCompiler
         foreach (var f in source.Faces)
             def.Faces.Add(CompileFace(f, def.Missing, tokens));
         // Two-faced transforming cards play their front face; other multi-face layouts need casting support first.
-        if (source.AlternateMode is { } mode && mode != "DoubleFaced")
+        if (source.AlternateMode is { } mode && mode is not ("DoubleFaced" or "Modal"))
             def.Missing.Add("Layout:" + mode);
         return def;
     }
@@ -335,6 +338,18 @@ public static partial class CardCompiler
                 return true;
             case "Flashback":
                 face.Flashback = ParseCost(Part(1), ctx);
+                return true;
+            case "Chapter":
+                // K:Chapter:3:DBFirst,DBSecond,DBThird — one ability per chapter.
+                var chapters = Part(2).Split(',', StringSplitOptions.TrimEntries);
+                if (!int.TryParse(Part(1), out var count) || count != chapters.Length) { ctx.Need("Keyword:Chapter+" + Part(1)); return true; }
+                foreach (var ch in chapters)
+                {
+                    if (!face.SVars.TryGetValue(ch, out var chBody)) { ctx.Need("SVarMissing:" + ch); return true; }
+                    var exec = CompileAbility(new ForgeParams(chBody), ctx, AbilityKind.TriggerEffect, 0);
+                    var modes = exec is null ? null : ExpandModes(exec, ctx);
+                    face.Chapters.Add(new TriggerDef { P = new ForgeParams("Mode$ Chapter"), Mode = "Chapter", Execute = modes?.FirstOrDefault(), Modes = modes, Face = face });
+                }
                 return true;
             case "Changeling":
                 face.Types = new TypeLine { Types = face.Types.Types, Supers = face.Types.Supers, Subtypes = face.Types.Subtypes, AllCreatureTypes = true };

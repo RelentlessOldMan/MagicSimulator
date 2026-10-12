@@ -57,7 +57,7 @@ public sealed class RolloutPolicy : ChoiceDecider
                 {
                     GameAction.Pass => s.Stack.Count > 0 ? 6 : 1,
                     GameAction.PlayLand => 20,
-                    GameAction.Cast c => CastWeight(s[c.CardId], c.SpellIndex),
+                    GameAction.Cast c => CastWeight(s[c.CardId].Def.Faces[c.Face], c.SpellIndex),
                     GameAction.Activate a => ActivateWeight(s[a.CardId].Activated[a.AbilityIndex]),
                     _ => 1,
                 };
@@ -89,9 +89,8 @@ public sealed class RolloutPolicy : ChoiceDecider
         }
     }
 
-    private static double CastWeight(Card c, int spellIndex)
+    private static double CastWeight(FaceDef face, int spellIndex)
     {
-        var face = c.CurrentFace;
         if (spellIndex < 0)
             return face.Activated.Any(a => a.Api == "Mana") ? 8 : 4;
         var api = face.SpellAbilities[spellIndex].Api;

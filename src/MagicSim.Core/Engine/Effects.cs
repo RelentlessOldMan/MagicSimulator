@@ -57,7 +57,7 @@ public static class Effects
         new CounterEffect(), new SurveilEffect(), new RearrangeTopOfLibraryEffect(), new RegenerateEffect(),
         new ManaReflectedEffect(), new FlipCoinEffect(), new RepeatEffect(), new StoreSVarEffect(),
         new EffectEffect(), new ChooseColorEffect(), new ChooseTypeEffect(), new ChoosePlayerEffect(),
-        new CopyPermanentEffect(), new CloneEffect(), new AnimateEffect(),
+        new CopyPermanentEffect(), new CloneEffect(), new AnimateEffect(), new ProliferateEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -96,11 +96,20 @@ sealed class ManaReflectedEffect : Effect
 sealed class ManaEffect : Effect
 {
     public override string Api => "Mana";
-    public override IReadOnlySet<string> Params { get; } = P("Produced", "Amount", "ActivationZone");
+    public override IReadOnlySet<string> Params { get; } =
+        P(new[] { "Produced", "Amount", "ActivationZone", "RestrictValid" }.Concat(Presence.Params).ToArray());
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         ValidateAmount(ab, "Amount", ctx);
+        Presence.Validate(ab.P, ctx);
+        if (ab.P.Values.Keys.Any(Presence.Params.Contains) && ab.Kind != AbilityKind.Activated) ctx.Need("Mana.IsPresent+NotActivated");
+        if (ab["RestrictValid"] is { } rv)
+        {
+            // Restricted mana is only ever spent automatically, on a payment it's allowed for.
+            if (ab.Kind != AbilityKind.Activated || !ab.Cost.Mana.IsZero || ab.Cost.Untap) ctx.Need("Mana.RestrictValid+Manual");
+            ManaRestriction.Validate(rv, ctx);
+        }
         var produced = ab["Produced"];
         if (produced is "Combo ColorIdentity") return;
         if (Game.ProducedMask(produced) is null && FixedMana(produced) is null) ctx.Need("ManaProduced:" + produced);
@@ -609,7 +618,7 @@ sealed class PutCounterEffect : CardsEffect
     {
         var n = Amount(x, x.Ability["CounterNum"], 1);
         var kind = x.Ability["CounterType"]!;
-        foreach (var c in Cards(x)) Game.AddCounters(c, kind, n);
+        foreach (var c in Cards(x)) x.Game.PutCounters(c, kind, n);
     }
 }
 

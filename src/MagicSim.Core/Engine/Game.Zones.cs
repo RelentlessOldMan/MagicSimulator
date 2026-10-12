@@ -57,6 +57,8 @@ public sealed partial class Game
             c.ClearStaticEffects();
             State.Attackers.Remove(c.Id);
         }
+        // Off the battlefield and the stack a modal double-faced card is its front face again.
+        if (to is not (Zone.Battlefield or Zone.Stack) && c.Def.Layout == "Modal") c.Face = 0;
         if (c.IsToken && to != Zone.Battlefield)
         {
             c.Zone = Zone.None;   // tokens cease to exist outside the battlefield (rule 111.8)
@@ -73,6 +75,8 @@ public sealed partial class Game
                 // Replacement effects apply as it enters: it's on the battlefield but not yet counted there.
                 ApplyEntering(c);
                 State.Battlefield.Add(c.Id);
+                // "As a Saga enters, add a lore counter" (rule 714.3a).
+                if (c.CurrentFace.Chapters.Count > 0) PutCounters(c, "LORE", 1);
                 break;
             case Zone.Library:
                 var lib = State.Players[c.Owner].Library;
@@ -301,7 +305,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false);
@@ -376,7 +380,8 @@ public sealed partial class Game
     {
         if (!ab.IsManaAbility || !ab.Cost.Mana.IsZero || ab.Cost.Untap) return false;
         if (!ab.P.Values.Keys.All(k => k is "AB" or "Cost" or "Produced" or "Amount" or "SpellDescription" or "AILogic"
-                or "AIPreference" or "SubAbility" or "ActivationZone" or "ColorOrType" or "Valid" or "ReflectProperty")) return false;
+                or "AIPreference" or "SubAbility" or "ActivationZone" or "ColorOrType" or "Valid" or "ReflectProperty" or "RestrictValid"
+                or "PrecostDesc" || Presence.Params.Contains(k))) return false;
         if (ab.Api == "Mana" && ProducedMask(ab["Produced"]) is null && ab["Produced"] != "Combo ColorIdentity") return false;
         if (ab["Amount"] is not null && !int.TryParse(ab["Amount"], out _)) return false;
         foreach (var part in ab.Cost.Parts)
@@ -455,6 +460,8 @@ public sealed partial class Game
                 var fromHand = ab["ActivationZone"] == "Hand";
                 if (fromHand != (c.Zone == Zone.Hand)) continue;
                 if (ab.Cost.Tap && (c.Tapped || IsSick(c))) continue;
+                if (ab["RestrictValid"] is { } rv && !ManaRestriction.Allows(this, c, rv, _payingFor, _payingForSpell)) continue;
+                if (ab.P.Values.Keys.Any(Presence.Params.Contains) && !Presence.Hold(ab.P, ContextFor(c))) continue;
                 var mask = ab.Api == "ManaReflected" ? ReflectedMask(this, c, ab)
                     : ab["Produced"] == "Combo ColorIdentity" ? CommanderIdentity(player) : ProducedMask(ab["Produced"])!.Value;
                 if (mask == 0) continue;
@@ -547,7 +554,19 @@ public sealed partial class Game
         if (ab.Cost.Parts.Count > 0 || ab.Sub is not null) Note($"  use {card.Name} for {{{color}}}");
     }
 
+    // What the current payment is for: restricted mana ("spend this only on creature spells") checks it.
+    private Card? _payingFor;
+    private bool _payingForSpell;
+
     public bool CanPayCost(Cost cost, Card source, int player, int x, bool excludeSourceFromMana)
+    {
+        var saved = _payingFor;
+        _payingFor = source;
+        try { return CanPayCostCore(cost, source, player, x, excludeSourceFromMana); }
+        finally { _payingFor = saved; }
+    }
+
+    private bool CanPayCostCore(Cost cost, Card source, int player, int x, bool excludeSourceFromMana)
     {
         var p = State.Players[player];
         if (cost.Tap && (source.Tapped || source.Zone != Zone.Battlefield || IsSick(source))) return false;
@@ -613,6 +632,14 @@ public sealed partial class Game
     }
 
     public bool PayCost(Cost cost, Card source, int player, int x, bool excludeSourceFromMana)
+    {
+        var saved = _payingFor;
+        _payingFor = source;
+        try { return PayCostCore(cost, source, player, x, excludeSourceFromMana); }
+        finally { _payingFor = saved; }
+    }
+
+    private bool PayCostCore(Cost cost, Card source, int player, int x, bool excludeSourceFromMana)
     {
         var p = State.Players[player];
         var lifeNeeded = cost.Parts.Where(q => q.Kind == CostPartKind.PayLife).Sum(AmountOf);

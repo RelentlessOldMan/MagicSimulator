@@ -4,9 +4,10 @@ namespace MagicSim.Core.Engine;
 public abstract record GameAction
 {
     public sealed record Pass : GameAction { public override string ToString() => "pass"; }
-    public sealed record PlayLand(int CardId) : GameAction;
-    /// <summary>Cast a card from hand or the command zone, using spell ability <paramref name="SpellIndex"/> (-1 = a permanent spell).</summary>
-    public sealed record Cast(int CardId, int SpellIndex) : GameAction;
+    /// <summary>Play a land; <paramref name="Face"/> is the face it's played as (modal double-faced cards).</summary>
+    public sealed record PlayLand(int CardId, int Face = 0) : GameAction;
+    /// <summary>Cast a card from hand or the command zone, using spell ability <paramref name="SpellIndex"/> (-1 = a permanent spell) of face <paramref name="Face"/>.</summary>
+    public sealed record Cast(int CardId, int SpellIndex, int Face = 0) : GameAction;
     public sealed record Activate(int CardId, int AbilityIndex) : GameAction;
 
     public static readonly Pass PassAction = new();

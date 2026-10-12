@@ -85,8 +85,8 @@ public sealed class SearchDecider : ChoiceDecider
     {
         null => "done",
         GameAction.Pass => "pass",
-        GameAction.PlayLand pl => "play " + g.State[pl.CardId].Name,
-        GameAction.Cast c => "cast " + g.State[c.CardId].Name,
+        GameAction.PlayLand pl => "play " + g.State[pl.CardId].Def.Faces[pl.Face].Name,
+        GameAction.Cast c => "cast " + g.State[c.CardId].Def.Faces[c.Face].Name,
         GameAction.Activate a => "activate " + g.State[a.CardId].Name,
         int id when id >= 0 && id < g.State.Cards.Count => g.State[id].Name,
         TargetRef t => t.ToString(),
