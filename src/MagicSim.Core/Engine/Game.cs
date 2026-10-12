@@ -361,14 +361,14 @@ public sealed partial class Game
         {
             var c = State[id];
             if (c.Zone == Zone.Hand && !seenNames.Add(c.Name)) continue;
-            if (c.Def.IsBlank || c.IsEffect) continue;
+            if (c.IsBlank || c.IsEffect) continue;
             AddPlayOrCast(result, c, p, sorcerySpeed);
 
             // Abilities usable from hand (e.g. "exile this from your hand: add {R}").
             if (c.Zone == Zone.Hand)
-                for (var i = 0; i < c.CurrentFace.Activated.Count; i++)
+                for (var i = 0; i < c.Activated.Count; i++)
                 {
-                    var ab = c.CurrentFace.Activated[i];
+                    var ab = c.Activated[i];
                     if (ab["ActivationZone"] == "Hand" && !IsAutoManaAbility(ab) && CanActivate(c, ab, sorcerySpeed)) result.Add(new GameAction.Activate(id, i));
                 }
         }
@@ -377,7 +377,7 @@ public sealed partial class Game
         foreach (var id in Statics.MayPlay(this, player).Keys)
         {
             var c = State[id];
-            if (c.Zone is Zone.Hand or Zone.Stack || c.Def.IsBlank || !seenNames.Add("mayplay:" + c.Name)) continue;
+            if (c.Zone is Zone.Hand or Zone.Stack || c.IsBlank || !seenNames.Add("mayplay:" + c.Name)) continue;
             AddPlayOrCast(result, c, p, sorcerySpeed);
         }
 
@@ -385,7 +385,7 @@ public sealed partial class Game
         foreach (var id in p.Graveyard)
         {
             var c = State[id];
-            if (c.Def.IsBlank || c.CurrentFace.Flashback is null || !seenNames.Add("graveyard:" + c.Name)) continue;
+            if (c.IsBlank || c.CurrentFace.Flashback is null || !seenNames.Add("graveyard:" + c.Name)) continue;
             if (!(c.Types.Is(CardType.Instant) || c.HasKeyword("Flash") || sorcerySpeed)) continue;
             for (var i = 0; i < c.CurrentFace.SpellAbilities.Count; i++)
                 if (CanCast(c, i)) result.Add(new GameAction.Cast(id, i));
@@ -394,11 +394,11 @@ public sealed partial class Game
         var seenPermanents = new HashSet<(string, bool, bool)>();
         foreach (var c in State.BattlefieldCards)
         {
-            if (c.Controller != player || c.Def.IsBlank) continue;
-            if (c.Counters is null && !seenPermanents.Add((c.Name, c.Tapped, IsSick(c)))) continue;
-            for (var i = 0; i < c.CurrentFace.Activated.Count; i++)
+            if (c.Controller != player || c.IsBlank) continue;
+            if (c.Counters is null && c.Animations is null && c.StaticActivated is null && !seenPermanents.Add((c.Name, c.Tapped, IsSick(c)))) continue;
+            for (var i = 0; i < c.Activated.Count; i++)
             {
-                var ab = c.CurrentFace.Activated[i];
+                var ab = c.Activated[i];
                 if (ab["ActivationZone"] is not null) continue;
                 if (IsAutoManaAbility(ab)) continue;   // used automatically when paying
                 if (CanActivate(c, ab, sorcerySpeed)) result.Add(new GameAction.Activate(c.Id, i));
@@ -531,7 +531,7 @@ public sealed partial class Game
 
     public void ActivateAbility(Card c, int abilityIndex)
     {
-        var ab = c.CurrentFace.Activated[abilityIndex];
+        var ab = c.Activated[abilityIndex];
         var player = c.Controller;
         var x = 0;
         if (ab.Cost.Mana.XCount > 0) x = Decider.ChooseX(this, player, c, MaxAffordableX(ab.Cost, c, player));

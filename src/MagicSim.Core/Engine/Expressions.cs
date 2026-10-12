@@ -28,7 +28,12 @@ public sealed class EffectContext
     /// <summary>"Targeted" in Forge: this ability's targets, or in a sub-ability without its own, the nearest parent's.</summary>
     public List<TargetRef> OwnOrParentTargets => Targets.Count > 0 ? Targets : ParentTargets;
 
-    public EffectContext For(AbilityDef sub) => new() { Game = Game, Item = Item, Ability = sub };
+    /// <summary>For a static or trigger: the face whose SVars it uses, when the ability doesn't say.</summary>
+    public FaceDef? FaceOverride { get; init; }
+    /// <summary>The face whose SVars this ability's expressions refer to: the card that defined it.</summary>
+    public FaceDef SVarFace => Ability.Face ?? FaceOverride ?? Host.CurrentFace;
+
+    public EffectContext For(AbilityDef sub) => new() { Game = Game, Item = Item, Ability = sub, FaceOverride = FaceOverride };
 }
 
 /// <summary>
@@ -107,7 +112,7 @@ public sealed class Filter
             "IsCommander" => (c, pl, x) => c is not null && c.IsCommander,
             "NamedCard" => (c, pl, x) => c is not null && x.Host.NamedCard is { } n && string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase),
             "IsRemembered" => (c, pl, x) => c is not null && (x.Host.Remembered?.Contains(c.Id) ?? false),
-            "ChosenColor" => (c, pl, x) => c is not null && x.Host.ChosenColor is { } cc && (c.CurrentFace.Colors & cc.Mask()) != 0,
+            "ChosenColor" => (c, pl, x) => c is not null && x.Host.ChosenColor is { } cc && (c.Colors & cc.Mask()) != 0,
             "ChosenType" => (c, pl, x) => c is not null && x.Host.ChosenType is { } ct && c.Types.HasSubtype(ct),
             "IsImprinted" => (c, pl, x) => c is not null && (x.Host.Imprinted?.Contains(c.Id) ?? false),
             "sharesNameWith Remembered" => (c, pl, x) => c is not null && x.Host.Remembered is { } rem
@@ -117,9 +122,9 @@ public sealed class Filter
             "Basic" => (c, pl, x) => c is not null && c.Types.Has(SuperType.Basic),
             "Legendary" => (c, pl, x) => c is not null && c.Types.Has(SuperType.Legendary),
             "Snow" => (c, pl, x) => c is not null && c.Types.Has(SuperType.Snow),
-            "Colorless" => (c, pl, x) => c is not null && c.CurrentFace.Colors == 0,
-            "Multicolor" => (c, pl, x) => c is not null && System.Numerics.BitOperations.PopCount((uint)c.CurrentFace.Colors) > 1,
-            "MonoColor" => (c, pl, x) => c is not null && System.Numerics.BitOperations.PopCount((uint)c.CurrentFace.Colors) == 1,
+            "Colorless" => (c, pl, x) => c is not null && c.Colors == 0,
+            "Multicolor" => (c, pl, x) => c is not null && System.Numerics.BitOperations.PopCount((uint)c.Colors) > 1,
+            "MonoColor" => (c, pl, x) => c is not null && System.Numerics.BitOperations.PopCount((uint)c.Colors) == 1,
             "Permanent" => (c, pl, x) => c is not null && c.Types.IsPermanent,
             _ => null,
         };
@@ -140,8 +145,8 @@ public sealed class Filter
             test = (c, pl, x) => c is not null && c.Types.Is(ct);
         if (test is null && ManaColors.FromWord(p) is { } color && p.Length > 1)
             test = color == ManaColor.C
-                ? (c, pl, x) => c is not null && c.CurrentFace.Colors == 0
-                : (c, pl, x) => c is not null && (c.CurrentFace.Colors & color.Mask()) != 0;
+                ? (c, pl, x) => c is not null && c.Colors == 0
+                : (c, pl, x) => c is not null && (c.Colors & color.Mask()) != 0;
         if (test is null && KnownSubtypes.Contains(p))
             test = (c, pl, x) => c is not null && c.Types.HasSubtype(p);
         if (test is null && CompareRx.Match(p) is { Success: true } m)

@@ -14,7 +14,7 @@ public abstract record GameAction
 
 public enum Choice
 {
-    Tutor, Discard, Sacrifice, ExileFromGraveyard, TapForCost, KeepOnTop, PutOnBottom, ChooseFromRevealed, Bottom, Generic,
+    Tutor, Discard, Sacrifice, ExileFromGraveyard, TapForCost, KeepOnTop, PutOnBottom, ChooseFromRevealed, Bottom, Generic, Copy,
 }
 
 /// <summary>

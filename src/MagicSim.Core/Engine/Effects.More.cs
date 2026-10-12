@@ -120,7 +120,7 @@ sealed class ChangeZoneAllEffect : Effect
         var ab = x.Ability;
         var origins = ab["Origin"]!.Split(',').Select(s => Enum.Parse<Zone>(s.Trim())).ToList();
         var dest = Enum.Parse<Zone>(ab["Destination"]!);
-        var filter = ab["ChangeType"] is { } ct ? FilterFor(x.Host.CurrentFace, ct) : null;
+        var filter = ab["ChangeType"] is { } ct ? FilterFor(x.SVarFace, ct) : null;
         // Whose zones: Defined$ or targeted players, else everyone's.
         var players = ab["Defined"] is { } d ? Defined.Players(d, x)
             : ab.TargetFilter is not null ? Defined.Players("Targeted", x)
@@ -153,7 +153,7 @@ sealed class DestroyAllEffect : Effect
 
     public override void Resolve(EffectContext x)
     {
-        var filter = FilterFor(x.Host.CurrentFace, x.Ability["ValidCards"] ?? "Card");
+        var filter = FilterFor(x.SVarFace, x.Ability["ValidCards"] ?? "Card");
         foreach (var c in x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).ToList())
             if (x.Game.Destroy(c, regenerate: x.Ability["NoRegen"] != "True") && x.Ability["RememberDestroyed"] == "True")
                 (x.Host.Remembered ??= new()).Add(c.Id);
@@ -177,12 +177,12 @@ sealed class DamageAllEffect : Effect
         var n = Amount(x, x.Ability["NumDmg"], 0);
         if (x.Ability["ValidCards"] is { } vc)
         {
-            var filter = FilterFor(x.Host.CurrentFace, vc);
+            var filter = FilterFor(x.SVarFace, vc);
             foreach (var c in x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).ToList()) x.Game.DamageCard(c, n, x.Host);
         }
         if (x.Ability["ValidPlayers"] is { } vp)
         {
-            var filter = FilterFor(x.Host.CurrentFace, vp);
+            var filter = FilterFor(x.SVarFace, vp);
             foreach (var p in x.S.Players.Where(p => !p.Lost && filter.MatchesPlayer(p.Index, x)).ToList())
                 x.Game.DamagePlayer(p.Index, n, x.Host);
         }
@@ -204,7 +204,7 @@ sealed class PumpAllEffect : Effect
 
     public override void Resolve(EffectContext x)
     {
-        var filter = FilterFor(x.Host.CurrentFace, x.Ability["ValidCards"] ?? "Creature");
+        var filter = FilterFor(x.SVarFace, x.Ability["ValidCards"] ?? "Creature");
         var att = Amount(x, x.Ability["NumAtt"], 0);
         var def = Amount(x, x.Ability["NumDef"], 0);
         foreach (var c in x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).ToList())
@@ -226,7 +226,7 @@ sealed class PutCounterAllEffect : Effect
 
     public override void Resolve(EffectContext x)
     {
-        var filter = FilterFor(x.Host.CurrentFace, x.Ability["ValidCards"] ?? "Card");
+        var filter = FilterFor(x.SVarFace, x.Ability["ValidCards"] ?? "Card");
         var n = Amount(x, x.Ability["CounterNum"], 1);
         var kind = x.Ability["CounterType"]!;
         foreach (var c in x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).ToList()) Game.AddCounters(c, kind, n);
@@ -391,7 +391,7 @@ sealed class RepeatEffect : Effect
         }
         if (ab["RepeatPresent"] is { } rp)
         {
-            var filter = FilterFor(x.Host.CurrentFace, rp);
+            var filter = FilterFor(x.SVarFace, rp);
             var pool = ab["RepeatDefined"] is { } rd ? Defined.Cards(rd, x).Select(id => x.S[id]) : x.Game.CardsIn(Zone.Battlefield);
             var cmp = ab["RepeatCompare"] ?? "GE1";
             if (!Filter.Compare(pool.Count(c => filter.MatchesCard(c, x)), cmp[..2], Amount(x, cmp[2..], 0))) return false;
@@ -532,7 +532,7 @@ sealed class ChoosePlayerEffect : Effect
 
     public override void Resolve(EffectContext x)
     {
-        var filter = FilterFor(x.Host.CurrentFace, x.Ability["Choices"] ?? "Player");
+        var filter = FilterFor(x.SVarFace, x.Ability["Choices"] ?? "Player");
         var players = x.S.Players.Where(p => !p.Lost && filter.MatchesPlayer(p.Index, x)).Select(p => p.Index).ToList();
         if (players.Count == 0) return;
         var labels = players.Select(p => $"player {p}").ToList();

@@ -58,7 +58,7 @@ public sealed class RolloutPolicy : ChoiceDecider
                     GameAction.Pass => s.Stack.Count > 0 ? 6 : 1,
                     GameAction.PlayLand => 20,
                     GameAction.Cast c => CastWeight(s[c.CardId], c.SpellIndex),
-                    GameAction.Activate a => ActivateWeight(s[a.CardId].CurrentFace.Activated[a.AbilityIndex]),
+                    GameAction.Activate a => ActivateWeight(s[a.CardId].Activated[a.AbilityIndex]),
                     _ => 1,
                 };
             case DecisionKind.Card:
@@ -67,6 +67,7 @@ public sealed class RolloutPolicy : ChoiceDecider
                 return d.CardChoice switch
                 {
                     Choice.Discard or Choice.Sacrifice or Choice.PutOnBottom or Choice.ExileFromGraveyard => card.Types.Is(CardType.Land) ? 2 : 1,
+                    Choice.Copy => 1 + card.CurrentFace.ManaCost.ManaValue + (card.IsBlank ? 0 : 3),
                     _ => card.Types.Is(CardType.Land) ? 0.5 : 1,
                 };
             case DecisionKind.Target:
@@ -130,7 +131,7 @@ public sealed class RolloutPolicy : ChoiceDecider
         {
             if (d.Options[i] is not int id) continue;
             var c = g.State[id];
-            var score = c.Types.Is(CardType.Land) ? (lands > 3 ? 10 : -10) : c.CurrentFace.ManaCost.ManaValue + (c.Def.IsBlank ? 5 : 0);
+            var score = c.Types.Is(CardType.Land) ? (lands > 3 ? 10 : -10) : c.CurrentFace.ManaCost.ManaValue + (c.IsBlank ? 5 : 0);
             if (score > bestScore) { bestScore = score; best = i; }
         }
         return best;
@@ -152,12 +153,12 @@ public sealed class RolloutPolicy : ChoiceDecider
         var hand = g.State.Players[Game.Me].Hand.Select(id => g.State[id]).ToList();
         if (hand.Count <= 5) return true;
         var mana = hand.Count(c => c.Types.Is(CardType.Land) || ProducesMana(c));
-        var action = hand.Count(c => !c.Types.Is(CardType.Land) && !ProducesMana(c) && !c.Def.IsBlank);
+        var action = hand.Count(c => !c.Types.Is(CardType.Land) && !ProducesMana(c) && !c.IsBlank);
         return mana >= 2 && mana <= 5 && action >= 1;
     }
 
     public static bool ProducesMana(Card c) =>
-        c.CurrentFace.Activated.Any(a => a.Api == "Mana") || c.CurrentFace.SpellAbilities.Any(a => a.Api == "Mana");
+        c.Activated.Any(a => a.Api == "Mana") || c.CurrentFace.SpellAbilities.Any(a => a.Api == "Mana");
 }
 
 /// <summary>Follows a fixed list of option indices, then hands over to another decider.</summary>

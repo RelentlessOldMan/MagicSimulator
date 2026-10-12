@@ -45,7 +45,7 @@ public static class Presence
         var you = x.Controller;
         if (p["IsPresent"] is { } present)
         {
-            var filter = Effect.FilterFor(x.Host.CurrentFace, present);
+            var filter = Effect.FilterFor(x.SVarFace, present);
             IEnumerable<Card> pool = p["PresentDefined"] == "Self"
                 ? new[] { x.Host }
                 : (p["PresentZone"] ?? "Battlefield").Split(',').SelectMany(z => g.CardsIn(Enum.Parse<Zone>(z.Trim())));
@@ -102,6 +102,9 @@ public static class Statics
     {
         "Affected", "AffectedDefined", "AddPower", "AddToughness", "AddKeyword", "SetPower", "SetToughness",
         "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize", "MayPlay", "MayPlayWithoutManaCost",
+        "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
+        // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
+        "AddSVar",
     };
 
     private static readonly HashSet<string> ReduceCostParams = new(StringComparer.Ordinal)
@@ -168,48 +171,128 @@ public static class Statics
         if (s["AddKeyword"] is { } kws)
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
                 if (!Keywords.Supported.Contains(ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + ForgeRequirements.KeywordName(k));
+        TypeChange.Validate(s["AddType"], ctx, "AddType");
+        foreach (var key in new[] { "SetColor", "AddColor" })
+            if (s[key] is { } col && col != "ChosenColor" && AnimateEffect.ColorsOf(col) is null) ctx.Need($"{key}:{col}");
+        s.Grants = Grants.Compile(s.P, ctx, "AddAbility", "AddTrigger", null);
     }
 
-    private static EffectContext ContextFor(Game g, Card source) => new()
+    private static EffectContext ContextFor(Game g, Card source, StaticDef? st = null) => new()
     {
-        Game = g, Ability = Game.PermanentSpell,
+        Game = g, Ability = Game.PermanentSpell, FaceOverride = st?.Face,
         Item = new StackItem { SourceId = source.Id, Ability = Game.PermanentSpell, Controller = source.Controller },
     };
 
-    /// <summary>Recomputes every continuous effect: characteristic-defining and "set" P/T first, then modifications (rule 613).</summary>
+    /// <summary>
+    /// Recomputes every continuous effect in layer order (rule 613): types (4), colors (5),
+    /// abilities (6), then power/toughness — characteristic-defining and "set" (7a/7b) before
+    /// modifications (7c). Within a layer, statics apply before "becomes" effects, which are newer.
+    /// </summary>
     public static void Apply(Game g)
     {
         var s = g.State;
         var active = new List<(Card Source, StaticDef Static, EffectContext X)>();
         foreach (var c in Sources(g))
-            foreach (var st in c.CurrentFace.Statics)
-                if (st.Mode == "Continuous" && st["MayPlay"] is null) active.Add((c, st, ContextFor(g, c)));
-        if (active.Count == 0 && !g.StaticsApplied) return;
-        g.StaticsApplied = active.Count > 0;
+            foreach (var st in c.Statics)
+                if (st.Mode == "Continuous" && st["MayPlay"] is null) active.Add((c, st, ContextFor(g, c, st)));
+        var animated = s.BattlefieldCards.Where(c => c.Animations is not null).ToList();
+        if (active.Count == 0 && animated.Count == 0 && !g.StaticsApplied) return;
+        g.StaticsApplied = active.Count > 0 || animated.Count > 0;
 
         foreach (var c in s.BattlefieldCards) c.ClearStaticEffects();
         foreach (var p in s.Players) { p.StaticLandDrops = 0; p.StaticMaxHandSize = null; }
 
         var holding = active.Where(a => Presence.Hold(a.Static.P, a.X)).ToList();
-        // Layer 7a/7b: characteristic-defining abilities and effects that set power/toughness.
-        foreach (var (source, st, x) in holding)
+        // What an effect applies to is fixed when it first applies (rule 613.6): an effect that makes
+        // noncreature artifacts into creatures still sets their power and toughness afterwards.
+        var affected = new List<Card>?[holding.Count];
+        List<Card> Affected(int i) => affected[i] ??= AffectedCards(g, holding[i].Source, holding[i].Static, holding[i].X).ToList();
+
+        // Layer 4: types.
+        for (var i = 0; i < holding.Count; i++)
         {
-            if (st["SetPower"] is null && st["SetToughness"] is null) continue;
-            foreach (var card in AffectedCards(g, source, st, x))
+            var (source, st, x) = holding[i];
+            if (st["AddType"] is null && st["RemoveCardTypes"] is null && st["RemoveCreatureTypes"] is null && st["AddAllCreatureTypes"] is null) continue;
+            var words = st["AddType"] is { } at ? TypeChange.Words(at, source) : null;
+            foreach (var card in Affected(i))
+                card.StaticTypes = TypeChange.Apply(card.Types, words, st["RemoveCardTypes"] == "True", st["RemoveCreatureTypes"] == "True",
+                    false, st["AddAllCreatureTypes"] == "True");
+        }
+        foreach (var card in animated)
+            foreach (var a in card.Animations!)
+                if (a.AddTypes is not null || a.Ability["RemoveCardTypes"] is not null || a.Ability["RemoveCreatureTypes"] is not null
+                    || a.Ability["RemoveSuperTypes"] is not null || a.Ability["AddAllCreatureTypes"] is not null)
+                    card.StaticTypes = TypeChange.Apply(card.Types, a.AddTypes, a.Ability["RemoveCardTypes"] == "True",
+                        a.Ability["RemoveCreatureTypes"] == "True", a.Ability["RemoveSuperTypes"] == "True", a.Ability["AddAllCreatureTypes"] == "True");
+
+        // Layer 5: colors.
+        for (var i = 0; i < holding.Count; i++)
+        {
+            var (source, st, x) = holding[i];
+            var set = st["SetColor"] is { } sc ? ColorOf(sc, source) : null;
+            var add = st["AddColor"] is { } ac ? ColorOf(ac, source) : null;
+            if (set is null && add is null) continue;
+            foreach (var card in Affected(i))
+                card.StaticColors = (set ?? card.Colors) | (add ?? 0);
+        }
+        foreach (var card in animated)
+            foreach (var a in card.Animations!)
+                if (a.Colors is { } col)
+                    card.StaticColors = a.Ability["OverwriteColors"] == "True" ? col : card.Colors | col;
+
+        // Layer 6: abilities.
+        foreach (var card in animated)
+            foreach (var a in card.Animations!)
             {
-                var cx = ContextFor(g, st["CharacteristicDefining"] == "True" ? card : source);
+                if (a.Ability["RemoveAllAbilities"] == "True")
+                {
+                    card.LostAbilities = true;
+                    card.StaticActivated = new();
+                    card.StaticTriggers = new();
+                    card.StaticKeywords = null;
+                }
+                if (a.Ability["Keywords"] is { } kws)
+                    (card.StaticKeywords ??= new HashSet<string>(StringComparer.Ordinal))
+                        .UnionWith(kws.Split('&', StringSplitOptions.TrimEntries).Select(ForgeRequirements.KeywordName));
+                Grant(card, a.Ability.Grants);
+            }
+        for (var i = 0; i < holding.Count; i++)
+            if (holding[i].Static.Grants is { } grants)
+                foreach (var card in Affected(i)) Grant(card, grants);
+        // A land that gains a basic land type gains its mana ability (rule 305.7).
+        foreach (var card in s.BattlefieldCards)
+            if (card.StaticTypes is { } t && t.Is(CardType.Land))
+                foreach (var sub in t.Subtypes)
+                    if (CardCompiler.BasicLandMana.TryGetValue(sub, out var mana) && !card.Activated.Contains(mana))
+                        (card.StaticActivated ??= new(card.CurrentFace.Activated)).Add(mana);
+
+        // Layer 7a/7b: characteristic-defining abilities and effects that set power/toughness.
+        for (var i = 0; i < holding.Count; i++)
+        {
+            var (source, st, x) = holding[i];
+            if (st["SetPower"] is null && st["SetToughness"] is null) continue;
+            foreach (var card in Affected(i))
+            {
+                var cx = ContextFor(g, st["CharacteristicDefining"] == "True" ? card : source, st);
                 if (st["SetPower"] is { } sp) card.SetPower = Effect.EvalAmount(cx, sp);
                 if (st["SetToughness"] is { } stt) card.SetToughness = Effect.EvalAmount(cx, stt);
             }
         }
-        // Layer 6 (abilities) and 7c (modifications); players' rule changes.
-        foreach (var (source, st, x) in holding)
+        foreach (var card in animated)
+            foreach (var a in card.Animations!)
+            {
+                if (a.Power is { } pw) card.SetPower = pw;
+                if (a.Toughness is { } tg) card.SetToughness = tg;
+            }
+        // Layer 6 keywords and 7c modifications; players' rule changes.
+        for (var i = 0; i < holding.Count; i++)
         {
+            var (source, st, x) = holding[i];
             var addPower = st["AddPower"] is { } ap ? Effect.EvalAmount(x, ap) : 0;
             var addToughness = st["AddToughness"] is { } at ? Effect.EvalAmount(x, at) : 0;
             var keywords = st["AddKeyword"]?.Split('&', StringSplitOptions.TrimEntries).Select(ForgeRequirements.KeywordName).ToList();
             if (addPower != 0 || addToughness != 0 || keywords is not null)
-                foreach (var card in AffectedCards(g, source, st, x))
+                foreach (var card in Affected(i))
                 {
                     card.StaticPower += addPower;
                     card.StaticToughness += addToughness;
@@ -226,11 +309,21 @@ public static class Statics
         }
     }
 
+    private static ColorMask? ColorOf(string text, Card source) =>
+        text == "ChosenColor" ? source.ChosenColor?.Mask() ?? 0 : AnimateEffect.ColorsOf(text);
+
+    private static void Grant(Card card, Grants? grants)
+    {
+        if (grants is null) return;
+        if (grants.Activated.Count > 0) (card.StaticActivated ??= new(card.CurrentFace.Activated)).AddRange(grants.Activated);
+        if (grants.Triggers.Count > 0) (card.StaticTriggers ??= new(card.CurrentFace.Triggers)).AddRange(grants.Triggers);
+    }
+
     /// <summary>Where static abilities work from: the battlefield, plus effects and emblems in command zones.</summary>
     public static IEnumerable<Card> Sources(Game g)
     {
         foreach (var c in g.State.BattlefieldCards)
-            if (!c.Def.IsBlank && c.CurrentFace.Statics.Count > 0) yield return c;
+            if (!c.IsBlank && (c.CurrentFace.Statics.Count > 0 || c.Animations is not null)) yield return c;
         foreach (var p in g.State.Players)
             foreach (var id in p.Command)
                 if (g.State[id].IsEffect) yield return g.State[id];
@@ -243,10 +336,10 @@ public static class Statics
         foreach (var source in Sources(g))
         {
             if (source.Controller != player) continue;
-            foreach (var st in source.CurrentFace.Statics)
+            foreach (var st in source.Statics)
             {
                 if (st.Mode != "Continuous" || st["MayPlay"] != "True") continue;
-                var x = ContextFor(g, source);
+                var x = ContextFor(g, source, st);
                 if (!Presence.Hold(st.P, x)) continue;
                 var zone = Enum.Parse<Zone>(st["AffectedZone"]!);
                 var filter = st["Affected"] is { } a ? Effect.FilterFor(source.CurrentFace, a) : null;
@@ -283,7 +376,7 @@ public static class Statics
     private static IEnumerable<Player> AffectedPlayers(Game g, StaticDef st, EffectContext x)
     {
         if (st["Affected"] is not { } a) return Array.Empty<Player>();
-        var filter = Effect.FilterFor(x.Host.CurrentFace, a);
+        var filter = Effect.FilterFor(x.SVarFace, a);
         return g.State.Players.Where(p => !p.Lost && filter.MatchesPlayer(p.Index, x));
     }
 
@@ -293,15 +386,15 @@ public static class Statics
         var total = 0;
         foreach (var source in g.State.BattlefieldCards.Append(spell))
         {
-            if (source.Def.IsBlank) continue;
+            if (source.IsBlank) continue;
             var self = source.Id == spell.Id;
-            foreach (var st in source.CurrentFace.Statics)
+            foreach (var st in source.Statics)
             {
                 if (st.Mode != "ReduceCost") continue;
                 // A card's own "this spell costs less" works from anywhere (EffectZone$ All); others from the battlefield.
                 if (self != (st["EffectZone"] == "All")) continue;
                 if (!self && source.Controller != caster) continue;
-                var x = ContextFor(g, source);
+                var x = ContextFor(g, source, st);
                 if (st["ValidCard"] is { } vc && !Effect.FilterFor(source.CurrentFace, vc).MatchesCard(spell, x)) continue;
                 if (!Presence.Hold(st.P, x)) continue;
                 total += Math.Max(0, Effect.EvalAmount(x, st["Amount"] ?? "1"));

@@ -27,6 +27,8 @@ public sealed class AbilityDef
 {
     public required ForgeParams P { get; init; }
     public required string Api { get; init; }
+    /// <summary>The face whose SVars this ability's expressions use: the card that defines it, even when granted to another.</summary>
+    public FaceDef? Face { get; init; }
     public AbilityKind Kind { get; init; }
     public Cost Cost { get; init; } = Cost.Free;
     public AbilityDef? Sub { get; set; }
@@ -52,6 +54,8 @@ public sealed class AbilityDef
     public Cost? AltCost { get; set; }
     /// <summary>The static granting <see cref="AltCost"/>; its conditions must hold to use it.</summary>
     public StaticDef? AltCostOf { get; set; }
+    /// <summary>Abilities this effect gives (Animate's Abilities$/Triggers$/staticAbilities$).</summary>
+    public Grants? Grants { get; set; }
 
     public AbilityDef CloneHead() => (AbilityDef)MemberwiseClone();
     public string Description => ModeDescription ?? P["SpellDescription"] ?? P["StackDescription"] ?? Api;
@@ -71,6 +75,8 @@ public sealed class TriggerDef
     public AbilityDef? Execute { get; init; }
     /// <summary>For a modal ("choose one") trigger: every allowed combination of modes.</summary>
     public IReadOnlyList<AbilityDef>? Modes { get; init; }
+    /// <summary>The face whose SVars this trigger uses.</summary>
+    public FaceDef? Face { get; init; }
     public string? this[string key] => P[key];
 }
 
@@ -78,6 +84,10 @@ public sealed class StaticDef
 {
     public required ForgeParams P { get; init; }
     public required string Mode { get; init; }
+    /// <summary>The face whose SVars this static uses.</summary>
+    public FaceDef? Face { get; init; }
+    /// <summary>Abilities a Continuous static gives (AddAbility$/AddTrigger$).</summary>
+    public Grants? Grants { get; set; }
     public string? this[string key] => P[key];
 }
 
@@ -86,7 +96,7 @@ public sealed class FaceDef
 {
     public required string Name { get; init; }
     public required ManaCost ManaCost { get; init; }
-    public required TypeLine Types { get; init; }
+    public required TypeLine Types { get; set; }
     public int? Power { get; init; }
     public int? Toughness { get; init; }
     public ColorMask Colors { get; set; }
@@ -109,6 +119,32 @@ public sealed class FaceDef
     public Cost? Flashback { get; set; }
     public Dictionary<string, string> SVars { get; init; } = new();
     public string Oracle { get; init; } = "";
+    /// <summary>"You may have this enter as a copy of …" (K:ETBReplacement:Copy).</summary>
+    public AbilityDef? EtbCopy { get; set; }
+
+    /// <summary>This face as a copy effect changes it ("except it's an artifact", "except it has haste").</summary>
+    public FaceDef CopyWith(TypeLine types, int? power, int? toughness, ColorMask colors, IReadOnlyList<string> extraKeywords)
+    {
+        var f = new FaceDef
+        {
+            Name = Name, ManaCost = ManaCost, Types = types, Power = power, Toughness = toughness, Colors = colors,
+            AuraSpell = AuraSpell, DoesntUntap = DoesntUntap, Flashback = Flashback, SVars = SVars, Oracle = Oracle, EtbCopy = EtbCopy,
+        };
+        f.KeywordNames.UnionWith(KeywordNames);
+        f.RawKeywords.AddRange(RawKeywords);
+        foreach (var k in extraKeywords)
+        {
+            f.RawKeywords.Add(k);
+            f.KeywordNames.Add(ForgeRequirements.KeywordName(k));
+        }
+        f.SpellAbilities.AddRange(SpellAbilities);
+        f.Activated.AddRange(Activated);
+        f.Triggers.AddRange(Triggers);
+        f.Statics.AddRange(Statics);
+        f.EtbReplacements.AddRange(EtbReplacements);
+        f.EtbCounters.AddRange(EtbCounters);
+        return f;
+    }
 }
 
 /// <summary>A card compiled from its Forge script. If <see cref="Missing"/> is non-empty the card is unsupported.</summary>
@@ -221,37 +257,11 @@ public static partial class CardCompiler
         }
 
         // Basic land types grant "T: add one mana of that color" (rule 305.6).
-        foreach (var (sub, color) in new[] { ("Plains", "W"), ("Island", "U"), ("Swamp", "B"), ("Mountain", "R"), ("Forest", "G") })
-            if (types.Is(CardType.Land) && types.HasSubtype(sub))
-                face.Activated.Add(new AbilityDef
-                {
-                    P = new ForgeParams($"AB$ Mana | Cost$ T | Produced$ {color}"), Api = "Mana",
-                    Kind = AbilityKind.Activated, Cost = new Cost { Tap = true }, IsManaAbility = true,
-                });
+        foreach (var (sub, mana) in BasicLandMana)
+            if (types.Is(CardType.Land) && types.Subtypes.Contains(sub)) face.Activated.Add(mana);
 
-        foreach (var t in f.Triggers)
-        {
-            var mode = t["Mode"] ?? "?";
-            if (!Triggers.Supported.Contains(mode)) ctx.Need("Trigger:" + mode);
-            AbilityDef? exec = null;
-            if (t["Execute"] is { } svar)
-            {
-                if (f.SVars.TryGetValue(svar, out var body)) exec = CompileAbility(new ForgeParams(body), ctx, AbilityKind.TriggerEffect, 0);
-                else ctx.Need("SVarMissing:" + svar);
-            }
-            var modes = exec is null ? null : ExpandModes(exec, ctx);
-            var td = new TriggerDef { P = t, Mode = mode, Execute = modes?.FirstOrDefault(), Modes = modes };
-            Triggers.Validate(td, ctx);
-            face.Triggers.Add(td);
-        }
-
-        foreach (var s in f.Statics)
-        {
-            var mode = s["Mode"] ?? "?";
-            var sd = new StaticDef { P = s, Mode = mode };
-            Statics.Validate(sd, ctx);
-            face.Statics.Add(sd);
-        }
+        foreach (var t in f.Triggers) face.Triggers.Add(CompileTrigger(t, ctx));
+        foreach (var s in f.Statics) face.Statics.Add(CompileStatic(s, ctx));
 
         foreach (var st in face.Statics.Where(st => st.Mode == "AlternativeCost").ToList()) AddAlternativeCost(face, st, ctx);
         foreach (var r in f.Replacements) CompileReplacement(r, face, ctx);
@@ -259,6 +269,37 @@ public static partial class CardCompiler
         if (starPT && !face.Statics.Any(st => st.Mode == "Continuous" && st["CharacteristicDefining"] == "True")) ctx.Need("PT:*");
         if (face.KeywordNames.Contains("Devoid")) face.Colors = 0;
         return face;
+    }
+
+    /// <summary>The mana ability each basic land type stands for (rule 305.6).</summary>
+    public static readonly IReadOnlyDictionary<string, AbilityDef> BasicLandMana =
+        new[] { ("Plains", "W"), ("Island", "U"), ("Swamp", "B"), ("Mountain", "R"), ("Forest", "G") }.ToDictionary(p => p.Item1, p => new AbilityDef
+        {
+            P = new ForgeParams($"AB$ Mana | Cost$ T | Produced$ {p.Item2}"), Api = "Mana",
+            Kind = AbilityKind.Activated, Cost = new Cost { Tap = true }, IsManaAbility = true,
+        });
+
+    public static TriggerDef CompileTrigger(ForgeParams t, CompileContext ctx)
+    {
+        var mode = t["Mode"] ?? "?";
+        if (!Triggers.Supported.Contains(mode)) ctx.Need("Trigger:" + mode);
+        AbilityDef? exec = null;
+        if (t["Execute"] is { } svar)
+        {
+            if (ctx.Face.SVars.TryGetValue(svar, out var body)) exec = CompileAbility(new ForgeParams(body), ctx, AbilityKind.TriggerEffect, 0);
+            else ctx.Need("SVarMissing:" + svar);
+        }
+        var modes = exec is null ? null : ExpandModes(exec, ctx);
+        var td = new TriggerDef { P = t, Mode = mode, Execute = modes?.FirstOrDefault(), Modes = modes, Face = ctx.Face };
+        Triggers.Validate(td, ctx);
+        return td;
+    }
+
+    public static StaticDef CompileStatic(ForgeParams s, CompileContext ctx)
+    {
+        var sd = new StaticDef { P = s, Mode = s["Mode"] ?? "?", Face = ctx.Face };
+        Statics.Validate(sd, ctx);
+        return sd;
     }
 
     /// <summary>Keywords that stand for abilities (Equip, Cycling, …): adds those abilities. False if not one of these.</summary>
@@ -294,6 +335,16 @@ public static partial class CardCompiler
                 return true;
             case "Flashback":
                 face.Flashback = ParseCost(Part(1), ctx);
+                return true;
+            case "Changeling":
+                face.Types = new TypeLine { Types = face.Types.Types, Supers = face.Types.Supers, Subtypes = face.Types.Subtypes, AllCreatureTypes = true };
+                return true;
+            case "ETBReplacement" when Part(1) == "Copy":
+                // "You may have this enter as a copy of …": K:ETBReplacement:Copy:SVarName[:Optional]
+                if (Part(3) is not ("" or "Optional")) { ctx.Need("Keyword:ETBReplacement:Copy+" + Part(3)); return true; }
+                if (!face.SVars.TryGetValue(Part(2), out var copyBody)) { ctx.Need("SVarMissing:" + Part(2)); return true; }
+                if (Part(3) == "Optional") copyBody += " | Optional$ True";
+                face.EtbCopy = CompileAbility(new ForgeParams(copyBody), ctx, AbilityKind.Sub, 0);
                 return true;
             case "ETBReplacement":
                 // "As this enters, choose …": K:ETBReplacement:Other:SVarName
@@ -394,7 +445,7 @@ public static partial class CardCompiler
         var result = new List<AbilityDef>();
         foreach (var combo in combos)
         {
-            var head = new AbilityDef { P = ab.P, Api = "Charm", Kind = ab.Kind, Cost = ab.Cost, ChainIndex = ab.ChainIndex };
+            var head = new AbilityDef { P = ab.P, Api = "Charm", Kind = ab.Kind, Cost = ab.Cost, ChainIndex = ab.ChainIndex, Face = ab.Face };
             var tail = head;
             foreach (var i in combo)
             {
@@ -432,7 +483,7 @@ public static partial class CardCompiler
 
         var ab = new AbilityDef
         {
-            P = p, Api = api, Kind = kind, Cost = cost, ChainIndex = chainIndex,
+            P = p, Api = api, Kind = kind, Cost = cost, ChainIndex = chainIndex, Face = ctx.Face,
             IsManaAbility = api is "Mana" or "ManaReflected" && kind == AbilityKind.Activated && p["ValidTgts"] is null,
         };
 

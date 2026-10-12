@@ -49,6 +49,9 @@ public sealed partial class Game
             c.TempKeywords = null;
             c.AttachedTo = -1;
             c.Face = 0;
+            c.CopyDef = null;
+            c.CopyUntilCleanup = false;
+            c.Animations = null;
             c.Controller = c.Owner;
             c.RegenShields = 0;
             c.ClearStaticEffects();
@@ -95,6 +98,9 @@ public sealed partial class Game
     /// <summary>"Enters with counters" and "as this enters" replacements (enters tapped, shocklands).</summary>
     private void ApplyEntering(Card c)
     {
+        // A copy effect applies first: the rest are the replacements of whatever it entered as (rule 707.5).
+        if (c.CurrentFace.EtbCopy is { } copy)
+            RunChain(new StackItem { SourceId = c.Id, Ability = copy, Controller = c.Controller, X = c.XPaid, Description = c.Name + " enters" });
         var face = c.CurrentFace;
         if (face.EtbCounters.Count == 0 && face.EtbReplacements.Count == 0) return;
         foreach (var (kind, amount) in face.EtbCounters)
@@ -130,6 +136,15 @@ public sealed partial class Game
     /// <summary>Ends effects whose time is up. <paramref name="moment"/> is "cleanup" (end of turn) or "untap" (start of a turn).</summary>
     public void ExpireEffects(string moment)
     {
+        foreach (var c in State.BattlefieldCards)
+        {
+            if (moment == "cleanup" && c.CopyUntilCleanup)
+            {
+                c.CopyDef = null;
+                c.CopyUntilCleanup = false;
+            }
+            EndAnimations(c, moment);
+        }
         foreach (var p in State.Players)
             foreach (var id in p.Command.ToList())
             {
@@ -144,11 +159,20 @@ public sealed partial class Game
                 };
                 if (ends) EndEffect(e);
             }
+        Statics.Apply(this);
+    }
+
+    private void EndAnimations(Card c, string moment)
+    {
+        if (c.Animations is null) return;
+        c.Animations.RemoveAll(a => AnimateEffect.Ends(this, a, moment));
+        if (c.Animations.Count == 0) c.Animations = null;
     }
 
     /// <summary>Effects tied to a card or to remembered cards end or forget when those move (state-based check).</summary>
     private void CheckEffectLinks()
     {
+        foreach (var c in State.BattlefieldCards) EndAnimations(c, "links");
         foreach (var p in State.Players)
             foreach (var id in p.Command.ToList())
             {
@@ -298,9 +322,9 @@ public sealed partial class Game
         foreach (var id in sources)
         {
             var src = State[id];
-            foreach (var t in src.CurrentFace.Triggers)
+            foreach (var t in src.Triggers)
             {
-                if (src.Def.IsBlank || !Triggers.Matches(this, t, src, e)) continue;
+                if (src.IsBlank || !Triggers.Matches(this, t, src, e)) continue;
                 _pending.Add(new PendingTrigger(id, t, e, src.Controller));
             }
         }
@@ -404,7 +428,7 @@ public sealed partial class Game
         foreach (var c in cards)
         {
             if (ab["ReflectProperty"] == "Is") { mask |= c.CurrentFace.Colors; continue; }
-            foreach (var other in c.CurrentFace.Activated)
+            foreach (var other in c.Activated)
             {
                 if (other.Api != "Mana") continue;   // reflecting other reflectors could loop
                 mask |= other["Produced"] == "Combo ColorIdentity" ? g.CommanderIdentity(c.Controller)
@@ -423,8 +447,9 @@ public sealed partial class Game
             .Concat(p.Hand.Select(id => State[id]));
         foreach (var c in candidates)
         {
-            if (c.Id == excludeId || c.Def.IsBlank) continue;
-            foreach (var ab in c.CurrentFace.Activated)
+            if (c.Id == excludeId || c.IsBlank) continue;
+            ManaSource? best = null;
+            foreach (var ab in c.Activated)
             {
                 if (!IsAutoManaAbility(ab)) continue;
                 var fromHand = ab["ActivationZone"] == "Hand";
@@ -436,13 +461,17 @@ public sealed partial class Game
                 var life = ab.Cost.Parts.Where(q => q.Kind == CostPartKind.PayLife).Sum(q => int.Parse(q.Amount));
                 for (var sub = ab.Sub; sub is not null; sub = sub.Sub) life += SelfLife(sub)!.Value;
                 // "Whenever this becomes tapped, it deals 1 damage to you" (City of Brass) costs like a painland.
-                if (c.CurrentFace.Triggers.Any(t => t.Mode == "Taps")) life += 1;
+                if (c.Triggers.Any(t => t.Mode == "Taps")) life += 1;
                 var penalty = life * 2
                     + (ab.Cost.Parts.Any(q => q.Kind == CostPartKind.Sacrifice) ? 20 : 0)
                     + (ab.Cost.Parts.Any(q => q.Kind == CostPartKind.ExileSelf) ? 30 : 0);
-                list.Add(new ManaSource(c.Id, ab, mask, ab["Amount"] is { } a ? int.Parse(a) : 1, life, penalty));
-                break;   // one auto ability per card
+                // One auto ability per card: the cheapest, then the most flexible (a Swamp given "add any color").
+                var source = new ManaSource(c.Id, ab, mask, ab["Amount"] is { } a ? int.Parse(a) : 1, life, penalty);
+                if (best is not { } b || penalty < b.Penalty
+                    || penalty == b.Penalty && System.Numerics.BitOperations.PopCount((uint)mask) > System.Numerics.BitOperations.PopCount((uint)b.Options))
+                    best = source;
             }
+            if (best is { } chosen) list.Add(chosen);
         }
         // Cheapest first; among equals, the least flexible so flexible sources stay available.
         list.Sort((a, b) =>

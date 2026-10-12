@@ -79,6 +79,21 @@ public class MechanicsTests
         "SVar:DBEffect:DB$ Effect | StaticAbilities$ STPlay | RememberObjects$ Remembered | ForgetOnMoved$ Exile | SubAbility$ DBCleanup\n" +
         "SVar:STPlay:Mode$ Continuous | MayPlay$ True | Affected$ Card.IsRemembered | AffectedZone$ Exile\n" +
         "SVar:DBCleanup:DB$ Cleanup | ClearRemembered$ True\n",
+        "Name:Mimic\nManaCost:2\nTypes:Creature Shapeshifter\nPT:0/0\nK:ETBReplacement:Copy:DBCopy:Optional\n" +
+        "SVar:DBCopy:DB$ Clone | Choices$ Creature.Other | AddTypes$ Artifact\n",
+        "Name:Mirror\nManaCost:0\nTypes:Artifact\n" +
+        "A:AB$ CopyPermanent | Cost$ T | ValidTgts$ Creature.YouCtrl | AddKeywords$ Haste | NonLegendary$ True | AtEOT$ Sacrifice\n",
+        "Name:Glass\nManaCost:0\nTypes:Artifact\nA:AB$ Clone | Cost$ 0 | ValidTgts$ Creature | Duration$ UntilEndOfTurn\n",
+        "Name:Colonnade\nManaCost:no cost\nTypes:Land\nA:AB$ Mana | Cost$ T | Produced$ W\n" +
+        "A:AB$ Animate | Cost$ 0 | Defined$ Self | Power$ 4 | Toughness$ 4 | Types$ Creature,Elemental | Colors$ White | OverwriteColors$ True | Keywords$ Flying & Vigilance\n",
+        "Name:Lantern\nManaCost:3\nTypes:Artifact\nS:Mode$ Continuous | Affected$ Land.YouCtrl | AddAbility$ AnyMana\nSVar:AnyMana:AB$ Mana | Cost$ T | Produced$ Any\n",
+        "Name:Rally\nManaCost:1\nTypes:Enchantment\nS:Mode$ Continuous | Affected$ Creature.YouCtrl | AddTrigger$ TrigAtk | AddSVar$ X\n" +
+        "SVar:TrigAtk:Mode$ Attacks | ValidCard$ Card.Self | Execute$ TrigGain\nSVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ X\n" +
+        "SVar:X:Count$Valid Enchantment.YouCtrl/Plus.2\n",
+        "Name:March\nManaCost:3\nTypes:Enchantment\n" +
+        "S:Mode$ Continuous | Affected$ Artifact.nonCreature+YouCtrl | AddType$ Creature & Golem | SetPower$ 2 | SetToughness$ 2\n",
+        "Name:Shifter\nManaCost:1\nTypes:Creature Shapeshifter\nPT:1/1\nK:Changeling\n",
+        "Name:Totem\nManaCost:1\nTypes:Artifact\nS:Mode$ Continuous | Affected$ Bear.YouCtrl | AddPower$ 1\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -416,6 +431,109 @@ public class MechanicsTests
         Assert.Equal("Bear", OnBattlefield(g, "Banner").ChosenType);
         Assert.Equal(3, OnBattlefield(g, "Bear").Power);
         Assert.Equal(1, OnBattlefield(g, "Sneak").Power);
+    }
+
+    [Fact]
+    public void CloneEntersAsACopyWithItsExceptions()
+    {
+        var g = Setup(new[] { "Mimic" }, battlefield: new[] { "Bog", "Bog", "Sneak" });
+        g.CastSpell(g.State[InHand(g, "Mimic")], -1);
+        ResolveAll(g);
+        var copy = g.State.BattlefieldCards.Single(c => c.Name == "Sneak" && c.Types.Is(CardType.Artifact));
+        Assert.Equal("Mimic", copy.Def.Name);
+        Assert.Equal(1, copy.Power);
+        Assert.True(copy.HasKeyword("Haste"));
+        Assert.Single(copy.CurrentFace.Triggers);
+    }
+
+    [Fact]
+    public void CloneWithNothingToCopyIsAZeroZeroAndDies()
+    {
+        var g = Setup(new[] { "Mimic" }, battlefield: new[] { "Bog", "Bog" });
+        g.CastSpell(g.State[InHand(g, "Mimic")], -1);
+        ResolveAll(g);
+        g.CheckStateBasedActions();
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Def.Name == "Mimic").Zone);
+    }
+
+    [Fact]
+    public void TokenCopyHasHasteAndIsSacrificedAtEndOfTurn()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Mirror", "Bear" });
+        g.ActivateAbility(OnBattlefield(g, "Mirror"), 0);
+        ResolveAll(g);
+        var token = g.State.BattlefieldCards.Single(c => c.Name == "Bear" && c.IsToken);
+        Assert.Equal(2, token.Power);
+        Assert.True(token.HasKeyword("Haste"));
+        Assert.False(g.IsSick(token));
+        Assert.Contains((token.Id, "Sacrifice"), g.State.ThisTurn.AtEndStep);
+    }
+
+    [Fact]
+    public void BecomesACopyUntilEndOfTurn()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Glass", "Bear" });
+        var glass = OnBattlefield(g, "Glass");
+        g.ActivateAbility(glass, 0);
+        ResolveAll(g);
+        Assert.Equal("Bear", glass.Name);
+        Assert.True(glass.Types.Is(CardType.Creature));
+        Assert.Equal(2, glass.Toughness);
+        g.ExpireEffects("cleanup");
+        Assert.Equal("Glass", glass.Name);
+    }
+
+    [Fact]
+    public void ManlandBecomesACreatureUntilEndOfTurnAndAttacks()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Colonnade" }, library: new[] { "Filler", "Filler" });
+        var land = OnBattlefield(g, "Colonnade");
+        g.ActivateAbility(land, 1);
+        ResolveAll(g);
+        g.CheckStateBasedActions();
+        Assert.True(land.Types.Is(CardType.Creature) && land.Types.Is(CardType.Land));
+        Assert.True(land.Types.HasSubtype("Elemental"));
+        Assert.Equal(4, land.Power);
+        Assert.True(land.HasKeyword("Flying"));
+        Assert.Equal(ManaColor.W.Mask(), land.Colors);
+        g.ResumeTurn();
+        Assert.Equal(36, g.State.Players.Where(p => p.Index != Game.Me).Min(p => p.Life));
+        Assert.False(land.Types.Is(CardType.Creature));
+    }
+
+    [Fact]
+    public void StaticGrantsAManaAbility()
+    {
+        var g = Setup(new[] { "Sprout" }, battlefield: new[] { "Lantern", "Bog" });
+        g.CheckStateBasedActions();
+        Assert.True(g.CanCast(g.State[InHand(g, "Sprout")], 0));
+    }
+
+    [Fact]
+    public void GrantedTriggerUsesTheGrantersSVars()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Rally", "Bear" }, library: new[] { "Filler", "Filler" });
+        g.ResumeTurn();
+        Assert.Equal(43, g.State.Players[Game.Me].Life);
+    }
+
+    [Fact]
+    public void AddTypeAffectsWhatItMatchedBeforeTheTypeChanged()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "March", "Vault" });
+        g.CheckStateBasedActions();
+        var vault = OnBattlefield(g, "Vault");
+        Assert.True(vault.Types.Is(CardType.Creature) && vault.Types.HasSubtype("Golem"));
+        Assert.Equal(2, vault.Power);
+        Assert.Equal(2, vault.Toughness);
+    }
+
+    [Fact]
+    public void ChangelingIsEveryCreatureType()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Totem", "Shifter" });
+        g.CheckStateBasedActions();
+        Assert.Equal(2, OnBattlefield(g, "Shifter").Power);
     }
 
     [Fact]

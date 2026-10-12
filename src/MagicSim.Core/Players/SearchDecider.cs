@@ -139,13 +139,13 @@ public sealed class SearchDecider : ChoiceDecider
                 if (c.Types.Is(CardType.Creature)) power += Math.Max(0, c.Power);
             }
         }
-        var hand = me.Hand.Sum(id => s[id].Def.IsBlank ? 0.3 : 1.0);
+        var hand = me.Hand.Sum(id => s[id].IsBlank ? 0.3 : 1.0);
         var deckRisk = me.Library.Count < 5 ? (5 - me.Library.Count) * 20 : 0;
         return 4 * oppDamage + 12 * manaSources + 5 * hand + 3 * power + 7 * otherPermanents + 0.5 * Math.Min(me.Life, 40) - deckRisk;
     }
 
     private static bool IsOneShotMana(Card c) =>
-        c.CurrentFace.Activated.Where(ab => ab.Api == "Mana").All(ab => ab.Cost.Parts.Any(p => p.Kind == CostPartKind.Sacrifice && p.Valid == "CARDNAME"));
+        c.Activated.Where(ab => ab.Api == "Mana").All(ab => ab.Cost.Parts.Any(p => p.Kind == CostPartKind.Sacrifice && p.Valid == "CARDNAME"));
 
     /// <summary>
     /// Mulligan policy A (T1-or-bust): keep only if, in at least one of a few determinized tries,

@@ -13,7 +13,7 @@ public static class Keywords
         // Deck-building only.
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
-        "Devoid",
+        "Devoid", "Changeling",
     };
 }
 
@@ -71,6 +71,7 @@ public static class Triggers
         {
             Game = g, Ability = t.Execute ?? Game.PermanentSpell,
             Item = new StackItem { SourceId = source.Id, Ability = t.Execute ?? Game.PermanentSpell, Controller = source.Controller },
+            FaceOverride = t.Face,
         };
         // Triggers work from the battlefield, except the moved card's own "look back" triggers.
         // Effects and emblems (and "eminence" commanders) trigger from the command zone.
@@ -98,10 +99,10 @@ public static class Triggers
                 return CardMatches(g, t, e.CardId, x, source);
             case "DamageDone" when e.Mode == TriggerMode.DamageDone:
                 if (t["CombatDamage"] is { } cd && (cd == "True") != e.Combat) return false;
-                if (t["ValidSource"] is { } vs && (e.CardId is not { } src || !FilterOf(source, vs).MatchesCard(g.State[src], x))) return false;
+                if (t["ValidSource"] is { } vs && (e.CardId is not { } src || !FilterOf(x, vs).MatchesCard(g.State[src], x))) return false;
                 if (t["ValidTarget"] is { } vt)
                 {
-                    var f = FilterOf(source, vt);
+                    var f = FilterOf(x, vt);
                     if (e.Player is { } p ? !f.MatchesPlayer(p, x) : e.TargetCardId is not { } tc || !f.MatchesCard(g.State[tc], x)) return false;
                 }
                 return true;
@@ -119,14 +120,13 @@ public static class Triggers
         }
     }
 
-    private static Filter FilterOf(Card source, string text) => Effect.FilterFor(source.CurrentFace, text);
+    private static Filter FilterOf(EffectContext x, string text) => Effect.FilterFor(x.SVarFace, text);
 
     private static bool CardMatches(Game g, TriggerDef t, int? cardId, EffectContext x, Card source)
     {
         if (t["ValidCard"] is not { } vc) return true;
         if (cardId is not { } id) return false;
-        var ctx = new CompileContext { Face = source.CurrentFace, Missing = new() };
-        return Filter.Parse(vc, ctx).MatchesCard(g.State[id], x);
+        return FilterOf(x, vc).MatchesCard(g.State[id], x);
     }
 
     private static bool ZoneMatches(string? spec, Zone z) =>
@@ -168,7 +168,7 @@ public static class Conditions
     public static bool Hold(EffectContext x)
     {
         var ab = x.Ability;
-        var ctx = new CompileContext { Face = x.Host.CurrentFace, Missing = new() };
+        var ctx = new CompileContext { Face = x.SVarFace, Missing = new() };
         if (ab["ConditionCheckSVar"] is { } sv)
         {
             var cmp = ab["ConditionSVarCompare"] ?? "GE1";

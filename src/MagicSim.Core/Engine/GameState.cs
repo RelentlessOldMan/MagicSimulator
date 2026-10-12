@@ -63,9 +63,40 @@ public sealed class Card
     public int StaticToughness { get; set; }
     public HashSet<string>? StaticKeywords { get; set; }
 
-    public FaceDef CurrentFace => Def.Faces[Face];
+    /// <summary>A copy effect on this permanent (Clone): its copiable values, replacing the printed card's.</summary>
+    public CardDef? CopyDef { get; set; }
+    /// <summary>The copy effect ends at cleanup ("until end of turn").</summary>
+    public bool CopyUntilCleanup { get; set; }
+
+    public FaceDef CurrentFace => CopyDef?.Front ?? Def.Faces[Face];
+    /// <summary>The card (or what it copies) is unsupported and plays as a blank.</summary>
+    public bool IsBlank => (CopyDef ?? Def).IsBlank;
     public string Name => CurrentFace.Name;
-    public TypeLine Types => CurrentFace.Types;
+    public TypeLine Types => StaticTypes ?? CurrentFace.Types;
+    public ColorMask Colors => StaticColors ?? CurrentFace.Colors;
+    /// <summary>Activated abilities, including any granted (and without any lost) by continuous effects.</summary>
+    public IReadOnlyList<AbilityDef> Activated => StaticActivated ?? CurrentFace.Activated;
+    public IReadOnlyList<TriggerDef> Triggers => StaticTriggers ?? CurrentFace.Triggers;
+    /// <summary>Static abilities: the card's own plus any its animations give.</summary>
+    public IEnumerable<StaticDef> Statics
+    {
+        get
+        {
+            if (Animations is null) return CurrentFace.Statics;
+            var own = Animations.Any(a => a.Ability["RemoveAllAbilities"] == "True") ? Enumerable.Empty<StaticDef>() : CurrentFace.Statics;
+            return own.Concat(Animations.SelectMany(a => a.Ability.Grants?.Statics ?? Enumerable.Empty<StaticDef>()));
+        }
+    }
+
+    /// <summary>"Becomes a …" effects on this permanent, oldest first.</summary>
+    public List<Animation>? Animations { get; set; }
+    // More results of continuous effects (layers 4–6).
+    public TypeLine? StaticTypes { get; set; }
+    public ColorMask? StaticColors { get; set; }
+    public List<AbilityDef>? StaticActivated { get; set; }
+    public List<TriggerDef>? StaticTriggers { get; set; }
+    /// <summary>Lost all abilities (keywords included) to a continuous effect.</summary>
+    public bool LostAbilities { get; set; }
 
     public int Power => (SetPower ?? TokenPower ?? CurrentFace.Power ?? 0) + StaticPower + PowerBonus + CounterCount("P1P1") - CounterCount("M1M1");
     public int Toughness => (SetToughness ?? TokenToughness ?? CurrentFace.Toughness ?? 0) + StaticToughness + ToughnessBonus + CounterCount("P1P1") - CounterCount("M1M1");
@@ -79,18 +110,23 @@ public sealed class Card
     public int CounterCount(string kind) => Counters is not null && Counters.TryGetValue(kind, out var n) ? n : 0;
 
     public bool HasKeyword(string k) =>
-        CurrentFace.KeywordNames.Contains(k) || (TempKeywords?.Contains(k) ?? false) || (StaticKeywords?.Contains(k) ?? false);
+        (!LostAbilities && CurrentFace.KeywordNames.Contains(k)) || (TempKeywords?.Contains(k) ?? false) || (StaticKeywords?.Contains(k) ?? false);
 
     public void ClearStaticEffects()
     {
         SetPower = SetToughness = null;
         StaticPower = StaticToughness = 0;
         StaticKeywords = null;
+        StaticTypes = null;
+        StaticColors = null;
+        StaticActivated = null;
+        StaticTriggers = null;
+        LostAbilities = false;
     }
 
     public Card Clone() => new()
     {
-        Id = Id, Def = Def, Owner = Owner, Controller = Controller, Zone = Zone, Face = Face, Tapped = Tapped,
+        Id = Id, Def = Def, CopyDef = CopyDef, CopyUntilCleanup = CopyUntilCleanup, Owner = Owner, Controller = Controller, Zone = Zone, Face = Face, Tapped = Tapped,
         ControlledSinceTurn = ControlledSinceTurn, IsToken = IsToken, IsEffect = IsEffect, EffectDuration = EffectDuration,
         EffectTurn = EffectTurn, EffectHost = EffectHost, ExileOnMoved = ExileOnMoved, ForgetOnMoved = ForgetOnMoved,
         ChosenColor = ChosenColor, ChosenType = ChosenType, ChosenPlayer = ChosenPlayer, TokenPower = TokenPower, TokenToughness = TokenToughness, IsCommander = IsCommander, CommandCasts = CommandCasts,
@@ -103,6 +139,9 @@ public sealed class Card
         NamedCard = NamedCard, AttachedTo = AttachedTo, XPaid = XPaid, RegenShields = RegenShields, LeftPower = LeftPower, LeftToughness = LeftToughness,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
+        Animations = Animations is null ? null : new List<Animation>(Animations),
+        StaticTypes = StaticTypes, StaticColors = StaticColors, StaticActivated = StaticActivated, StaticTriggers = StaticTriggers,
+        LostAbilities = LostAbilities,
     };
 
     public override string ToString() => $"{Name}#{Id}";

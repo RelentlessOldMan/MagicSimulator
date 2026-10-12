@@ -31,7 +31,7 @@ public abstract class Effect
     protected static int Amount(EffectContext x, string? text, int fallback)
     {
         if (text is null) return fallback;
-        var face = x.Host.CurrentFace;
+        var face = x.SVarFace;
         return AmountCache.GetOrAdd((face, text), k => Engine.Amount.Parse(k.Item2, new CompileContext { Face = k.Item1, Missing = new() })).Eval(x);
     }
 
@@ -57,6 +57,7 @@ public static class Effects
         new CounterEffect(), new SurveilEffect(), new RearrangeTopOfLibraryEffect(), new RegenerateEffect(),
         new ManaReflectedEffect(), new FlipCoinEffect(), new RepeatEffect(), new StoreSVarEffect(),
         new EffectEffect(), new ChooseColorEffect(), new ChooseTypeEffect(), new ChoosePlayerEffect(),
+        new CopyPermanentEffect(), new CloneEffect(), new AnimateEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -227,7 +228,7 @@ sealed class ChangeZoneEffect : Effect
     private void Search(EffectContext x, int searcher, List<Zone> origins, Zone dest, int position, bool tapped)
     {
         var ab = x.Ability;
-        var filter = ab["ChangeType"] is { } ct ? FilterFor(x.Host.CurrentFace, ct) : null;
+        var filter = ab["ChangeType"] is { } ct ? FilterFor(x.SVarFace, ct) : null;
         var candidates = origins.SelectMany(z => x.S.ZoneList(searcher, z))
             .Where(id => filter is null || filter.MatchesCard(x.S[id], x)).ToList();
         var num = ab["ChangeNum"] is "All" ? candidates.Count : Amount(x, ab["ChangeNum"], 1);
@@ -272,7 +273,7 @@ sealed class DigEffect : Effect
         var lib = x.S.Players[player].Library;
         var n = Math.Min(Amount(x, ab["DigNum"], 1), lib.Count);
         var looked = lib.Take(n).ToList();
-        var filter = ab["ChangeValid"] is { } cv ? FilterFor(x.Host.CurrentFace, cv) : null;
+        var filter = ab["ChangeValid"] is { } cv ? FilterFor(x.SVarFace, cv) : null;
         var eligible = looked.Where(id => filter is null || filter.MatchesCard(x.S[id], x)).ToList();
         var num = ab["ChangeNum"] switch { "All" => eligible.Count, "Any" => eligible.Count, var s => Amount(x, s, 1) };
         var max = Math.Min(num, eligible.Count);
@@ -313,7 +314,7 @@ sealed class DigUntilEffect : Effect
     {
         var ab = x.Ability;
         var player = Defined.Players(ab["Defined"], x)[0];
-        var filter = FilterFor(x.Host.CurrentFace, ab["Valid"]!);
+        var filter = FilterFor(x.SVarFace, ab["Valid"]!);
         var want = Amount(x, ab["Amount"], 1);
         var found = new List<int>();
         var revealed = new List<int>();
@@ -642,7 +643,7 @@ sealed class SacrificeEffect : Effect
             if (x.Host.Zone == Zone.Battlefield) x.Game.MoveTo(x.Host, Zone.Graveyard);
             return;
         }
-        var filter = FilterFor(x.Host.CurrentFace, valid);
+        var filter = FilterFor(x.SVarFace, valid);
         foreach (var p in Defined.Players(x.Ability["Defined"], x))
         {
             if (x.S.Players[p].IsGoldfish) continue;
