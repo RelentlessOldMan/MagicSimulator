@@ -308,6 +308,7 @@ public static class Replacements
     public static Zone Destination(Game g, Card moving, Zone from, Zone to, out bool shuffle)
     {
         shuffle = false;
+        if (from == Zone.Battlefield && moving.ExileIfLeaves && to != Zone.Exile) return Zone.Exile;
         if (to != Zone.Graveyard) return to;
         // A card's own "shuffle it into its owner's library instead" works from anywhere.
         if (!moving.IsBlank)

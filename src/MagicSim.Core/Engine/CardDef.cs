@@ -149,6 +149,8 @@ public sealed class FaceDef
     public List<AbilityDef> EtbReplacements { get; } = new();
     /// <summary>"Doesn't untap during your untap step."</summary>
     public bool DoesntUntap { get; set; }
+    /// <summary>What it's attached to doesn't untap during its controller's untap step (Dance of the Dead).</summary>
+    public bool AttachedDoesntUntap { get; set; }
     /// <summary>"Enters with N counters": (counter type, amount expression, condition such as "if it was kicked").</summary>
     public List<(string Kind, string Amount, ForgeParams? Condition)> EtbCounters { get; } = new();
     /// <summary>Flashback cost, if it has flashback.</summary>
@@ -190,7 +192,7 @@ public sealed class FaceDef
         var f = new FaceDef
         {
             Name = Name, ManaCost = ManaCost, Types = types, Power = power, Toughness = toughness, Colors = colors, Loyalty = Loyalty,
-            AuraSpell = AuraSpell, DoesntUntap = DoesntUntap, Flashback = Flashback, SVars = SVars, Oracle = Oracle, EtbCopy = EtbCopy,
+            AuraSpell = AuraSpell, DoesntUntap = DoesntUntap, AttachedDoesntUntap = AttachedDoesntUntap, Flashback = Flashback, SVars = SVars, Oracle = Oracle, EtbCopy = EtbCopy,
             EscapeCost = EscapeCost, Splice = Splice,
         };
         f.KeywordNames.UnionWith(KeywordNames);
@@ -428,6 +430,12 @@ public static partial class CardCompiler
             }
             case "Flashback":
                 face.Flashback = ParseCost(Part(1), ctx);
+                return true;
+            case "Unearth":
+                // "{cost}: Return this card from your graveyard to the battlefield. It gains haste. Exile it at the beginning
+                // of the next end step or if it would leave the battlefield. Unearth only as a sorcery."
+                face.SVars["__UnearthHaste"] = "DB$ Pump | Defined$ Self | KW$ Haste";
+                AddGenerated(face, ctx, $"AB$ ChangeZone | Cost$ {Part(1)} | ActivationZone$ Graveyard | SorcerySpeed$ True | Origin$ Graveyard | Destination$ Battlefield | Defined$ Self | AtEOT$ Exile | LeaveBattlefield$ Exile | SubAbility$ __UnearthHaste | SpellDescription$ Unearth");
                 return true;
             case "Chapter":
                 // K:Chapter:3:DBFirst,DBSecond,DBThird — one ability per chapter.
@@ -715,6 +723,13 @@ public static partial class CardCompiler
         var evt = r["Event"] ?? "?";
         var keys = r.Values.Keys.Where(k => k is not ("Event" or "Description" or "ValidCard" or "ReplacementResult")).ToList();
         if (r["ValidCard"] == "Card.Self" && CompileSelfReplacement(r, evt, keys, face, ctx)) return;
+        // Auras and Equipment: "enchanted creature doesn't untap during its controller's untap step".
+        if (evt == "Untap" && r["ValidCard"] is "Creature.EnchantedBy" or "Card.EnchantedBy" or "Permanent.EnchantedBy" or "Creature.EquippedBy"
+            && r["Layer"] == "CantHappen" && r["ValidStepTurnToController"] == "You" && keys.All(k => k is "Layer" or "ValidStepTurnToController" or "Secondary"))
+        {
+            face.AttachedDoesntUntap = true;
+            return;
+        }
         if (Engine.Replacements.TryCompile(r, face, ctx)) return;
         ctx.Need("Replacement:" + evt);
     }

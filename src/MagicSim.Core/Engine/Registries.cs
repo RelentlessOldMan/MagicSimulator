@@ -14,7 +14,7 @@ public static class Keywords
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
         "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade", "Ninjutsu", "Persist", "Undying",
-        "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit", "MayFlashSac", "Overload", "Entwine", "Ascend",
+        "Flashback", "Unearth", "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit", "MayFlashSac", "Overload", "Entwine", "Ascend",
         // An Aura's own enchant restriction (Animate Dead swapping its "enchant" ability).
         "Enchant",
     };
@@ -156,11 +156,11 @@ public static class Triggers
             case "LifeLost" when e.Mode == TriggerMode.LifeLost:
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller, x, t.Face);
             case "Exploited" when e.Mode == TriggerMode.Exploited:
-                return (t["ValidSource"] is not { } exploiter || Effect.FilterFor(t.Face, exploiter).MatchesCard(g.State[e.TargetCardId!.Value], x))
+                return (t["ValidSource"] is not { } exploiter || Effect.FilterFor(t.Face ?? x.SVarFace, exploiter).MatchesCard(g.State[e.TargetCardId!.Value], x))
                     && CardMatches(g, t, e.CardId, x, source);
             case "Unattached" when e.Mode == TriggerMode.Unattached:
-                return (t["ValidAttachment"] is not { } attachment || Effect.FilterFor(t.Face, attachment).MatchesCard(g.State[e.CardId!.Value], x))
-                    && (t["ValidObject"] is not { } attachedTo || Effect.FilterFor(t.Face, attachedTo).MatchesCard(g.State[e.TargetCardId!.Value], x));
+                return (t["ValidAttachment"] is not { } attachment || Effect.FilterFor(t.Face ?? x.SVarFace, attachment).MatchesCard(g.State[e.CardId!.Value], x))
+                    && (t["ValidObject"] is not { } attachedTo || Effect.FilterFor(t.Face ?? x.SVarFace, attachedTo).MatchesCard(g.State[e.TargetCardId!.Value], x));
             case "SpellCast" when e.Mode == TriggerMode.SpellCast && t["ActivatorThisTurnCast"] is { } nth:
                 // "Whenever you cast your second spell each turn": this is that spell.
                 if (!Filter.Compare(g.State.ThisTurn.SpellsCast, nth[..2], int.Parse(nth[2..]))) return false;

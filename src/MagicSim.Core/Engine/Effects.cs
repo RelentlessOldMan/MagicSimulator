@@ -58,7 +58,7 @@ public static class Effects
         new ManaReflectedEffect(), new FlipCoinEffect(), new RepeatEffect(), new StoreSVarEffect(),
         new EffectEffect(), new ChooseColorEffect(), new ChooseTypeEffect(), new ChoosePlayerEffect(),
         new CopyPermanentEffect(), new CloneEffect(), new AnimateEffect(), new ProliferateEffect(),
-        new DelayedTriggerEffect(), new RepeatEachEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
+        new DelayedTriggerEffect(), new RepeatEachEffect(), new TwoPilesEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
         new AnimateAllEffect(), new FightEffect(), new BranchEffect(), new MultiplyCounterEffect(), new SetStateEffect(),
         new UntapAllEffect(), new RemoveCounterEffect(), new ClassLevelUpEffect(), new ProtectionEffect(), new RollDiceEffect(),
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
@@ -201,6 +201,8 @@ sealed class ChangeZoneEffect : Effect
         "Origin", "Destination", "ChangeType", "ChangeNum", "Hidden", "Mandatory", "Tapped", "LibraryPosition", "Defined",
         "ChangeTypeDesc", "Shuffle", "Reveal", "SelectPrompt", "Reorder", "Optional", "NoReveal", "ShuffleNonMandatory",
         "DefinedPlayer", "NoShuffle", "RememberChanged", "Imprint", "GainControl", "OriginAlternative", "AIXMax", "WithCountersType", "WithCountersAmount", "RememberTargets", "Duration", "TargetsWithDefinedController", "RememberLKI",
+        // Brought back for a while: exiled or sacrificed at the next end step, exiled if it would leave.
+        "AtEOT", "LeaveBattlefield",
         // Face down only hides it from opponents, which goldfish opponents don't care about.
         "ExileFaceDown");
 
@@ -218,6 +220,8 @@ sealed class ChangeZoneEffect : Effect
         ValidateAmount(ab, "WithCountersAmount", ctx);
         if (ab["Duration"] is { } dur && dur != "UntilHostLeavesPlay") ctx.Need("ChangeZone.Duration:" + dur);
         if (ab["Destination"] is null) ctx.Need("ChangeZone.Destination:none");
+        if (ab["AtEOT"] is { } eot && eot is not ("Exile" or "Sacrifice")) ctx.Need("ChangeZone.AtEOT:" + eot);
+        if (ab["LeaveBattlefield"] is { } lb && lb != "Exile") ctx.Need("ChangeZone.LeaveBattlefield:" + lb);
         if (ab["ChangeType"] is { } ct) Filter.Parse(ct, ctx);
         if (ab["ChangeNum"] is { } cn && cn != "All") Engine.Amount.Parse(cn, ctx);
         Defined.ValidateCards(ab["Defined"], ctx);
@@ -249,6 +253,11 @@ sealed class ChangeZoneEffect : Effect
         }
         x.Game.MoveTo(c, dest, position, tapped);
         if (dest == Zone.Exile && c.Zone == Zone.Exile) c.ExiledWith = x.Host.Id;
+        if (dest == Zone.Battlefield && c.Zone == Zone.Battlefield)
+        {
+            if (ab["AtEOT"] is { } eot) x.S.ThisTurn.AtEndStep.Add((c.Id, eot));
+            if (ab["LeaveBattlefield"] == "Exile") c.ExileIfLeaves = true;
+        }
     }
 
     public static void Note(EffectContext x, int id)
@@ -356,6 +365,7 @@ sealed class DigEffect : Effect
     {
         var ab = x.Ability;
         var player = Defined.Players(ab["Defined"], x)[0];
+        if (x.S.Players[player].IsGoldfish) { DigUnknown(x, x.S.Players[player]); return; }
         var lib = x.S.Players[player].Library;
         var n = Math.Min(Amount(x, ab["DigNum"], 1), lib.Count);
         var looked = lib.Take(n).ToList();
@@ -381,6 +391,29 @@ sealed class DigEffect : Effect
         var dest2 = Enum.Parse<Zone>(ab["DestinationZone2"] ?? "Library");
         var pos2 = ab["LibraryPosition2"] is { } lp2 ? int.Parse(lp2) : -1;
         foreach (var id in rest) x.Game.MoveTo(x.S[id], dest2, pos2);
+    }
+
+    /// <summary>
+    /// A goldfish opponent's library is only a count: "exiles the top twenty cards of their library" takes 20 off it.
+    /// The cards are unknown, so a filter takes them only if it would take any card of theirs.
+    /// </summary>
+    private static void DigUnknown(EffectContext x, Player p)
+    {
+        var ab = x.Ability;
+        var n = Math.Min(Amount(x, ab["DigNum"], 1), p.AbstractLibrary);
+        var takes = ab["ChangeValid"] is not { } cv || FilterFor(x.SVarFace, cv).MatchesUnknownCard(p.Index, x);
+        var chosen = !takes || ab["Optional"] == "True" ? 0
+            : ab["ChangeNum"] is "All" or "Any" ? n : Math.Min(n, Amount(x, ab["ChangeNum"], 1));
+        void Move(int count, string? zone)
+        {
+            var to = Enum.Parse<Zone>(zone ?? "Library");
+            if (to == Zone.Library || count == 0) return;
+            p.AbstractLibrary -= count;
+            if (to == Zone.Hand) p.AbstractHand += count;
+        }
+        Move(chosen, ab["DestinationZone"] ?? "Hand");
+        Move(n - chosen, ab["DestinationZone2"]);
+        x.Game.Note($"  opponent {p.Index}: {n} card(s) off the top of their library");
     }
 }
 
@@ -663,11 +696,11 @@ sealed class LosesGameEffect : Effect
 abstract class CardsEffect : Effect
 {
     /// <summary>Defined$ cards, else the ability's targets, else the source.</summary>
-    protected static List<Card> Cards(EffectContext x) =>
+    protected static List<Card> Cards(EffectContext x, Zone zone = Zone.Battlefield) =>
         (x.Ability["Defined"] is { } d ? Defined.Cards(d, x)
             : x.Ability.TargetFilter is not null ? Defined.Cards("Targeted", x)
             : Defined.Cards("Self", x))
-        .Select(id => x.S[id]).Where(c => c.Zone == Zone.Battlefield).ToList();
+        .Select(id => x.S[id]).Where(c => c.Zone == zone).ToList();
 
     public override void Validate(AbilityDef ab, CompileContext ctx) => Defined.ValidateCards(ab["Defined"], ctx);
 }
@@ -675,7 +708,7 @@ abstract class CardsEffect : Effect
 sealed class PumpEffect : CardsEffect
 {
     public override string Api => "Pump";
-    public override IReadOnlySet<string> Params { get; } = P("NumAtt", "NumDef", "KW", "Defined", "RememberObjects", "ForgetImprinted");
+    public override IReadOnlySet<string> Params { get; } = P("NumAtt", "NumDef", "KW", "Defined", "RememberObjects", "ForgetImprinted", "PumpZone");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -685,6 +718,8 @@ sealed class PumpEffect : CardsEffect
         ValidateKeywords(ab["KW"], ctx);
         Defined.ValidateCards(ab["RememberObjects"], ctx);
         Defined.ValidateCards(ab["ForgetImprinted"], ctx);
+        // "Target card in your graveyard gains flashback until end of turn."
+        if (ab["PumpZone"] is { } pz && (pz != "Graveyard" || ab["KW"] != "Flashback")) ctx.Need("Pump.PumpZone:" + pz);
     }
 
     public static void ValidateKeywords(string? kw, CompileContext ctx)
@@ -714,7 +749,7 @@ sealed class PumpEffect : CardsEffect
         if (x.Ability["RememberObjects"] is { } ro) (x.Host.Remembered ??= new()).AddRange(Defined.Cards(ro, x));
         if (x.Ability["ForgetImprinted"] is { } fi) foreach (var id in Defined.Cards(fi, x)) x.Host.Imprinted?.Remove(id);
         if (x.Ability["Defined"] is null && x.Ability.TargetFilter is null && (x.Ability["RememberObjects"] ?? x.Ability["ForgetImprinted"]) is not null) return;
-        foreach (var c in Cards(x)) Apply(c, doubleAtt ? Math.Max(0, c.Power) : att, doubleDef ? Math.Max(0, c.Toughness) : def, x.Ability["KW"]);
+        foreach (var c in Cards(x, x.Ability["PumpZone"] == "Graveyard" ? Zone.Graveyard : Zone.Battlefield)) Apply(c, doubleAtt ? Math.Max(0, c.Power) : att, doubleDef ? Math.Max(0, c.Toughness) : def, x.Ability["KW"]);
     }
 }
 

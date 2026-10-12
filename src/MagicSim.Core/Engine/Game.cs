@@ -201,7 +201,7 @@ public sealed partial class Game
                 if (State.GameOver) break;
             }
             SetStep(Step.Cleanup);
-            p.AbstractHand = Math.Min(p.AbstractHand, p.StaticMaxHandSize ?? Settings.MaxHandSize);
+            p.AbstractHand = Math.Min(p.AbstractHand, p.MaxHandSizeWith(Settings.MaxHandSize));
             EndOfTurnCleanup();
         }
         State.ActivePlayer = Me;
@@ -317,8 +317,11 @@ public sealed partial class Game
         {
             case Step.Untap:
                 ExpireEffects("untap");
+                HashSet<int>? held = null;
                 foreach (var c in State.BattlefieldCards)
-                    if (c.Controller == Me && !c.CurrentFace.DoesntUntap) c.Tapped = false;
+                    if (c.AttachedTo >= 0 && c.CurrentFace.AttachedDoesntUntap) (held ??= new()).Add(c.AttachedTo);
+                foreach (var c in State.BattlefieldCards)
+                    if (c.Controller == Me && !c.CurrentFace.DoesntUntap && !(held?.Contains(c.Id) ?? false)) c.Tapped = false;
                 return;   // no priority in the untap step
             case Step.Upkeep:
                 Suspended();
@@ -401,11 +404,15 @@ public sealed partial class Game
         var attackers = candidates.Count == 0 ? new List<int>() : Decider.ChooseAttackers(this, Me, candidates);
         if (attackers.Count == 0) return;
         State.Attackers.AddRange(attackers);
+        State.ThisTurn.AttackersDeclared += attackers.Count;
+        // Goldfish opponents never block: everything attacks the opponent with the least life left.
+        var defender = State.Players.Where(p => p.Index != Me && !p.Lost).OrderBy(p => p.Life).ThenBy(p => p.Index).FirstOrDefault()?.Index;
+        State.ThisTurn.DefendingPlayer = defender;
         foreach (var id in attackers)
         {
             var a = State[id];
             if (!a.HasKeyword("Vigilance")) Tap(a);
-            Fire(new TriggerEvent(TriggerMode.Attacks, CardId: id));
+            Fire(new TriggerEvent(TriggerMode.Attacks, CardId: id, Player: defender));
         }
         Fire(new TriggerEvent(TriggerMode.AttackersDeclared, Player: Me));
         Note("attack with " + string.Join(", ", attackers.Select(id => State[id].Name)));
@@ -414,8 +421,9 @@ public sealed partial class Game
     private void CombatDamage()
     {
         Statics.Apply(this);
-        // Goldfish opponents never block: everything hits the opponent with the least life left.
-        var defender = State.Players.Where(p => p.Index != Me && !p.Lost).OrderBy(p => p.Life).ThenBy(p => p.Index).FirstOrDefault();
+        // Attackers hit the player they attacked; if that player has lost, the next with the least life.
+        var defender = State.ThisTurn.DefendingPlayer is { } d && !State.Players[d].Lost ? State.Players[d]
+            : State.Players.Where(p => p.Index != Me && !p.Lost).OrderBy(p => p.Life).ThenBy(p => p.Index).FirstOrDefault();
         if (defender is null) return;
         foreach (var id in State.Attackers)
         {
@@ -433,7 +441,7 @@ public sealed partial class Game
     private void Cleanup()
     {
         var me = State.Players[Me];
-        var excess = me.Hand.Count - (me.StaticMaxHandSize ?? Settings.MaxHandSize);
+        var excess = me.Hand.Count - me.MaxHandSizeWith(Settings.MaxHandSize);
         if (excess > 0)
             foreach (var id in Decider.ChooseCards(this, Me, Choice.Discard, null, me.Hand.ToList(), excess, excess))
                 Discard(State[id]);
@@ -455,6 +463,10 @@ public sealed partial class Game
             c.TempKeywords = null;
             c.RegenShields = 0;
         }
+        // "Gains flashback until end of turn" ends.
+        foreach (var p in State.Players)
+            foreach (var id in p.Graveyard)
+                State[id].TempKeywords = null;
         ExpireEffects("cleanup");
     }
 
@@ -649,7 +661,7 @@ public sealed partial class Game
         {
             var c = State[id];
             if (c.IsBlank) continue;
-            if (c.CurrentFace.Flashback is null && c.CurrentFace.EscapeCost is null)
+            if (c.FlashbackCost is null && c.CurrentFace.EscapeCost is null)
             {
                 escapeGranted ??= Statics.GrantsEscape(this, player);
                 if (escapeGranted == false || Statics.EscapeCost(this, c) is null) continue;
@@ -785,7 +797,7 @@ public sealed partial class Game
     {
         Cost cost;
         var spell = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : null;
-        if (c.Zone == Zone.Graveyard && c.CurrentFace.Flashback is { } flashback)
+        if (c.Zone == Zone.Graveyard && c.FlashbackCost is { } flashback)
             cost = flashback;
         else if (c.Zone == Zone.Graveyard && Statics.EscapeCost(this, c) is { } escape)
             cost = escape;
@@ -853,7 +865,7 @@ public sealed partial class Game
         if (HasX(cost))
             x = Decider.ChooseX(this, player, c, MaxAffordableX(cost, c, player));
         var spliced = ChooseSplices(c, player, x, ref cost);
-        var escaped = from == Zone.Graveyard && c.CurrentFace.Flashback is null;
+        var escaped = from == Zone.Graveyard && c.FlashbackCost is null;
 
         // Move to the stack first (rule 601.2a), then choose targets and pay.
         RemoveFromZone(c);

@@ -73,6 +73,8 @@ public sealed class Card
     public string[]? PaidOptional { get; set; }
     /// <summary>A replacement as it enters sends it somewhere else instead (Mox Diamond without a land to discard).</summary>
     public Zone? EnterInstead { get; set; }
+    /// <summary>"If it would leave the battlefield, exile it instead" (unearth, From the Catacombs).</summary>
+    public bool ExileIfLeaves { get; set; }
     /// <summary>The card whose effect last exiled this one ("exiled with [source]").</summary>
     public int ExiledWith { get; set; } = -1;
     /// <summary>Face down (morph, rule 708): a nameless 2/2 creature with no abilities but turning face up.</summary>
@@ -150,6 +152,10 @@ public sealed class Card
     public int LastKnownCounterCount(string kind) =>
         Zone == Zone.Battlefield || Counters is not null || LeftCounters is null ? CounterCount(kind) : LeftCounters.GetValueOrDefault(kind);
 
+    /// <summary>Its flashback cost: its own, or its mana cost when an effect gave it flashback (Snapcaster Mage).</summary>
+    public Cost? FlashbackCost =>
+        CurrentFace.Flashback ?? (TempKeywords?.Contains("Flashback") == true ? new Cost { Mana = CurrentFace.ManaCost } : null);
+
     public bool HasKeyword(string k) =>
         (!LostAbilities && CurrentFace.KeywordNames.Contains(k)) || (TempKeywords?.Contains(k) ?? false) || (StaticKeywords?.Contains(k) ?? false);
 
@@ -178,7 +184,7 @@ public sealed class Card
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
         NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
-        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, PaidOptional = PaidOptional, ExiledWith = ExiledWith, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
+        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PaidOptional = PaidOptional, ExiledWith = ExiledWith, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
@@ -202,6 +208,11 @@ public sealed class Player
     public int StaticLandDrops { get; set; }
     /// <summary>Maximum hand size set by continuous effects (Reliquary Tower = int.MaxValue).</summary>
     public int? StaticMaxHandSize { get; set; }
+    /// <summary>Raised or reduced by continuous effects (Jin-Gitaxias, Core Augur: -7), after any that set it.</summary>
+    public int StaticMaxHandSizeRaise { get; set; }
+    /// <summary>The most cards this player keeps at cleanup.</summary>
+    public int MaxHandSizeWith(int normal) =>
+        (StaticMaxHandSize ?? normal) is var size && size == int.MaxValue ? size : Math.Max(0, size + StaticMaxHandSizeRaise);
     public bool Lost { get; set; }
     public string? LossReason { get; set; }
     /// <summary>Goldfish opponents have no real cards: just a library size that milling reduces.</summary>
@@ -234,7 +245,7 @@ public sealed class Player
     public Player Clone() => new()
     {
         Index = Index, Life = Life, Poison = Poison, Pool = Pool, LandsPlayedThisTurn = LandsPlayedThisTurn,
-        LandDropsPerTurn = LandDropsPerTurn, StaticLandDrops = StaticLandDrops, StaticMaxHandSize = StaticMaxHandSize, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary, AbstractHand = AbstractHand,
+        LandDropsPerTurn = LandDropsPerTurn, StaticLandDrops = StaticLandDrops, StaticMaxHandSize = StaticMaxHandSize, StaticMaxHandSizeRaise = StaticMaxHandSizeRaise, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary, AbstractHand = AbstractHand,
         IsGoldfish = IsGoldfish, CommanderDamageTaken = new Dictionary<int, int>(CommanderDamageTaken),
         LifePaidTotal = LifePaidTotal, DrewFromEmpty = DrewFromEmpty, KnownTop = KnownTop, CityBlessing = CityBlessing,
         Library = new List<int>(Library), Hand = new List<int>(Hand), Graveyard = new List<int>(Graveyard),
@@ -306,6 +317,10 @@ public sealed class TurnInfo
     public List<(int CardId, int Controller)> ControlUntilEot { get; set; } = new();
     /// <summary>Extra phases to run after a step: (after which step, the steps to run).</summary>
     public List<(Step After, Step[] Steps)> ExtraPhases { get; set; } = new();
+    /// <summary>Creatures that attacked this turn, over all combats.</summary>
+    public int AttackersDeclared { get; set; }
+    /// <summary>The player this turn's attackers attack, once they're declared.</summary>
+    public int? DefendingPlayer { get; set; }
     /// <summary>Combat phases so far this turn.</summary>
     public int Combats { get; set; }
     /// <summary>Life each player gained this turn.</summary>
@@ -325,7 +340,7 @@ public sealed class TurnInfo
     public TurnInfo Clone() => new()
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
-        ExtraPhases = new(ExtraPhases), Combats = Combats,
+        ExtraPhases = new(ExtraPhases), Combats = Combats, AttackersDeclared = AttackersDeclared, DefendingPlayer = DefendingPlayer,
         CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
     };
 }

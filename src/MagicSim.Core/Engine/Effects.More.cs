@@ -109,12 +109,13 @@ sealed class ChangeZoneAllEffect : Effect
     public override string Api => "ChangeZoneAll";
     public override IReadOnlySet<string> Params { get; } = P(
         "Origin", "Destination", "ChangeType", "Defined", "Shuffle", "LibraryPosition", "Tapped", "RememberChanged", "RandomOrder",
-        "UseAllOriginZones");
+        "UseAllOriginZones", "GainControl");
 
     private static readonly HashSet<string> Zones = new() { "Library", "Hand", "Battlefield", "Graveyard", "Exile" };
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
+        if (ab["GainControl"] is { } gc && (gc != "True" || ab["Destination"] != "Battlefield")) ctx.Need("ChangeZoneAll.GainControl:" + ab["Destination"]);
         foreach (var key in new[] { "Origin", "Destination" })
             if (ab[key] is not { } z || !z.Split(',').All(s => Zones.Contains(s.Trim()))) ctx.Need($"ChangeZoneAll.{key}:{ab[key]}");
         if (ab["ChangeType"] is { } ct) Filter.Parse(ct, ctx);
@@ -142,6 +143,8 @@ sealed class ChangeZoneAllEffect : Effect
         var tapped = ab["Tapped"] == "True";
         foreach (var id in cards)
         {
+            // "Put all creature cards from all graveyards onto the battlefield under your control."
+            if (ab["GainControl"] == "True" && x.S[id].Zone != Zone.Battlefield) x.S[id].Controller = x.Controller;
             x.Game.MoveTo(x.S[id], dest, position, tapped);
             if (ab["RememberChanged"] == "True") (x.Host.Remembered ??= new()).Add(id);
         }
@@ -787,7 +790,9 @@ sealed class TapOrUntapAllEffect : Effect
 sealed class PeekAndRevealEffect : Effect
 {
     public override string Api => "PeekAndReveal";
-    public override IReadOnlySet<string> Params { get; } = P("PeekAmount", "NoReveal", "RememberPeeked", "Defined", "RevealValid", "RememberRevealed");
+    public override IReadOnlySet<string> Params { get; } = P("PeekAmount", "NoReveal", "RememberPeeked", "Defined", "RevealValid", "RememberRevealed",
+        // "Reveal" without looking first: the same to a goldfish.
+        "NoPeek");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {

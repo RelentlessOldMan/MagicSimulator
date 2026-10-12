@@ -107,6 +107,8 @@ public sealed class Filter
             "ActivePlayerCtrl" => (c, pl, x) => c is not null ? c.Controller == x.S.ActivePlayer : pl == x.S.ActivePlayer,
             "ChosenCtrl" => (c, pl, x) => c is not null ? c.Controller == x.Host.ChosenPlayer : pl is not null && pl == x.Host.ChosenPlayer,
             "Chosen" => (c, pl, x) => c is null && pl is not null && pl == x.Host.ChosenPlayer,
+            // The controller of the creature this Aura enchants (Dance of the Dead's upkeep).
+            "EnchantedController" => (c, pl, x) => c is null && pl is not null && x.Host.AttachedTo >= 0 && pl == x.S[x.Host.AttachedTo].Controller,
             "YouDontCtrl" => (c, pl, x) => c is not null && c.Controller != x.Controller,
             "Opponent" => (c, pl, x) => pl is not null && pl != x.Controller,
             "You" => (c, pl, x) => pl == x.Controller,
@@ -372,7 +374,7 @@ public sealed class Amount
             if (prop is null) return Const(0);
             return dp.Groups[1].Value switch
             {
-                "You" => new(core, x => prop(x.Controller, x)),
+                "You" or "PlayerCountPropertyYou" => new(core, x => prop(x.Controller, x)),
                 "TriggeredTarget" or "TriggeredPlayer" => new(core, x => x.Item.TriggeredPlayer is { } tp ? prop(tp, x) : 0),
                 _ => new(core, x => Defined.Players("Targeted", x) is [var first, ..] ? prop(first, x) : 0),
             };
@@ -429,6 +431,8 @@ public sealed class Amount
             case "YourStartingLife": return new(core, x => x.Game.Settings.StartingLife);
             case "RememberedSize": return new(core, x => (x.Host.Remembered?.Count ?? 0) + x.Host.RememberedUnknown);
             case "ThisTurnCast" when arg.Length == 0: return new(core, x => x.S.ThisTurn.SpellsCast);
+            // "Raid": how many creatures attacked this turn.
+            case "AttackersDeclared": return new(core, x => x.S.ThisTurn.AttackersDeclared);
             case "StormCount": return new(core, x => Math.Max(0, x.S.ThisTurn.SpellsCast - 1));
             case "InYourLibrary": return new(core, x => x.S.Players[x.Controller].Library.Count);
             case "Converge": return new(core, x => x.Host.ColorsSpent);
@@ -496,7 +500,7 @@ public sealed class Amount
     }
 
     private static readonly Regex PlayerCountRx = new(@"^PlayerCount(Players|Opponents|RegisteredOpponents)\$(Amount|Highest|Lowest)?(.*)$", RegexOptions.Compiled);
-    private static readonly Regex DefinedPlayerRx = new(@"^(TargetedPlayer|You|TriggeredTarget|TriggeredPlayer)\$(.+)$", RegexOptions.Compiled);
+    private static readonly Regex DefinedPlayerRx = new(@"^(TargetedPlayer|You|TriggeredTarget|TriggeredPlayer|PlayerCountPropertyYou)\$(.+)$", RegexOptions.Compiled);
 
     /// <summary>"PlayerCountOpponents$Amount", "PlayerCountPlayers$HighestValidGraveyard Card.YouOwn": over a group of players, how many, the most, the least, or the total.</summary>
     private static Amount PlayerCountAmount(string core, Match m, CompileContext ctx)
@@ -530,6 +534,7 @@ public sealed class Amount
             case "PoisonCounters" or "Counters.Poison": return (p, x) => x.S.Players[p].Poison;
             case "LifeLostThisTurn": return (p, x) => x.S.ThisTurn.LifeLost.GetValueOrDefault(p);
             case "CardsDiscardedThisTurn": return (p, x) => x.S.ThisTurn.CardsDiscarded.GetValueOrDefault(p);
+            case "LandsPlayed": return (p, x) => x.S.Players[p].LandsPlayedThisTurn;
         }
         var space = text.IndexOf(' ');
         if (text.StartsWith("Valid", StringComparison.Ordinal) && space > 0)
@@ -608,7 +613,7 @@ public static class Defined
     {
         "You", "Player", "Opponent", "Targeted", "TargetedPlayer", "ParentTarget", "TargetedController", "Player.Opponent",
         "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner", "ChosenPlayer", "Remembered", "TriggeredActivator",
-        "TriggeredCardOwner", "TriggeredSourceController",
+        "TriggeredCardOwner", "TriggeredSourceController", "TriggeredDefendingPlayer",
     };
 
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
@@ -616,7 +621,7 @@ public static class Defined
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
         "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards",
         "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
-        "ReplacedCard", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard", "Parent",
+        "ReplacedCard", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard", "Parent", "DirectRemembered",
     };
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
@@ -651,7 +656,7 @@ public static class Defined
             "ChosenPlayer" => x.Host.ChosenPlayer is { } cp ? new() { cp } : new(),
             "Remembered" => x.Item.IteratedPlayer is { } ip ? new() { ip } : new(),
             "TargetedOwner" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Owner).Take(1).ToList(),
-            "TriggeredTarget" or "TriggeredPlayer" or "TriggeredActivator" => x.Item.TriggeredPlayer is { } tp ? new() { tp } : new(),
+            "TriggeredTarget" or "TriggeredPlayer" or "TriggeredActivator" or "TriggeredDefendingPlayer" => x.Item.TriggeredPlayer is { } tp ? new() { tp } : new(),
             var f when f.StartsWith("Player.", StringComparison.Ordinal) =>
                 players.Where(p => !p.Lost && Effect.FilterFor(x.SVarFace, f).MatchesPlayer(p.Index, x)).Select(p => p.Index).ToList(),
             _ => new() { x.Controller },
@@ -672,6 +677,8 @@ public static class Defined
             "ParentTarget" => x.ParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value).ToList(),
             "Remembered" or "RememberedLKI" or "RememberedCard" => x.Host.Remembered?.ToList() ?? new(),
             "DelayTriggerRemembered" or "DelayTriggerRememberedLKI" => x.Item.DelayRemembered?.ToList() ?? new(),
+            // What this object itself remembers: a delayed trigger's own objects, else its card's.
+            "DirectRemembered" => (x.Item.DelayRemembered ?? x.Host.Remembered)?.ToList() ?? new(),
             "TriggeredCard" or "TriggeredCardLKICopy" or "TriggeredNewCardLKICopy" or "TriggeredAttacker" or "TriggeredAttackerLKICopy" =>
                 x.Item.TriggeredCardId is { } id ? new() { id } : new(),
             "TriggeredSource" or "TriggeredSourceLKICopy" => x.Item.TriggeredSourceId is { } ts ? new() { ts } : new(),

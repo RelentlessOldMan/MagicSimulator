@@ -106,6 +106,54 @@ sealed class RepeatEachEffect : Effect
     }
 }
 
+/// <summary>
+/// "An opponent separates those cards into two piles. Put one pile into your hand and the other into your graveyard"
+/// (Fact or Fiction): ChosenPile$ runs with the chosen pile remembered, UnchosenPile$ with the other. A goldfish
+/// opponent separates the card with the highest mana value from the rest; when you separate, you choose any pile.
+/// </summary>
+sealed class TwoPilesEffect : Effect
+{
+    public override string Api => "TwoPiles";
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "DefinedCards", "Separator", "Chooser", "ChosenPile", "UnchosenPile", "AILogic");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Defined"] is { } d && d != "You") ctx.Need("TwoPiles.Defined:" + d);
+        if (ab["Chooser"] is { } ch && ch != "You") ctx.Need("TwoPiles.Chooser:" + ch);
+        if (ab["Separator"] is { } sep && sep is not ("You" or "Opponent")) ctx.Need("TwoPiles.Separator:" + sep);
+        if (ab["DefinedCards"] is not { } dc) ctx.Need("TwoPiles:NoDefinedCards");
+        else Defined.ValidateCards(dc, ctx);
+        if (ab["ChosenPile"] is not null && CardCompiler.CompileSideChain(ab, "ChosenPile", ctx) is null) ctx.Need("TwoPiles:NoChosenPile");
+        if (ab["UnchosenPile"] is not null && CardCompiler.CompileSideChain(ab, "UnchosenPile", ctx) is null) ctx.Need("TwoPiles:NoUnchosenPile");
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var ab = x.Ability;
+        var cards = Defined.Cards(ab["DefinedCards"], x);
+        if (cards.Count == 0) return;
+        List<int> chosen;
+        if (ab["Separator"] == "Opponent")
+        {
+            var alone = cards.OrderByDescending(id => x.S[id].Types.Is(CardType.Land) ? -1 : x.S[id].CurrentFace.ManaCost.ManaValue).First();
+            var rest = cards.Where(id => id != alone).ToList();
+            string Pile(IEnumerable<int> ids) => ids.Any() ? string.Join(", ", ids.Select(id => x.S[id].Name)) : "nothing";
+            var pick = x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, new[] { Pile(new[] { alone }), Pile(rest) });
+            chosen = pick == 0 ? new() { alone } : rest;
+        }
+        else chosen = x.Game.Decider.ChooseCards(x.Game, x.Controller, Choice.ChooseFromRevealed, x.Host, cards, 0, cards.Count);
+        var unchosen = cards.Where(id => !chosen.Contains(id)).ToList();
+        x.Game.Note($"  piles: take {string.Join(", ", chosen.Select(id => x.S[id].Name))}");
+        foreach (var (key, pile) in new[] { ("ChosenPile", chosen), ("UnchosenPile", unchosen) })
+        {
+            if (ab.SideChains?.GetValueOrDefault(key) is not { } chain) continue;
+            x.Host.Remembered = pile.Count > 0 ? new List<int>(pile) : null;
+            x.Game.RunSideChain(x, chain);
+            if (x.S.GameOver) return;
+        }
+    }
+}
+
 /// <summary>"When you do, …" (reflexive trigger, rule 603.12): optionally pays Cost$, then triggers Execute$ at once.</summary>
 sealed class ImmediateTriggerEffect : Effect
 {

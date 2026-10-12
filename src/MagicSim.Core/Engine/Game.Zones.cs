@@ -24,6 +24,8 @@ public sealed partial class Game
                 break;
             default: State.ZoneList(c.Owner, c.Zone).Remove(c.Id); break;
         }
+        // What an effect gave a card in the graveyard (flashback) doesn't follow it out.
+        if (c.Zone == Zone.Graveyard) c.TempKeywords = null;
     }
 
     /// <summary>
@@ -60,6 +62,7 @@ public sealed partial class Game
             c.ClassLevel = 1;
             c.Controller = c.Owner;
             c.RegenShields = 0;
+            c.ExileIfLeaves = false;
             c.PaidOptional = null;
             c.Escaped = false;
             c.ColorsSpent = 0;

@@ -114,7 +114,7 @@ public static class Statics
     private static readonly HashSet<string> ContinuousParams = new(StringComparer.Ordinal)
     {
         "Affected", "AffectedDefined", "AddPower", "AddToughness", "AddKeyword", "SetPower", "SetToughness",
-        "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize", "MayPlay", "MayPlayWithoutManaCost",
+        "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize", "RaiseMaxHandSize", "MayPlay", "MayPlayWithoutManaCost",
         "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
         "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost", "MayPlayIgnoreType",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
@@ -235,6 +235,7 @@ public static class Statics
         foreach (var key in new[] { "AddPower", "AddToughness", "SetPower", "SetToughness", "AdjustLandPlays" })
             if (s[key] is { } v && v != "Unlimited") Amount.Parse(v, ctx);
         if (s["SetMaxHandSize"] is { } mh && mh != "Unlimited") Amount.Parse(mh, ctx);
+        if (s["RaiseMaxHandSize"] is { } rmh) Amount.Parse(rmh, ctx);
         if (s["AddKeyword"] is { } kws)
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
                 if (!Keywords.Supported.Contains(ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + ForgeRequirements.KeywordName(k));
@@ -318,7 +319,7 @@ public static class Statics
         g.StaticsApplied = active.Count > 0 || animated.Count > 0 || leveled.Count > 0;
 
         foreach (var c in s.BattlefieldCards) c.ClearStaticEffects();
-        foreach (var p in s.Players) { p.StaticLandDrops = 0; p.StaticMaxHandSize = null; }
+        foreach (var p in s.Players) { p.StaticLandDrops = 0; p.StaticMaxHandSize = null; p.StaticMaxHandSizeRaise = 0; }
 
         var holding = active.Where(a => Presence.Hold(a.Static.P, a.X)).ToList();
         // What an effect applies to is fixed when it first applies (rule 613.6): an effect that makes
@@ -433,11 +434,12 @@ public static class Statics
                     card.StaticKeywords ??= new HashSet<string>(StringComparer.Ordinal);
                     card.StaticKeywords.UnionWith(keywords);
                 }
-            if (st["AdjustLandPlays"] is null && st["SetMaxHandSize"] is null) continue;
+            if (st["AdjustLandPlays"] is null && st["SetMaxHandSize"] is null && st["RaiseMaxHandSize"] is null) continue;
             foreach (var p in AffectedPlayers(g, st, x))
             {
                 if (st["AdjustLandPlays"] is { } lp) p.StaticLandDrops += lp == "Unlimited" ? 1000 : Effect.EvalAmount(x, lp);
                 if (st["SetMaxHandSize"] is { } mh) p.StaticMaxHandSize = mh == "Unlimited" ? int.MaxValue : Effect.EvalAmount(x, mh);
+                if (st["RaiseMaxHandSize"] is { } rmh) p.StaticMaxHandSizeRaise += Effect.EvalAmount(x, rmh);
             }
         }
     }
