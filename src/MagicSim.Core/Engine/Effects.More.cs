@@ -20,7 +20,7 @@ sealed class TokenEffect : Effect
     public override string Api => "Token";
     public override IReadOnlySet<string> Params { get; } = P(
         "TokenScript", "TokenOwner", "TokenAmount", "TokenTapped", "RememberTokens", "TokenPower", "TokenToughness",
-        "TokenAttacking", "PumpKeywords", "PumpDuration", "AtEOT");
+        "TokenAttacking", "PumpKeywords", "PumpDuration", "AtEOT", "AttachedTo");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -43,6 +43,7 @@ sealed class TokenEffect : Effect
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
                 if (!Keywords.Supported.Contains(Forge.ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + k);
         if (ab["AtEOT"] is { } eot && eot is not ("Exile" or "Sacrifice")) ctx.Need("Token.AtEOT:" + eot);
+        Defined.ValidateCards(ab["AttachedTo"], ctx);
     }
 
     public override void Resolve(EffectContext x)
@@ -65,6 +66,9 @@ sealed class TokenEffect : Effect
                     }
                     if (ab["TokenAttacking"] == "True" && x.S.Step == Step.DeclareAttackers) x.S.Attackers.Add(token.Id);
                     if (ab["AtEOT"] is { } eot) x.S.ThisTurn.AtEndStep.Add((token.Id, eot));
+                    // An Aura token created attached to something (a Role on a creature).
+                    if (ab["AttachedTo"] is { } at && Defined.Cards(at, x).Select(id => x.S[id]).FirstOrDefault(c => c.Zone == Zone.Battlefield) is { } host)
+                        token.AttachedTo = host.Id;
                 }
     }
 }
@@ -90,6 +94,8 @@ sealed class AttachEffect : Effect
         {
             var obj = x.S[id];
             if (obj.Zone != Zone.Battlefield || obj.Id == to.Id) continue;
+            if (obj.AttachedTo >= 0 && obj.AttachedTo != to.Id)
+                x.Game.Fire(new TriggerEvent(TriggerMode.Unattached, CardId: obj.Id, TargetCardId: obj.AttachedTo));
             obj.AttachedTo = to.Id;
             x.Game.Note($"  {obj.Name} attached to {to.Name}");
         }
@@ -183,6 +189,48 @@ sealed class SacrificeAllEffect : Effect
             x.Game.Sacrifice(c);
             if (x.Ability["RememberSacrificed"] == "True") (x.Host.Remembered ??= new()).Add(c.Id);
         }
+    }
+}
+
+/// <summary>"Choose a card …": each defined player chooses cards from a zone; later effects use them as ChosenCard.</summary>
+sealed class ChooseCardEffect : Effect
+{
+    public override string Api => "ChooseCard";
+    public override IReadOnlySet<string> Params { get; } = P(
+        "Choices", "Defined", "ChoiceZone", "Amount", "MinAmount", "Mandatory", "RememberChosen", "ImprintChosen", "AtRandom", "Reveal", "ChoiceDesc");
+
+    private static readonly HashSet<string> Zones = new(StringComparer.Ordinal) { "Battlefield", "Hand", "Graveyard", "Exile", "Library" };
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Choices"] is { } ch) Filter.Parse(ch, ctx); else ctx.Need("ChooseCard:NoChoices");
+        Defined.ValidatePlayers(ab["Defined"], ctx);
+        if (ab["ChoiceZone"] is { } z && !z.Split(',').All(w => Zones.Contains(w.Trim()))) ctx.Need("ChooseCard.ChoiceZone:" + z);
+        ValidateAmount(ab, "Amount", ctx);
+        ValidateAmount(ab, "MinAmount", ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var ab = x.Ability;
+        var filter = FilterFor(x.SVarFace, ab["Choices"]!);
+        var zones = (ab["ChoiceZone"] ?? "Battlefield").Split(',').Select(w => Enum.Parse<Zone>(w.Trim())).ToList();
+        var candidates = zones.SelectMany(z => x.Game.CardsIn(z)).Where(c => filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
+        var n = Math.Min(Amount(x, ab["Amount"], 1), candidates.Count);
+        var min = ab["MinAmount"] is { } mn ? Math.Min(Amount(x, mn, 0), n) : ab["Mandatory"] == "True" ? n : 0;
+        x.Host.ChosenCards = new List<int>();
+        foreach (var p in Defined.Players(ab["Defined"], x))
+        {
+            var left = candidates.Where(id => !x.Host.ChosenCards.Contains(id)).ToList();
+            List<int> chosen;
+            if (ab["AtRandom"] == "True") { x.S.Rng.Shuffle(left); chosen = left.Take(n).ToList(); }
+            else if (x.S.Players[p].IsGoldfish) chosen = left.Take(min).ToList();
+            else chosen = x.Game.Decider.ChooseCards(x.Game, p, Choice.Generic, x.Host, left, Math.Min(min, left.Count), Math.Min(n, left.Count));
+            x.Host.ChosenCards.AddRange(chosen);
+        }
+        if (ab["RememberChosen"] == "True") (x.Host.Remembered ??= new()).AddRange(x.Host.ChosenCards);
+        if (ab["ImprintChosen"] == "True") (x.Host.Imprinted ??= new()).AddRange(x.Host.ChosenCards);
+        foreach (var id in x.Host.ChosenCards) x.Game.Note($"  chose {x.S[id].Name}");
     }
 }
 

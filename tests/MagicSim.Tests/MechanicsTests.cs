@@ -346,6 +346,36 @@ public class MechanicsTests
         "SVar:TrigSerfs:DB$ Token | TokenAmount$ 2 | TokenScript$ b_0_1_serf | TokenOwner$ You\n" +
         "T:Mode$ ChangesZone | Origin$ Battlefield | Destination$ Any | ValidCard$ Card.Self | Execute$ TrigExile\n" +
         "SVar:TrigExile:DB$ ChangeZoneAll | ChangeType$ Serf.token | Origin$ Battlefield | Destination$ Exile\n",
+        "Name:Specter\nManaCost:0\nTypes:Creature Horror\nPT:1/1\nK:Haste\nK:Infect\n" +
+        "T:Mode$ DamageDone | ValidSource$ Card.Self | ValidTarget$ Player | CombatDamage$ True | Execute$ TrigGain | TriggerZones$ Battlefield\n" +
+        "SVar:TrigGain:DB$ GainLife | Defined$ You | LifeAmount$ X\nSVar:X:TriggeredTarget$Counters.Poison\n",
+        "Name:Colossus\nManaCost:3\nTypes:Artifact Creature Golem\nPT:4/4\n" +
+        "R:Event$ Moved | Destination$ Graveyard | ValidCard$ Card.Self | ReplaceWith$ DBShuffle\n" +
+        "SVar:DBShuffle:DB$ ChangeZone | Hidden$ True | Origin$ All | Destination$ Library | Defined$ ReplacedCard | Reveal$ True | Shuffle$ True\n",
+        "Name:Graft\nManaCost:0\nTypes:Artifact Equipment\nK:Equip:0\n" +
+        "T:Mode$ Unattached | ValidAttachment$ Card.Self | ValidObject$ Permanent | Execute$ TrigSac\n" +
+        "SVar:TrigSac:DB$ SacrificeAll | Defined$ TriggeredObjectLKICopy | Controller$ You\n",
+        "Name:Swipe\nManaCost:0\nTypes:Instant\nK:Rebound\nA:SP$ GainLife | Defined$ You | LifeAmount$ 2\n",
+        "Name:Stamina\nManaCost:0\nTypes:Instant\nA:SP$ Pump | ValidTgts$ Creature | NumAtt$ +2 | SubAbility$ DBAnimate\n" +
+        "SVar:DBAnimate:DB$ Animate | Triggers$ Back | Defined$ ParentTarget\n" +
+        "SVar:Back:Mode$ ChangesZone | Origin$ Battlefield | Destination$ Graveyard | ValidCard$ Card.Self | Execute$ TrigBack | TriggerController$ TriggeredCardController\n" +
+        "SVar:TrigBack:DB$ ChangeZone | Origin$ Graveyard | Destination$ Battlefield | Tapped$ True | Defined$ TriggeredNewCardLKICopy\n",
+        "Name:Undead\nManaCost:0\nTypes:Instant\nA:SP$ Animate | Triggers$ Back | ValidTgts$ Creature.YouCtrl\n" +
+        "SVar:Back:Mode$ ChangesZone | Origin$ Battlefield | Destination$ Graveyard | ValidCard$ Card.Self | Execute$ TrigBack | TriggerController$ TriggeredCardController\n" +
+        "SVar:TrigBack:DB$ ChangeZone | Origin$ Graveyard | Destination$ Battlefield | Defined$ TriggeredNewCardLKICopy | Tapped$ True | SubAbility$ DBRole\n" +
+        "SVar:DBRole:DB$ Token | TokenScript$ role_wicked | TokenOwner$ You | AttachedTo$ TriggeredNewCardLKICopy\n",
+        "Name:Truths\nManaCost:W B\nTypes:Sorcery\nA:SP$ Draw | NumCards$ X | SubAbility$ DBLose\nSVar:DBLose:DB$ LoseLife | LifeAmount$ X\nSVar:X:Count$Converge\n",
+        "Name:Ghast\nManaCost:0\nTypes:Creature Spirit\nPT:2/2\nK:Extort\n",
+        "Name:Picker\nManaCost:0\nTypes:Sorcery\n" +
+        "A:SP$ ChooseCard | Defined$ You | Choices$ Creature.YouOwn | ChoiceZone$ Graveyard | Amount$ 1 | Mandatory$ True | SubAbility$ DBReturn\n" +
+        "SVar:DBReturn:DB$ ChangeZone | Defined$ ChosenCard | Origin$ Graveyard | Destination$ Hand | SubAbility$ DBClean\n" +
+        "SVar:DBClean:DB$ Cleanup | ClearChosenCard$ True\n",
+        "Name:Nyx\nManaCost:no cost\nTypes:Legendary Land\n" +
+        "A:AB$ ChooseColor | Cost$ T | SubAbility$ DBMana\nSVar:DBMana:DB$ Mana | Produced$ Chosen | Amount$ X | SubAbility$ DBClean\n" +
+        "SVar:DBClean:DB$ Cleanup | ClearChosenColor$ True\nSVar:X:Count$Devotion.Chosen\n",
+        "Name:Lord\nManaCost:0\nTypes:Legendary Creature Human\nPT:1/1\n",
+        "Name:Mire\nManaCost:no cost\nTypes:Legendary Land\n" +
+        "A:AB$ Draw | Cost$ 3 B Discard<1/CARDNAME> | ActivationZone$ Hand | NumCards$ 1 | ReduceCost$ Y\nSVar:Y:Count$Valid Creature.Legendary+YouCtrl\n",
         "Name:Banner\nManaCost:0\nTypes:Artifact\nK:ETBReplacement:Other:ChooseCT\n" +
         "SVar:ChooseCT:DB$ ChooseType | Defined$ You | Type$ Creature\n" +
         "S:Mode$ Continuous | Affected$ Creature.ChosenType+YouCtrl | AddPower$ 1\n",
@@ -359,6 +389,8 @@ public class MechanicsTests
         ["b_0_0_orc_army"] = "Name:Orc Army Token\nManaCost:no cost\nColors:black\nTypes:Creature Orc Army\nPT:0/0\n",
         ["r_1_1_warrior"] = "Name:Warrior Token\nManaCost:no cost\nColors:red\nTypes:Creature Warrior\nPT:1/1\n",
         ["c_1_1_a_servo"] = "Name:Servo Token\nManaCost:no cost\nTypes:Artifact Creature Servo\nPT:1/1\n",
+        ["role_wicked"] = "Name:Wicked Role\nManaCost:no cost\nTypes:Enchantment Aura Role\nK:Enchant:Creature\n" +
+            "S:Mode$ Continuous | Affected$ Creature.EnchantedBy | AddPower$ 1 | AddToughness$ 1\n",
         ["b_0_1_serf"] = "Name:Serf Token\nManaCost:no cost\nColors:black\nTypes:Creature Serf\nPT:0/1\n",
     };
 
@@ -2118,5 +2150,134 @@ public class MechanicsTests
         g.Destroy(OnBattlefield(g, "Autocrat"), regenerate: false);
         ResolveAll(g);
         Assert.Equal(0, g.State.BattlefieldCards.Count(c => c.Name == "Serf Token"));
+    }
+
+    [Fact]
+    public void AmountAboutTheDamagedPlayer()
+    {
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Specter" }, library: new[] { "Filler", "Filler" });
+        g.ResumeTurn();
+        Assert.Equal(41, g.State.Players[Game.Me].Life);
+        Assert.Equal(1, g.State.Players.Max(p => p.Poison));
+    }
+
+    [Fact]
+    public void ShuffledIntoLibraryInsteadOfGraveyard()
+    {
+        var g = Setup(new[] { "Colossus" }, battlefield: new[] { "Colossus" }, library: new[] { "Filler" });
+        g.Discard(g.State[InHand(g, "Colossus")]);
+        g.Destroy(OnBattlefield(g, "Colossus"), regenerate: false);
+        Assert.All(g.State.Cards.Where(c => c.Name == "Colossus"), c => Assert.Equal(Zone.Library, c.Zone));
+        Assert.Equal(3, g.State.Players[Game.Me].Library.Count);
+    }
+
+    [Fact]
+    public void UnattachedTriggerSacrificesTheOldCreature()
+    {
+        var target = "Bear";
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Target ? TestDecider.Named(game, dec, target) : null };
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Graft", "Bear", "Ogre" }, decider: d);
+        var graft = OnBattlefield(g, "Graft");
+        g.ActivateAbility(graft, 0);
+        ResolveAll(g);
+        Assert.Equal(OnBattlefield(g, "Bear").Id, graft.AttachedTo);
+        target = "Ogre";
+        g.ActivateAbility(graft, 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Graveyard, g.State.Cards.First(c => c.Name == "Bear").Zone);
+        Assert.Equal(OnBattlefield(g, "Ogre").Id, graft.AttachedTo);
+    }
+
+    [Fact]
+    public void ReboundCastsAgainNextUpkeep()
+    {
+        var g = Setup(new[] { "Swipe" }, library: new[] { "Filler", "Filler" });
+        var swipe = g.State[InHand(g, "Swipe")];
+        g.CastSpell(swipe, 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Exile, swipe.Zone);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+        g.RunTurn();
+        Assert.Equal(44, g.State.Players[Game.Me].Life);
+        Assert.Equal(Zone.Graveyard, swipe.Zone);
+    }
+
+    [Fact]
+    public void GrantedDiesTriggerStillWorks()
+    {
+        var g = Setup(new[] { "Stamina" }, battlefield: new[] { "Bear" });
+        g.CastSpell(g.State[InHand(g, "Stamina")], 0);
+        ResolveAll(g);
+        var bear = OnBattlefield(g, "Bear");
+        g.Destroy(bear, regenerate: false);
+        ResolveAll(g);
+        Assert.Equal(Zone.Battlefield, bear.Zone);
+        Assert.True(bear.Tapped);
+    }
+
+    [Fact]
+    public void RoleTokenCreatedAttached()
+    {
+        var g = Setup(new[] { "Undead" }, battlefield: new[] { "Bear" });
+        g.CastSpell(g.State[InHand(g, "Undead")], 0);
+        ResolveAll(g);
+        var bear = OnBattlefield(g, "Bear");
+        g.Destroy(bear, regenerate: false);
+        ResolveAll(g);
+        g.CheckStateBasedActions();
+        Assert.Equal(Zone.Battlefield, bear.Zone);
+        Assert.Equal(bear.Id, OnBattlefield(g, "Wicked Role").AttachedTo);
+        Assert.Equal(3, bear.Power);
+    }
+
+    [Fact]
+    public void ConvergeCountsColorsSpent()
+    {
+        var g = Setup(new[] { "Truths" }, battlefield: new[] { "Plain", "Bog" }, library: new[] { "Filler", "Filler", "Filler" });
+        g.CastSpell(g.State[InHand(g, "Truths")], 0);
+        ResolveAll(g);
+        Assert.Equal(38, g.State.Players[Game.Me].Life);
+        Assert.Equal(2, g.State.Players[Game.Me].Hand.Count);
+    }
+
+    [Fact]
+    public void ExtortDrainsEachOpponent()
+    {
+        var g = Setup(new[] { "Blueberry" }, battlefield: new[] { "Ghast", "Bog" }, library: new[] { "Filler" });
+        g.State.Players[Game.Me].Pool.Add(ManaColor.U);
+        g.CastSpell(g.State[InHand(g, "Blueberry")], 0);
+        ResolveAll(g);
+        Assert.Equal(42, g.State.Players[Game.Me].Life);
+        Assert.Equal(39, g.State.Players[1].Life);
+        Assert.True(OnBattlefield(g, "Bog").Tapped);
+    }
+
+    [Fact]
+    public void ChooseACardThenUseIt()
+    {
+        var g = Setup(new[] { "Picker", "Bear" });
+        g.MoveTo(g.State[InHand(g, "Bear")], Zone.Graveyard);
+        g.CastSpell(g.State[InHand(g, "Picker")], 0);
+        ResolveAll(g);
+        Assert.Equal(Zone.Hand, g.State.Cards.First(c => c.Name == "Bear").Zone);
+    }
+
+    [Fact]
+    public void DevotionToTheChosenColor()
+    {
+        var d = new TestDecider { Choose = (game, dec) => dec.Kind == DecisionKind.Color ? dec.Options.ToList().IndexOf(ManaColor.B) : null };
+        var g = Setup(Array.Empty<string>(), battlefield: new[] { "Nyx", "Sneak", "Traitor" }, decider: d);
+        g.ActivateAbility(OnBattlefield(g, "Nyx"), 0);
+        ResolveAll(g);
+        Assert.Equal(3, g.State.Players[Game.Me].Pool[ManaColor.B]);
+    }
+
+    [Fact]
+    public void AbilityCostsLessForEach()
+    {
+        var g = Setup(new[] { "Mire" }, battlefield: new[] { "Bog", "Bog", "Bog", "Lord" }, library: new[] { "Filler" });
+        Assert.Contains(g.LegalActions(Game.Me), a => a is GameAction.Activate);
+        g = Setup(new[] { "Mire" }, battlefield: new[] { "Bog", "Bog", "Bog" }, library: new[] { "Filler" });
+        Assert.DoesNotContain(g.LegalActions(Game.Me), a => a is GameAction.Activate);
     }
 }

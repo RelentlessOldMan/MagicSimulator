@@ -64,7 +64,7 @@ public static class Effects
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
         new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
-        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(),
+        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ChooseCardEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -503,10 +503,12 @@ sealed class RevealHandEffect : Effect
 sealed class CleanupEffect : Effect
 {
     public override string Api => "Cleanup";
-    public override IReadOnlySet<string> Params { get; } = P("ClearRemembered", "ClearNamedCard", "ClearImprinted", "ClearChosenPlayer");
+    public override IReadOnlySet<string> Params { get; } = P("ClearRemembered", "ClearNamedCard", "ClearImprinted", "ClearChosenPlayer", "ClearChosenColor", "ClearChosenCard");
 
     public override void Resolve(EffectContext x)
     {
+        if (x.Ability["ClearChosenColor"] == "True") x.Host.ChosenColor = null;
+        if (x.Ability["ClearChosenCard"] == "True") x.Host.ChosenCards = null;
         if (x.Ability["ClearChosenPlayer"] == "True") x.Host.ChosenPlayer = null;
         if (x.Ability["ClearRemembered"] == "True") x.Host.Remembered = null;
         if (x.Ability["ClearImprinted"] == "True") x.Host.Imprinted = null;

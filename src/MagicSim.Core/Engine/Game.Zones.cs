@@ -34,13 +34,15 @@ public sealed partial class Game
     public void MoveTo(Card c, Zone to, int position = 0, bool tapped = false)
     {
         var from = c.Zone;
-        to = Replacements.Destination(this, c, from, to);
+        to = Replacements.Destination(this, c, from, to, out var shuffleInto);
         if (c.IsCommander && to is Zone.Graveyard or Zone.Exile) to = Zone.Command;
         RemoveFromZone(c);
 
         if (from == Zone.Battlefield)
         {
             State.ThisTurn.PermanentLeft.Add(c.Controller);
+            if (c.AttachedTo >= 0) Fire(new TriggerEvent(TriggerMode.Unattached, CardId: c.Id, TargetCardId: c.AttachedTo));
+            c.LeftTriggers = c.StaticTriggers;
             c.LeftPower = c.Power;
             c.LeftToughness = c.Toughness;
             c.LeftCounters = c.Counters;
@@ -60,6 +62,7 @@ public sealed partial class Game
             c.RegenShields = 0;
             c.PaidOptional = null;
             c.Escaped = false;
+            c.ColorsSpent = 0;
             c.ClearStaticEffects();
             State.Attackers.Remove(c.Id);
         }
@@ -105,6 +108,8 @@ public sealed partial class Game
                     var owner = State.Players[c.Owner];
                     if (position <= owner.KnownTop) owner.KnownTop++;   // we know what we put there
                 }
+                // "Shuffle it into its owner's library instead" (Blightsteel Colossus).
+                if (shuffleInto) Shuffle(c.Owner);
                 break;
             case Zone.Stack:
             case Zone.None:
@@ -503,7 +508,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);
@@ -528,11 +533,15 @@ public sealed partial class Game
         foreach (var id in sources)
         {
             var src = State[id];
-            foreach (var t in src.Triggers)
+            // A card that just left the battlefield has the triggers it had there ("when this creature dies" given by a spell).
+            var triggers = e.CardId == id && e.From == Zone.Battlefield && src.Zone != Zone.Battlefield && src.LeftTriggers is { } left ? left : src.Triggers;
+            foreach (var t in triggers)
             {
                 if (src.IsBlank || !Triggers.Matches(this, t, src, e) || !Triggers.UnderLimit(this, src, t)) continue;
                 var times = 1 + (e.Mode == TriggerMode.ChangesZone && e.CardId is { } changed ? ExtraZoneTriggers(src, "ChangesZone", new[] { (State[changed], e.From, e.To) }) : 0);
-                for (var i = 0; i < times; i++) _pending.Add(new PendingTrigger(id, t, e, src.Controller));
+                // TriggerController$ TriggeredCardController: the creature's controller, not the granter's.
+                var controller = t["TriggerController"] is not null && e.CardId is { } tcard ? State[tcard].Controller : src.Controller;
+                for (var i = 0; i < times; i++) _pending.Add(new PendingTrigger(id, t, e, controller));
             }
         }
         // Delayed triggers trigger once, then are gone (rule 603.7c).
@@ -566,6 +575,7 @@ public sealed partial class Game
                 TriggeredPlayer = pt.Event.Player, ChainTargets = ChooseChainTargets(src, exec, pt.Controller), DelayRemembered = pt.DelayRemembered,
                 TriggerAmount = pt.Event.Amount,
                 TriggeredSourceId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.CardId : null,
+                TriggeredObjectId = pt.Event.Mode == TriggerMode.Unattached ? pt.Event.TargetCardId : null,
                 Description = $"{src.Name} trigger",
             };
             // "Static" triggers (bookkeeping such as forgetting an imprinted card) happen at once, without the stack.
@@ -897,6 +907,9 @@ public sealed partial class Game
         finally { _payingFor = saved; }
     }
 
+    /// <summary>How many colors of mana paid the last cost (converge).</summary>
+    public int LastColorsSpent { get; private set; }
+
     /// <summary>Permanents sacrificed to pay the last cost paid ("Sacrificed$CardPower").</summary>
     public List<int> LastSacrificed { get; } = new();
 
@@ -909,7 +922,9 @@ public sealed partial class Game
         if (plan is null) return false;
 
         foreach (var (src, color) in plan) UseManaSource(src, color, player);
+        var before = p.Pool;
         if (!ManaPayment.TryPay(ref p.Pool, cost.Mana, x, out var phyrexianLife)) return false;
+        LastColorsSpent = ManaColors.All.Count(k => k != ManaColor.C && p.Pool[k] < before[k]);
         if (phyrexianLife > 0) PayLife(player, phyrexianLife);
 
         if (cost.Tap) Tap(source);

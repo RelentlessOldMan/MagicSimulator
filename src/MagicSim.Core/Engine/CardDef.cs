@@ -168,6 +168,8 @@ public sealed class FaceDef
     public (string Cost, bool Mega)? Morph { get; set; }
     /// <summary>What it is while face down: a nameless colorless 2/2 creature that can be turned face up.</summary>
     public FaceDef? FaceDownFace { get; set; }
+    /// <summary>Rebound: cast from hand, it's exiled and this triggers at your next upkeep (rule 702.88).</summary>
+    public TriggerDef? Rebound { get; set; }
 
     /// <summary>This face as a copy effect changes it ("except it's an artifact", "except it has haste").</summary>
     public FaceDef CopyWith(TypeLine types, int? power, int? toughness, ColorMask colors, IReadOnlyList<string> extraKeywords)
@@ -246,7 +248,7 @@ public static partial class CardCompiler
     /// <summary>Parameters any ability may have, handled by the engine rather than the effect.</summary>
     private static readonly HashSet<string> GenericParams = new(StringComparer.Ordinal)
     {
-        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "ETB", "ActivationZone", "OptionalDecider", "Activation", "ActivationGameTypes",
+        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "ETB", "ActivationZone", "OptionalDecider", "Activation", "ActivationGameTypes", "ReduceCost",
     };
 
     public static CardDef Compile(ForgeCard source, Func<string, CardDef?>? tokens = null)
@@ -534,6 +536,18 @@ public static partial class CardCompiler
                 // "{cost}, discard this: search for a card with the same mana value. Transmute only as a sorcery."
                 AddGenerated(face, ctx, $"AB$ ChangeZone | Cost$ {Part(1)} Discard<1/CARDNAME> | ActivationZone$ Hand | Origin$ Library | Destination$ Hand | ChangeType$ Card.cmcEQ{face.ManaCost.ManaValue} | ChangeNum$ 1 | SorcerySpeed$ True | SpellDescription$ Transmute");
                 return true;
+            case "Rebound":
+                // "If you cast this from your hand, exile it as it resolves. At your next upkeep, you may cast it from exile free."
+                face.SVars["__Rebound"] = "DB$ Play | Defined$ Self | WithoutManaCost$ True | Optional$ True";
+                face.Rebound = CompileTrigger(new ForgeParams("Mode$ Phase | Phase$ Upkeep | ValidPlayer$ You | Execute$ __Rebound"), ctx);
+                return true;
+            case "Extort":
+                // "Whenever you cast a spell, you may pay {W/B}. If you do, each opponent loses 1 life and you gain that much life."
+                face.SVars["__Extort"] = "AB$ LoseLife | Cost$ W/B | Defined$ Opponent | LifeAmount$ 1 | SubAbility$ __ExtortGain";
+                face.SVars["__ExtortGain"] = "DB$ GainLife | Defined$ You | LifeAmount$ __ExtortX";
+                face.SVars["__ExtortX"] = "PlayerCountOpponents$Amount";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ SpellCast | ValidActivatingPlayer$ You | TriggerZones$ Battlefield | Execute$ __Extort"), ctx));
+                return true;
             case "Morph":
             case "Megamorph":
                 // Cast face down for {3}; turn face up any time for the morph cost (rule 702.37).
@@ -779,6 +793,8 @@ public static partial class CardCompiler
         // "Activate only if …" (Activation$ Metalcraft).
         if (p["Activation"] is { } activation && !Presence.IsKnownCondition(activation)) ctx.Need("Activation:" + activation);
         if (p["UnlessResolveSubs"] is { } urs && urs != "WhenPaid") ctx.Need("UnlessResolveSubs:" + urs);
+        // "This ability costs {1} less to activate for each …"
+        if (p["ReduceCost"] is { } reduce) Amount.Parse(reduce, ctx);
         if (p["UnlessCost"] is { } unless)
         {
             ab.UnlessCost = ParseCost(unless, ctx);

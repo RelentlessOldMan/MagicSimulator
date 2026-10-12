@@ -568,8 +568,16 @@ public sealed partial class Game
         if (ab.Api == "ClassLevelUp" && c.ClassLevel != int.Parse(ab["ClassLevel"]!) - 1) return false;
         // Loyalty abilities: sorcery speed, one per planeswalker per turn (rule 606.3).
         if (ab["Planeswalker"] == "True" && (!sorcerySpeed || c.LoyaltyActivatedTurn == State.Turn)) return false;
-        if (!CanPayCost(ab.Cost, c, c.Controller, 0, excludeSourceFromMana: ab.Cost.Tap)) return false;
+        if (!CanPayCost(AbilityCost(c, ab), c, c.Controller, 0, excludeSourceFromMana: ab.Cost.Tap)) return false;
         return HasLegalTargets(c, ab);
+    }
+
+    /// <summary>An activated ability's cost, less any "costs {1} less for each …" (ReduceCost$).</summary>
+    private Cost AbilityCost(Card c, AbilityDef ab)
+    {
+        if (ab["ReduceCost"] is not { } reduce) return ab.Cost;
+        var n = Effect.EvalAmount(ContextFor(c), reduce);
+        return n <= 0 ? ab.Cost : new Cost { Mana = ab.Cost.Mana.WithExtraGeneric(-n), Tap = ab.Cost.Tap, Untap = ab.Cost.Untap, Parts = ab.Cost.Parts };
     }
 
     private bool HasLegalTargets(Card source, AbilityDef head)
@@ -673,12 +681,13 @@ public sealed partial class Game
             Id = State.NextStackId++, SourceId = c.Id, Ability = ability, Controller = player, IsSpell = true, X = x,
             ChainTargets = ChooseChainTargets(c, ability, player, x),
             Description = c.Name + (from != Zone.Graveyard ? "" : escaped ? " (escape)" : " (flashback)") + (ability.OptionalCosts is { } oc ? $" ({string.Join(", ", oc).ToLowerInvariant()})" : ""),
-            ExileAfter = from == Zone.Graveyard && !escaped || _castExileAfter, Spliced = spliced,
+            ExileAfter = from == Zone.Graveyard && !escaped || _castExileAfter, Spliced = spliced, CastFrom = from,
         };
         _payingForSpell = true;
         var paid = PayCost(cost, c, player, x, excludeSourceFromMana: true);
         _payingForSpell = false;
         if (!paid) throw new InvalidOperationException($"could not pay for {c.Name} after checking it was castable");
+        c.ColorsSpent = LastColorsSpent;
         if (LastSacrificed.Count > 0) item.Sacrificed = LastSacrificed.ToList();
         if (from == Zone.Command) c.CommandCasts++;
         c.XPaid = x;
@@ -782,12 +791,13 @@ public sealed partial class Game
     {
         var ab = c.Activated[abilityIndex];
         var player = c.Controller;
+        var cost = AbilityCost(c, ab);
         var x = 0;
-        if (HasX(ab.Cost)) x = Decider.ChooseX(this, player, c, MaxAffordableX(ab.Cost, c, player));
+        if (HasX(cost)) x = Decider.ChooseX(this, player, c, MaxAffordableX(cost, c, player));
         var targets = ChooseChainTargets(c, ab, player, x);
         if (ab["Planeswalker"] == "True") c.LoyaltyActivatedTurn = State.Turn;
         if (ab.IsCycling) Fire(new TriggerEvent(TriggerMode.Cycled, CardId: c.Id, Player: player));
-        if (!PayCost(ab.Cost, c, player, x, excludeSourceFromMana: ab.Cost.Tap))
+        if (!PayCost(cost, c, player, x, excludeSourceFromMana: ab.Cost.Tap))
             throw new InvalidOperationException($"could not pay for {c.Name}'s ability after checking it was activatable");
         var item = new StackItem
         {
@@ -926,6 +936,14 @@ public sealed partial class Game
         // Spliced cards' effects, in the order they were spliced (rule 702.47b).
         foreach (var id in item.Spliced ?? new List<int>())
             if (!State.GameOver && State[id].CurrentFace.SpellAbilities.Count > 0) RunLinks(item, State[id].CurrentFace.SpellAbilities[0]);
+        // Rebound: cast from hand, it's exiled and may be cast again at your next upkeep (rule 702.88).
+        if (item.IsSpell && source.Zone == Zone.Stack && item.CastFrom == Zone.Hand && !item.ExileAfter && source.CurrentFace.Rebound is { } rebound)
+        {
+            MoveTo(source, Zone.Exile);
+            if (source.Zone == Zone.Exile)
+                State.Delayed.Add(new DelayedTrigger(rebound, source.Id, item.Controller, new List<int>(), State.Turn, ThisTurn: false, NextTurn: true));
+            return;
+        }
         if (item.IsSpell && source.Zone == Zone.Stack)
         {
             // An Adventure cast from hand goes on an adventure: exiled, castable later as the creature.
@@ -1054,7 +1072,11 @@ public sealed partial class Game
                 || host.Zone == Zone.Graveyard && c.CurrentFace.AuraSpell?["TgtZone"] == "Graveyard"
                    && !(c.Animations?.Any(a => a.Ability["RemoveKeywords"] is not null) ?? false));
             if (c.Types.HasSubtype("Aura") && !attachedOk) MoveTo(c, Zone.Graveyard);
-            else if (c.AttachedTo >= 0 && (!attachedOk || c.Types.HasSubtype("Equipment") && !host!.Types.Is(CardType.Creature))) c.AttachedTo = -1;
+            else if (c.AttachedTo >= 0 && (!attachedOk || c.Types.HasSubtype("Equipment") && !host!.Types.Is(CardType.Creature)))
+            {
+                Fire(new TriggerEvent(TriggerMode.Unattached, CardId: c.Id, TargetCardId: c.AttachedTo));
+                c.AttachedTo = -1;
+            }
         }
         CheckEffectLinks();
         FireZoneBatch();

@@ -14,7 +14,7 @@ public static class Keywords
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
         "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade", "Ninjutsu", "Persist", "Undying",
-        "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate",
+        "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort",
         // An Aura's own enchant restriction (Animate Dead swapping its "enchant" ability).
         "Enchant",
     };
@@ -31,7 +31,7 @@ public static class Triggers
 
     private static readonly HashSet<string> CommonParams = new(StringComparer.Ordinal)
     {
-        "Mode", "Execute", "TriggerDescription", "TriggerZones", "OptionalDecider", "Secondary", "ValidCard", "Static", "ActivationLimit",
+        "Mode", "Execute", "TriggerDescription", "TriggerZones", "OptionalDecider", "Secondary", "ValidCard", "Static", "ActivationLimit", "TriggerController",
     };
 
     private static readonly Dictionary<string, HashSet<string>> ModeParams = new()
@@ -56,6 +56,7 @@ public static class Triggers
         ["LifeGained"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["Taps"] = new(StringComparer.Ordinal) { },
         ["TurnFaceUp"] = new(StringComparer.Ordinal) { },
+        ["Unattached"] = new(StringComparer.Ordinal) { "ValidAttachment", "ValidObject" },
     };
 
     public static readonly HashSet<string> Supported = new(ModeParams.Keys.Concat(NeverInGoldfish), StringComparer.Ordinal);
@@ -70,6 +71,10 @@ public static class Triggers
         if (t["ValidCard"] is { } vc) Filter.Parse(vc, ctx);
         if (t["ValidSource"] is { } vs) Filter.Parse(vs, ctx);
         if (t["ValidTarget"] is { } vt) Filter.Parse(vt, ctx);
+        if (t["ValidAttachment"] is { } va) Filter.Parse(va, ctx);
+        if (t["ValidObject"] is { } vo) Filter.Parse(vo, ctx);
+        // A granted "when this creature dies" trigger is controlled by that creature's controller.
+        if (t["TriggerController"] is { } tc && tc != "TriggeredCardController") ctx.Need("TriggerController:" + tc);
         if (t["AttackingPlayer"] is { } ap && ap != "You") ctx.Need("AttackingPlayer:" + ap);
         if (t["ValidPlayer"] is { } vp && vp is not ("You" or "Player" or "Opponent")) ctx.Need("TriggerValidPlayer:" + vp);
         if (t["Number"] is { } num && !int.TryParse(num, out _)) ctx.Need("TriggerNumber:" + num);
@@ -100,6 +105,8 @@ public static class Triggers
             || source.Zone == Zone.Command && (source.IsEffect || t["TriggerZones"] == "Command")
             // "When you cast this spell" (cascade, casualty, …) triggers from the stack.
             || source.Zone == Zone.Stack && t["TriggerZones"] == "Stack"
+            // An Equipment that leaves the battlefield becomes unattached as it goes.
+            || e.Mode == TriggerMode.Unattached && e.CardId == source.Id
             // "When you cycle this card" triggers from wherever cycling put it.
             || e.Mode == TriggerMode.Cycled && e.CardId == source.Id && t["TriggerZones"] is null;
         if (!sourceActive) return false;
@@ -135,6 +142,9 @@ public static class Triggers
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller);
             case "TurnFaceUp" when e.Mode == TriggerMode.TurnFaceUp:
                 return CardMatches(g, t, e.CardId, x, source);
+            case "Unattached" when e.Mode == TriggerMode.Unattached:
+                return (t["ValidAttachment"] is not { } attachment || Effect.FilterFor(t.Face, attachment).MatchesCard(g.State[e.CardId!.Value], x))
+                    && (t["ValidObject"] is not { } attachedTo || Effect.FilterFor(t.Face, attachedTo).MatchesCard(g.State[e.TargetCardId!.Value], x));
             case "SpellCast" when e.Mode == TriggerMode.SpellCast && t["ActivatorThisTurnCast"] is { } nth:
                 // "Whenever you cast your second spell each turn": this is that spell.
                 if (!Filter.Compare(g.State.ThisTurn.SpellsCast, nth[..2], int.Parse(nth[2..]))) return false;

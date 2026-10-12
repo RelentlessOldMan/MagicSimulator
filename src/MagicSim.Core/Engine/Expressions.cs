@@ -324,9 +324,12 @@ public sealed class Amount
         {
             var prop = PlayerProperty(dp.Groups[2].Value, ctx);
             if (prop is null) return Const(0);
-            return dp.Groups[1].Value == "You"
-                ? new(core, x => prop(x.Controller, x))
-                : new(core, x => Defined.Players("Targeted", x) is [var first, ..] ? prop(first, x) : 0);
+            return dp.Groups[1].Value switch
+            {
+                "You" => new(core, x => prop(x.Controller, x)),
+                "TriggeredTarget" or "TriggeredPlayer" => new(core, x => x.Item.TriggeredPlayer is { } tp ? prop(tp, x) : 0),
+                _ => new(core, x => Defined.Players("Targeted", x) is [var first, ..] ? prop(first, x) : 0),
+            };
         }
         if (!core.StartsWith("Count$", StringComparison.Ordinal))
         {
@@ -378,7 +381,10 @@ public sealed class Amount
             case "ThisTurnCast" when arg.Length == 0: return new(core, x => x.S.ThisTurn.SpellsCast);
             case "StormCount": return new(core, x => Math.Max(0, x.S.ThisTurn.SpellsCast - 1));
             case "InYourLibrary": return new(core, x => x.S.Players[x.Controller].Library.Count);
+            case "Converge": return new(core, x => x.Host.ColorsSpent);
         }
+        if (kind == "Devotion.Chosen")
+            return new(core, x => x.Host.ChosenColor is { } chosen && chosen != ManaColor.C ? Devotion(x, chosen.Mask()) : 0);
         if (kind.StartsWith("Devotion.", StringComparison.Ordinal) || kind == "Devotion")
         {
             var colors = kind.Length > 9 ? kind[9..] : arg;
@@ -420,7 +426,7 @@ public sealed class Amount
     }
 
     private static readonly Regex PlayerCountRx = new(@"^PlayerCount(Players|Opponents)\$(Amount|Highest|Lowest)?(.*)$", RegexOptions.Compiled);
-    private static readonly Regex DefinedPlayerRx = new(@"^(TargetedPlayer|You)\$(.+)$", RegexOptions.Compiled);
+    private static readonly Regex DefinedPlayerRx = new(@"^(TargetedPlayer|You|TriggeredTarget|TriggeredPlayer)\$(.+)$", RegexOptions.Compiled);
 
     /// <summary>"PlayerCountOpponents$Amount", "PlayerCountPlayers$HighestValidGraveyard Card.YouOwn": over a group of players, how many, the most, the least, or the total.</summary>
     private static Amount PlayerCountAmount(string core, Match m, CompileContext ctx)
@@ -451,7 +457,7 @@ public sealed class Amount
             case "CardsInLibrary": return (p, x) => x.S.Players[p].LibraryCount;
             case "CardsInGraveyard": return (p, x) => x.S.Players[p].Graveyard.Count;
             case "LifeTotal": return (p, x) => x.S.Players[p].Life;
-            case "PoisonCounters": return (p, x) => x.S.Players[p].Poison;
+            case "PoisonCounters" or "Counters.Poison": return (p, x) => x.S.Players[p].Poison;
         }
         var space = text.IndexOf(' ');
         if (text.StartsWith("Valid", StringComparison.Ordinal) && space > 0)
@@ -537,7 +543,7 @@ public static class Defined
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
         "Enchanted", "Equipped", "Imprinted", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards",
         "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
-        "ReplacedCard", "TopOfLibrary",
+        "ReplacedCard", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard",
     };
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
@@ -591,6 +597,8 @@ public static class Defined
             "TriggeredSource" or "TriggeredSourceLKICopy" => x.Item.TriggeredSourceId is { } ts ? new() { ts } : new(),
             "Enchanted" or "Equipped" => x.Host.AttachedTo >= 0 ? new() { x.Host.AttachedTo } : new(),
             "Imprinted" => x.Host.Imprinted?.ToList() ?? new(),
+            "TriggeredObject" or "TriggeredObjectLKICopy" => x.Item.TriggeredObjectId is { } obj ? new() { obj } : new(),
+            "ChosenCard" => x.Host.ChosenCards?.ToList() ?? new(),
             "Sacrificed" or "SacrificedCards" => x.Item.Sacrificed?.ToList() ?? new(),
             // The card a replacement effect is replacing the event of: its own "as this enters" (Mox Diamond).
             "ReplacedCard" => new() { x.Item.SourceId },

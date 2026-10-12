@@ -16,6 +16,8 @@ public enum ReplacementKind
     ReplaceTokens,
     /// <summary>A step is skipped ("skip your draw step": Necropotence).</summary>
     SkipStep,
+    /// <summary>"If it would be put into a graveyard, shuffle it into its owner's library instead" (Blightsteel Colossus).</summary>
+    ShuffleInstead,
 }
 
 /// <summary>A replacement effect (rule 614) of a permanent or effect object, other than its own "as this enters".</summary>
@@ -125,6 +127,10 @@ public static class Replacements
             case "Moved" when r["Destination"] == "Graveyard" && w.Api == "ChangeZone" && w["Destination"] == "Exile"
                               && w["Defined"] == "ReplacedCard" && OnlyKeys(w, "Destination", "Defined", "Origin", "Hidden"):
                 kind = ReplacementKind.ExileInstead;
+                break;
+            case "Moved" when r["Destination"] == "Graveyard" && w.Api == "ChangeZone" && w["Destination"] == "Library" && w["Shuffle"] == "True"
+                              && w["Defined"] == "ReplacedCard" && OnlyKeys(w, "Destination", "Defined", "Origin", "Hidden", "Reveal", "Shuffle"):
+                kind = ReplacementKind.ShuffleInstead;
                 break;
             default:
                 return false;
@@ -299,9 +305,18 @@ public static class Replacements
     }
 
     /// <summary>Where a card moving to <paramref name="to"/> actually goes (Rest in Peace sends graveyard-bound cards to exile).</summary>
-    public static Zone Destination(Game g, Card moving, Zone from, Zone to)
+    public static Zone Destination(Game g, Card moving, Zone from, Zone to, out bool shuffle)
     {
+        shuffle = false;
         if (to != Zone.Graveyard) return to;
+        // A card's own "shuffle it into its owner's library instead" works from anywhere.
+        if (!moving.IsBlank)
+            foreach (var r in moving.CurrentFace.Replacements)
+                if (r.Kind == ReplacementKind.ShuffleInstead && r["ValidCard"] == "Card.Self")
+                {
+                    shuffle = true;
+                    return Zone.Library;
+                }
         foreach (var (host, r) in Active(g, "Moved"))
         {
             if (r.Kind != ReplacementKind.ExileInstead) continue;
