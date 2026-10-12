@@ -46,6 +46,8 @@ public sealed partial class Game
     private int _actionsThisTurn;
     /// <summary>Whether continuous effects were in force at the last <see cref="Statics.Apply"/> (lets it skip work when there are none).</summary>
     public bool StaticsApplied { get; set; }
+    /// <summary>A static gave cards off the battlefield a color (Painter's Servant): cleared when statics are applied again.</summary>
+    public bool OffFieldColors { get; set; }
 
     /// <summary>Actions taken so far this turn (capped by <see cref="GameSettings.MaxActionsPerTurn"/> and <see cref="ActionLimit"/>).</summary>
     public int ActionsThisTurn => _actionsThisTurn;
@@ -77,7 +79,7 @@ public sealed partial class Game
     {
         var g = new Game(State.Clone(keepRecord), Settings, decider ?? Decider)
         {
-            _actionsThisTurn = _actionsThisTurn, MulligansTaken = MulligansTaken, StaticsApplied = StaticsApplied, IsSearchCopy = !keepRecord,
+            _actionsThisTurn = _actionsThisTurn, MulligansTaken = MulligansTaken, StaticsApplied = StaticsApplied, OffFieldColors = OffFieldColors, IsSearchCopy = !keepRecord,
         };
         g._pending.AddRange(_pending);
         return g;
@@ -153,7 +155,7 @@ public sealed partial class Game
         foreach (var id in me.Hand)
         {
             KeptHand.Add(State[id].Name);
-            State.Record.Seen.Add(State[id].Name);
+            State.Record.Seen.Add(State[id].Def.Name);
         }
         Note($"kept {me.Hand.Count}: {string.Join(", ", KeptHand)}" + (Bottomed.Count > 0 ? $" (bottomed {string.Join(", ", Bottomed)})" : ""));
         // "If this card is in your opening hand, you may begin the game with it on the battlefield" (Leylines).
@@ -196,6 +198,7 @@ public sealed partial class Game
             {
                 SetStep(step);
                 if (step == Step.Draw) Draw(p.Index, 1);
+                if (step == Step.End && State.Monarch == p.Index) Draw(p.Index, 1);
                 FirePhase(step == Step.End ? "End of Turn" : step.ToString());
                 ResolveWithoutActing();
                 if (State.GameOver) break;
@@ -274,6 +277,7 @@ public sealed partial class Game
     {
         for (var i = index; i < TurnSteps.Length && !State.GameOver; i++)
         {
+            if (State.ThisTurn.Ended && TurnSteps[i] != Step.Cleanup) continue;
             ExecuteStep(TurnSteps[i]);
             RunExtraPhasesAfter(TurnSteps[i]);
         }
@@ -297,7 +301,7 @@ public sealed partial class Game
             Note("additional phase: " + string.Join(", ", steps));
             foreach (var step in steps)
             {
-                if (State.GameOver) break;
+                if (State.GameOver || State.ThisTurn.Ended) break;
                 ExecuteStep(step);
                 RunExtraPhasesAfter(step);
             }
@@ -322,7 +326,11 @@ public sealed partial class Game
                 foreach (var c in State.BattlefieldCards)
                     if (c.AttachedTo >= 0 && c.CurrentFace.AttachedDoesntUntap) (held ??= new()).Add(c.AttachedTo);
                 foreach (var c in State.BattlefieldCards)
-                    if (c.Controller == Me && !c.CurrentFace.DoesntUntap && !(held?.Contains(c.Id) ?? false)) c.Tapped = false;
+                    if (c.Controller == Me && !c.CurrentFace.DoesntUntap && !(held?.Contains(c.Id) ?? false))
+                    {
+                        if (c.SkipNextUntap) c.SkipNextUntap = false;
+                        else c.Tapped = false;
+                    }
                 return;   // no priority in the untap step
             case Step.Upkeep:
                 Suspended();
@@ -384,8 +392,39 @@ public sealed partial class Game
     }
 
     /// <summary>"At the beginning of the next end step" actions (tokens exiled or sacrificed at end of turn).</summary>
+    /// <summary>
+    /// "End the turn" (rule 723): every spell and ability on the stack is exiled, and the turn goes on from its cleanup
+    /// step. Abilities that triggered are dropped too.
+    /// </summary>
+    public void EndTheTurn()
+    {
+        Note("  the turn ends");
+        foreach (var item in State.Stack.ToList())
+            if (item.IsSpell && State[item.SourceId].Zone == Zone.Stack) MoveTo(State[item.SourceId], Zone.Exile);
+        State.Stack.Clear();
+        if (_resolvingSpell is { } r && State[r].Zone == Zone.Stack) MoveTo(State[r], Zone.Exile);
+        _pending.Clear();
+        State.ThisTurn.ExtraPhases.Clear();
+        State.ThisTurn.Ended = true;
+    }
+
+    /// <summary>Rule 724: one player at a time is the monarch.</summary>
+    public void BecomeMonarch(int player)
+    {
+        if (State.Players[player].Lost) return;
+        if (State.Monarch == player) return;
+        State.Monarch = player;
+        Note($"  player {player} becomes the monarch");
+        Fire(new TriggerEvent(TriggerMode.BecomeMonarch, Player: player));
+    }
+
     private void AtBeginningOfEndStep()
     {
+        if (State.Monarch == State.ActivePlayer)
+        {
+            Note("the monarch draws");
+            Draw(State.ActivePlayer, 1);
+        }
         foreach (var (id, action) in State.ThisTurn.AtEndStep)
         {
             var c = State[id];
@@ -399,7 +438,7 @@ public sealed partial class Game
     private void SetStep(Step step)
     {
         State.Step = step;
-        foreach (var p in State.Players) p.Pool.Clear();   // mana empties between steps (rule 500.4)
+        foreach (var p in State.Players) { p.Pool.Clear(); p.RestrictedPool = null; }   // mana empties between steps (rule 500.4)
     }
 
     /// <summary>
@@ -451,6 +490,7 @@ public sealed partial class Game
         var defender = State.ThisTurn.DefendingPlayer is { } d && !State.Players[d].Lost ? State.Players[d]
             : State.Players.Where(p => p.Index != Me && !p.Lost).OrderBy(p => p.Life).ThenBy(p => p.Index).FirstOrDefault();
         if (defender is null) return;
+        List<int>? hitPlayers = null;
         foreach (var id in State.Attackers)
         {
             var a = State[id];
@@ -461,7 +501,31 @@ public sealed partial class Game
                 dealt += DamagePlayer(defender.Index, Math.Max(0, a.Power), a, combat: true);
             if (dealt > 0 && a.IsCommander)
                 defender.CommanderDamageTaken[a.Id] = defender.CommanderDamageTaken.GetValueOrDefault(a.Id) + dealt;
+            // Combat damage to the monarch makes the creature's controller the monarch.
+            if (dealt > 0 && State.Monarch == defender.Index) BecomeMonarch(a.Controller);
+            if (dealt > 0) (hitPlayers ??= new()).Add(a.Id);
         }
+        // Cipher (rule 702.99): "whenever this creature deals combat damage to a player, its controller may cast a copy
+        // of the encoded card without paying its mana cost."
+        foreach (var attacker in hitPlayers ?? new())
+            foreach (var p in State.Players)
+                foreach (var id in p.Exile.ToList())
+                    if (State[id].EncodedOn == attacker && State[attacker].Zone == Zone.Battlefield)
+                        CastCopyOf(State[id], State[attacker].Controller);
+    }
+
+    /// <summary>Casts a copy of a card (it isn't moved); the copy ceases to exist when it leaves the stack (rule 707.12).</summary>
+    public void CastCopyOf(Card original, int controller)
+    {
+        var copy = new Card { Id = State.Cards.Count, Def = original.Def, Owner = controller, Controller = controller, Zone = Zone.None, IsToken = true };
+        State.Cards.Add(copy);
+        if (CastableFromEffect(copy, free: true).Count == 0 || !Decider.ChooseYesNo(this, controller, original, $"cast a copy of {original.Name}?"))
+        {
+            State.Cards.RemoveAt(State.Cards.Count - 1);
+            return;
+        }
+        Note($"  cast a copy of {original.Name}");
+        CastFromEffect(copy, free: true, exileAfter: false);
     }
 
     private void Cleanup()
@@ -504,7 +568,7 @@ public sealed partial class Game
     /// </summary>
     public void PriorityLoop()
     {
-        while (!State.GameOver)
+        while (!State.GameOver && !State.ThisTurn.Ended)
         {
             CheckStateBasedActions();
             if (State.GameOver) return;
@@ -738,7 +802,7 @@ public sealed partial class Game
     }
 
     /// <summary>A battlefield ability offered as an action (mana abilities are used automatically when paying).</summary>
-    private static bool Offerable(AbilityDef ab) => ab["ActivationZone"] is null && !IsAutoManaAbility(ab) && ab["RestrictValid"] is null;
+    private static bool Offerable(AbilityDef ab) => ab["ActivationZone"] is null && !IsAutoManaAbility(ab);
 
     /// <summary>Adds playing <paramref name="c"/> as a land, or casting it with each of its spell abilities, if allowed now.</summary>
     private void AddPlayOrCast(List<GameAction> result, Card c, Player p, bool sorcerySpeed, bool check)
@@ -813,7 +877,7 @@ public sealed partial class Game
     {
         State.Players[land.Controller].LandsPlayedThisTurn++;
         Note($"play {land.Name}");
-        State.Record.Cast.Add(land.Name);
+        State.Record.Cast.Add(land.Def.Name);
         MoveTo(land, Zone.Battlefield);
         Fire(new TriggerEvent(TriggerMode.LandPlayed, CardId: land.Id, Player: land.Controller));
     }
@@ -877,6 +941,7 @@ public sealed partial class Game
         if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex] is { CharmNumExpr: { } charmNum } modal
             && modal.CharmCount > Effect.EvalAmount(ContextFor(c), charmNum))
             return false;
+        if (Statics.CantBeCast(this, c, c.Controller)) return false;
         if (!CanPayCost(cost, c, c.Controller, 0, excludeSourceFromMana: true)) return false;
         var ability = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : c.CurrentFace.AuraSpell;
         return ability is null || HasLegalTargets(c, ability);
@@ -889,6 +954,7 @@ public sealed partial class Game
                    || c.Types.AllCreatureTypes && State.ThisTurn.CombatDamageTypes.Count > 0
                    || c.Types.Subtypes.Any(t => TypeLine.IsCreatureType(t) && State.ThisTurn.CombatDamageTypes.Contains(t)),
         "Spectacle" => State.ThisTurn.LifeLost.Any(kv => kv.Key != c.Controller && kv.Value > 0),
+        "Miracle" => c.Id == _miracleCast,
         _ => false,
     };
 
@@ -914,8 +980,8 @@ public sealed partial class Game
         {
             Id = State.NextStackId++, SourceId = c.Id, Ability = ability, Controller = player, IsSpell = true, X = x,
             ChainTargets = ChooseChainTargets(c, ability, player, x),
-            Description = c.Name + (from != Zone.Graveyard ? "" : escaped ? " (escape)" : " (flashback)") + (ability.OptionalCosts is { } oc ? $" ({string.Join(", ", oc).ToLowerInvariant()})" : ""),
-            ExileAfter = from == Zone.Graveyard && !escaped || _castExileAfter, Spliced = spliced, CastFrom = from,
+            Description = c.Name + (from != Zone.Graveyard ? "" : escaped ? " (escape)" : c.CurrentFace.Retrace ? " (retrace)" : " (flashback)") + (ability.OptionalCosts is { } oc ? $" ({string.Join(", ", oc).ToLowerInvariant()})" : ""),
+            ExileAfter = from == Zone.Graveyard && !escaped && !c.CurrentFace.Retrace || _castExileAfter, Spliced = spliced, CastFrom = from,
         };
         _payingForSpell = true;
         var paid = PayCost(cost, c, player, x, excludeSourceFromMana: true);
@@ -923,12 +989,13 @@ public sealed partial class Game
         if (!paid) throw new InvalidOperationException($"could not pay for {c.Name} after checking it was castable");
         c.ColorsSpent = LastColorsSpent;
         if (LastSacrificed.Count > 0) item.Sacrificed = LastSacrificed.ToList();
+        if (LastExiled.Count > 0) item.Exiled = LastExiled.ToList();
         if (from == Zone.Command) c.CommandCasts++;
         c.XPaid = x;
         State.Stack.Add(item);
         State.ThisTurn.SpellsCast++;
         State.ThisTurn.Cast.Add(c.Id);
-        State.Record.Cast.Add(c.Name);
+        State.Record.Cast.Add(c.Def.Name);
         Note($"cast {c.Name}" + (ability.CastFaceDown ? " face down" : "") + (x > 0 ? $" (X={x})" : "") + TargetText(item) + $" — pool {State.Players[player].Pool}");
         c.FaceDown = ability.CastFaceDown;
         c.Escaped = escaped;
@@ -996,6 +1063,34 @@ public sealed partial class Game
 
     public bool CanCastFromEffect(Card c, bool free) => CastableFromEffect(c, free).Count > 0;
 
+    // Miracle (rule 702.94): while its trigger resolves, the card may be cast for its miracle cost.
+    private int _miracleCast = -1;
+
+    private List<int> MiracleOptions(Card c)
+    {
+        var saved = _miracleCast;
+        _miracleCast = c.Id;
+        try
+        {
+            return Enumerable.Range(0, c.CurrentFace.SpellAbilities.Count)
+                .Where(i => c.CurrentFace.SpellAbilities[i].AltCondition == "Miracle" && CanCast(c, i)).ToList();
+        }
+        finally { _miracleCast = saved; }
+    }
+
+    public bool CanCastMiracle(Card c) => c.Zone == Zone.Hand && MiracleOptions(c).Count > 0;
+
+    public void CastMiracle(Card c)
+    {
+        var options = MiracleOptions(c);
+        if (options.Count == 0) return;
+        var index = options.Count == 1 ? options[0]
+            : options[Decider.ChooseOption(this, c.Controller, c, options.Select(i => c.CurrentFace.SpellAbilities[i].Description).ToList())];
+        _miracleCast = c.Id;
+        try { CastSpell(c, index); }
+        finally { _miracleCast = -1; }
+    }
+
     /// <summary>Casts a card as part of an effect's resolution (Play$), optionally without paying its mana cost.</summary>
     public void CastFromEffect(Card c, bool free, bool exileAfter)
     {
@@ -1009,14 +1104,34 @@ public sealed partial class Game
         finally { _freeCast = -1; _castExileAfter = false; }
     }
 
+    /// <summary>The creature to encode a cipher card on: the one most likely to connect (evasive, then biggest), or none.</summary>
+    private int? ChooseCipherCreature(Card card, int player)
+    {
+        var creatures = State.BattlefieldCards.Where(c => c.Controller == player && c.Types.Is(CardType.Creature)).ToList();
+        if (creatures.Count == 0 || !Decider.ChooseYesNo(this, player, card, $"encode {card.Name} on a creature?")) return null;
+        return creatures.OrderByDescending(c => c.HasKeyword("Flying") || c.HasKeyword("Unblockable")).ThenByDescending(c => c.Power).First().Id;
+    }
+
     /// <summary>Puts a copy of a spell on the stack (rule 707.10), with new targets if allowed.</summary>
     public void CopySpell(StackItem original, int controller, bool newTargets)
     {
         var source = State[original.SourceId];
+        var targets = original.ChainTargets.Select(t => new List<TargetRef>(t)).ToList();
+        // "You may choose new targets for the copy" (rule 707.10c): where none are chosen, it keeps the original's.
+        if (newTargets)
+        {
+            var chosen = ChooseChainTargets(source, original.Ability, controller);
+            for (var i = 0; i < chosen.Count; i++)
+                if (chosen[i].Count > 0)
+                {
+                    while (targets.Count <= i) targets.Add(new());
+                    targets[i] = chosen[i];
+                }
+        }
         var item = new StackItem
         {
             Id = State.NextStackId++, SourceId = original.SourceId, Ability = original.Ability, Controller = controller, IsSpell = false, X = original.X,
-            ChainTargets = newTargets ? ChooseChainTargets(source, original.Ability, controller) : original.ChainTargets.Select(t => new List<TargetRef>(t)).ToList(),
+            ChainTargets = targets,
             Description = source.Name + " (copy)",
         };
         State.Stack.Add(item);
@@ -1040,6 +1155,7 @@ public sealed partial class Game
         {
             Id = State.NextStackId++, SourceId = c.Id, Ability = ab, Controller = player, X = x, ChainTargets = targets,
             Description = $"{c.Name}: {ab.Description}", Sacrificed = LastSacrificed.Count > 0 ? LastSacrificed.ToList() : null,
+            Exiled = LastExiled.Count > 0 ? LastExiled.ToList() : null,
         };
         Note($"activate {c.Name}: {ab.Description}" + TargetText(item));
         if (ab.IsSpecialAction) RunChain(item);   // turning a permanent face up doesn't use the stack (rule 116.2b)
@@ -1137,6 +1253,18 @@ public sealed partial class Game
             if (ab.TargetFilter is null) { result.Add(new()); continue; }
             var candidates = TargetCandidates(source, ab, controller, trigger);
             var (tmin, tmax) = TargetBounds(source, ab, controller, x);
+            // "For each opponent, … target permanent that player controls": one target among each player's.
+            if (ab["TargetsForEachPlayer"] == "True")
+            {
+                var each = new List<TargetRef>();
+                foreach (var group in candidates.Where(t => t.CardId is not null).GroupBy(t => State[t.CardId!.Value].Controller))
+                    each.AddRange(Decider.ChooseTargets(this, controller, source, ab, group.ToList(), 1, 1));
+                result.Add(each);
+                continue;
+            }
+            // "This spell costs {1} more to cast for each target beyond the first" (Fireball): the cost was paid for one
+            // target, and dividing damage evenly among more deals no more in all, so it takes exactly one.
+            if (source.Statics.Any(st => st.Mode == "RaiseCost" && st["Relative"] == "True")) tmin = tmax = Math.Min(tmax, 1);
             var max = Math.Min(tmax, candidates.Count);
             var min = Math.Min(tmin, max);
             result.Add(max == 0 ? new() : Decider.ChooseTargets(this, controller, source, ab, candidates, min, max));
@@ -1146,10 +1274,20 @@ public sealed partial class Game
 
     // ---- resolving --------------------------------------------------------------------
 
+    private int? _resolvingSpell;
+
     public void ResolveTop()
     {
         var item = State.Stack[^1];
         State.Stack.RemoveAt(State.Stack.Count - 1);
+        var outer = _resolvingSpell;
+        _resolvingSpell = item.IsSpell ? item.SourceId : null;
+        try { Resolve(item); }
+        finally { _resolvingSpell = outer; }
+    }
+
+    private void Resolve(StackItem item)
+    {
         var source = State[item.SourceId];
         Note($"resolve {item.Description}");
 
@@ -1201,7 +1339,17 @@ public sealed partial class Game
         {
             // An Adventure cast from hand goes on an adventure: exiled, castable later as the creature.
             var adventure = source.Def.Layout == "Adventure" && source.Face == 1 && !item.ExileAfter;
-            MoveTo(source, adventure ? Zone.Exile : afterwards);
+            // Buyback (rule 702.27): paid, it goes back to its owner's hand.
+            var bought = !item.ExileAfter && (source.PaidOptional?.Contains("Buyback") ?? false);
+            // Cipher: "then you may exile this spell card encoded on a creature you control" (rule 702.99a).
+            if (!source.IsToken && source.HasKeyword("Cipher") && ChooseCipherCreature(source, item.Controller) is { } host)
+            {
+                MoveTo(source, Zone.Exile);
+                source.EncodedOn = host;
+                Note($"  {source.Name} is encoded on {State[host].Name}");
+                return;
+            }
+            MoveTo(source, adventure ? Zone.Exile : bought ? Zone.Hand : afterwards);
             if (adventure && source.Zone == Zone.Exile) source.OnAdventure = true;
         }
     }
@@ -1308,25 +1456,57 @@ public sealed partial class Game
     private int? PlayerFor(EffectContext x, string? spec) => spec switch
     {
         "You" => x.Controller,
-        null or "TargetedController" or "Targeted" => x.Targets.Select(t => t.Player ?? State[t.CardId!.Value].Controller).Cast<int?>().FirstOrDefault(),
+        null or "TargetedController" or "ThisTargetedController" or "Targeted" => x.Targets.Select(t => t.Player ?? State[t.CardId!.Value].Controller).Cast<int?>().FirstOrDefault(),
         "TriggeredActivator" or "TriggeredPlayer" => x.Item.TriggeredPlayer,
         "TriggeredCardController" => x.Item.TriggeredCardId is { } tc ? State[tc].Controller : null,
-        "Remembered" => x.Item.IteratedPlayer,
+        "Remembered" or "Player.IsRemembered" => x.Item.IteratedPlayer,
         _ => null,   // "Opponent"/"Player": only goldfish opponents would act, and they never do
     };
 
     /// <summary>
     /// "… unless [payer] pays [cost]": true if the payer pays, so the effect doesn't happen.
-    /// Goldfish opponents never pay.
+    /// Goldfish opponents pay only to survive.
     /// </summary>
     private bool PaysUnlessCost(EffectContext x, Cost cost)
     {
-        if (PlayerFor(x, x.Ability["UnlessPayer"]) is not { } p || State.Players[p].IsGoldfish) return false;
+        if (PlayerFor(x, x.Ability["UnlessPayer"]) is not { } p) return false;
+        if (State.Players[p].IsGoldfish) return GoldfishPaysToSurvive(x, cost, p);
         if (!CanPayCost(cost, x.Host, p, x.X, excludeSourceFromMana: false)) return false;
         var what = x.Ability["UnlessResolveSubs"] == "WhenPaid" ? "to go on" : "to avoid " + x.Ability.Description;
         if (!Decider.ChooseYesNo(this, p, x.Host, $"pay {(cost.HasNonManaParts ? string.Join(" ", cost.Parts.Select(q => q.Raw)) : cost.Mana)} {what}?")) return false;
         PayCost(cost, x.Host, p, x.X, excludeSourceFromMana: false);
         Note($"  paid to avoid: {x.Ability.Description}");
+        return true;
+    }
+
+    /// <summary>
+    /// A goldfish opponent takes the life loss or damage unless it would kill them; then they pay if they can, with
+    /// cards from their hand or life (CONTRACT.md §3). They have no mana or permanents to pay with.
+    /// </summary>
+    private bool GoldfishPaysToSurvive(EffectContext x, Cost cost, int p)
+    {
+        var ab = x.Ability;
+        var player = State.Players[p];
+        var hit = ab.Api switch
+        {
+            "LoseLife" when DrawEffect.Players(x).Contains(p) => Effect.EvalAmount(x, ab["LifeAmount"] ?? "1"),
+            "DealDamage" when (ab["Defined"] is { } d ? Defined.Players(d, x) : x.Targets.Where(t => t.Player is not null).Select(t => t.Player!.Value)).Contains(p)
+                => Effect.EvalAmount(x, ab["NumDmg"] ?? "1"),
+            _ => 0,
+        };
+        if (hit < player.Life || cost.Mana.ManaValue > 0) return false;
+        int discard = 0, life = 0;
+        foreach (var part in cost.Parts)
+        {
+            var n = Effect.EvalAmount(x, part.Amount);
+            if (part.Kind == CostPartKind.Discard) discard += n;   // any kind of card: assume they have it
+            else if (part.Kind == CostPartKind.PayLife) life += n;
+            else return false;
+        }
+        if (discard > player.AbstractHand || life >= player.Life) return false;
+        if (discard > 0) DiscardUnknown(p, discard);
+        if (life > 0) PayLife(p, life);
+        Note($"  opponent {p} pays to avoid: {ab.Description}");
         return true;
     }
 

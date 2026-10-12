@@ -183,7 +183,7 @@ sealed class PairEffect : Effect
 sealed class RemoveCounterEffect : CardsEffect
 {
     public override string Api => "RemoveCounter";
-    public override IReadOnlySet<string> Params { get; } = P("Defined", "CounterType", "CounterNum", "RememberRemoved");
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "CounterType", "CounterNum", "RememberRemoved", "RememberAmount", "Optional");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -195,9 +195,12 @@ sealed class RemoveCounterEffect : CardsEffect
     public override void Resolve(EffectContext x)
     {
         var kind = x.Ability["CounterType"]!;
+        // RememberAmount$ is counted the same way: one remembered entry per counter removed.
+        var remember = x.Ability["RememberRemoved"] == "True" || x.Ability["RememberAmount"] == "True";
         foreach (var c in Cards(x))
         {
             if (c.Counters is null) continue;
+            if (x.Ability["Optional"] == "True" && !x.Game.Decider.ChooseYesNo(x.Game, x.Controller, x.Host, $"remove counters from {c.Name}?")) continue;
             var kinds = kind == "Any" || kind == "All" ? c.Counters.Keys.ToList() : new List<string> { kind };
             // "Remove up to N counters" of any kinds: N in all.
             var budget = kind == "Any" && x.Ability["CounterNum"] != "All" ? Amount(x, x.Ability["CounterNum"], 1) : int.MaxValue;
@@ -209,7 +212,7 @@ sealed class RemoveCounterEffect : CardsEffect
                 c.Counters[k] -= removed;
                 budget -= removed;
                 // RememberRemoved$: "for each counter removed this way" counts what's remembered.
-                if (x.Ability["RememberRemoved"] == "True")
+                if (remember)
                     for (var i = 0; i < removed; i++) (x.Host.Remembered ??= new()).Add(c.Id);
             }
         }
@@ -371,6 +374,7 @@ sealed class CascadeEffect : Effect
             if (!c.Types.Is(CardType.Land) && c.CurrentFace.ManaCost.ManaValue < mv) { hit = c; break; }
         }
         x.Game.Note($"  cascade exiles {exiled.Count} card(s)" + (hit is null ? "" : $", hitting {hit.Name}"));
+        if (!toHandInstead) Replacements.AsCascade(x.Game, x.Controller, exiled);
         if (hit is not null && x.Game.CanCastFromEffect(hit, free: true)
             && x.Game.Decider.ChooseYesNo(x.Game, x.Controller, hit, $"cast {hit.Name} without paying its mana cost?"))
         {
@@ -504,6 +508,91 @@ sealed class GenericChoiceEffect : Effect
             x.Game.RunSideChain(x, options[pick].Value);
         }
         x.Item.IteratedPlayer = saved;
+    }
+}
+
+/// <summary>
+/// "Will of the council", "council's dilemma": each player votes for one of the choices, starting with you. Goldfish
+/// opponents vote for the first choice you didn't (CONTRACT.md §3). With EachVote$, every vote's choice happens for its
+/// voter (who is "Remembered"); otherwise the choice with the most votes happens, and a tie is VoteTiedAbility$ or your vote.
+/// </summary>
+sealed class VoteEffect : Effect
+{
+    public override string Api => "Vote";
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "Choices", "EachVote", "VoteTiedAbility", "AILogic", "Secretly", "VoteMessage");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Defined"] is { } d && d != "Player") ctx.Need("Vote.Defined:" + d);
+        foreach (var name in (ab["Choices"] ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!ctx.Face.SVars.TryGetValue(name, out var body)) { ctx.Need("SVarMissing:" + name); continue; }
+            if (CardCompiler.CompileAbility(new Forge.ForgeParams(body), ctx, AbilityKind.Sub, CardCompiler.SideChainIndex) is { } chain)
+                (ab.SideChains ??= new())[name] = chain;
+        }
+        if (ab.SideChains is null) ctx.Need("Vote:NoChoices");
+        if (ab["VoteTiedAbility"] is not null && CardCompiler.CompileSideChain(ab, "VoteTiedAbility", ctx) is null) ctx.Need("Vote:VoteTiedAbility");
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var choices = (x.Ability["Choices"] ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Where(x.Ability.SideChains!.ContainsKey).ToList();
+        var voters = Defined.Players(x.Ability["Defined"] ?? "Player", x).OrderBy(p => p == x.Controller ? 0 : 1).ToList();
+        int? yours = null;
+        var votes = new List<(int Voter, int Choice)>();
+        foreach (var p in voters)
+        {
+            int pick;
+            if (x.S.Players[p].IsGoldfish) pick = yours is { } y && choices.Count > 1 ? (y == 0 ? 1 : 0) : 0;
+            else
+            {
+                pick = choices.Count == 1 ? 0 : x.Game.Decider.ChooseOption(x.Game, p, x.Host, choices.Select(c => x.Ability.SideChains![c].Description).ToList());
+                if (p == x.Controller) yours = pick;
+            }
+            votes.Add((p, pick));
+        }
+        x.Game.Note("  votes: " + string.Join(", ", votes.Select(v => $"player {v.Voter} {choices[v.Choice]}")));
+
+        var saved = x.Item.IteratedPlayer;
+        if (x.Ability["EachVote"] == "True")
+            foreach (var (voter, choice) in votes)
+            {
+                if (x.S.GameOver) break;
+                x.Item.IteratedPlayer = voter;
+                x.Game.RunSideChain(x, x.Ability.SideChains![choices[choice]]);
+            }
+        else
+        {
+            var tally = votes.GroupBy(v => v.Choice).Select(g => (Choice: g.Key, Count: g.Count())).ToList();
+            var most = tally.Max(t => t.Count);
+            var winners = tally.Where(t => t.Count == most).Select(t => t.Choice).ToList();
+            if (winners.Count == 1) x.Game.RunSideChain(x, x.Ability.SideChains![choices[winners[0]]]);
+            else if (x.Ability.SideChains!.TryGetValue("VoteTiedAbility", out var tied)) x.Game.RunSideChain(x, tied);
+            else x.Game.RunSideChain(x, x.Ability.SideChains![choices[yours is { } y && winners.Contains(y) ? y : winners[0]]]);
+        }
+        x.Item.IteratedPlayer = saved;
+    }
+}
+
+/// <summary>"End the turn" (rule 723).</summary>
+sealed class EndTurnEffect : Effect
+{
+    public override string Api => "EndTurn";
+    public override IReadOnlySet<string> Params { get; } = P();
+    public override void Resolve(EffectContext x) => x.Game.EndTheTurn();
+}
+
+/// <summary>"You become the monarch."</summary>
+sealed class BecomeMonarchEffect : Effect
+{
+    public override string Api => "BecomeMonarch";
+    public override IReadOnlySet<string> Params { get; } = P("Defined");
+    public override void Validate(AbilityDef ab, CompileContext ctx) => Defined.ValidatePlayers(ab["Defined"], ctx);
+
+    public override void Resolve(EffectContext x)
+    {
+        foreach (var p in Defined.Players(x.Ability["Defined"] ?? "You", x)) x.Game.BecomeMonarch(p);
     }
 }
 

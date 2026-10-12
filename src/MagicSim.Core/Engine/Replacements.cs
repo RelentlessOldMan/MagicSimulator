@@ -18,6 +18,8 @@ public enum ReplacementKind
     SkipStep,
     /// <summary>"If it would be put into a graveyard, shuffle it into its owner's library instead" (Blightsteel Colossus).</summary>
     ShuffleInstead,
+    /// <summary>"As you cascade, you may put a land card from among the exiled cards onto the battlefield tapped" (Averna).</summary>
+    AsCascade,
 }
 
 /// <summary>A replacement effect (rule 614) of a permanent or effect object, other than its own "as this enters".</summary>
@@ -78,6 +80,20 @@ public static class Replacements
             if (r["ValidPlayer"] is { } svp) Filter.Parse(svp, ctx);
             Presence.Validate(r, ctx);
             face.Replacements.Add(new ReplacementDef { P = r, Event = evt, Kind = ReplacementKind.SkipStep, Face = face });
+            return true;
+        }
+        // "As you cascade, you may put a land card from among the exiled cards onto the battlefield tapped."
+        if (evt == "Cascade" && r.Values.Keys.All(k => Common.Contains(k) || k is "ValidPlayer" or "ReplacementResult")
+            && r["ReplaceWith"] is { } cw && face.SVars.TryGetValue(cw, out var cascadeBody) && new ForgeParams(cascadeBody) is var cp
+            && cp.Api == "ChangeZone" && cp["Origin"] == "Exile" && cp["Destination"] is "Battlefield" or "Hand"
+            && cp["ChooseFromDefined"] is { } cfd && cfd.StartsWith("ReplacedCards.", StringComparison.Ordinal)
+            && OnlyKeys(cp, "Origin", "Destination", "ChooseFromDefined", "ChangeNum", "Hidden", "Tapped"))
+        {
+            Filter.Parse(cfd["ReplacedCards.".Length..], ctx);
+            if (r["ValidPlayer"] is { } cvp) Filter.Parse(cvp, ctx);
+            if (cp["ChangeNum"] is { } ccn && !int.TryParse(ccn, out _)) return false;
+            face.Replacements.Add(new ReplacementDef { P = r, Event = evt, Kind = ReplacementKind.AsCascade, Face = face,
+                With = new AbilityDef { P = cp, Api = "ChangeZone", Kind = AbilityKind.Sub } });
             return true;
         }
         if (!MatchParams.TryGetValue(evt, out var own)) return false;
@@ -142,6 +158,27 @@ public static class Replacements
         Presence.Validate(r, ctx);
         face.Replacements.Add(new ReplacementDef { P = r, Event = evt, Kind = kind, Face = face, NewAmount = newAmount, With = instead });
         return true;
+    }
+
+    /// <summary>"As you cascade": each such replacement may take cards from among those exiled, before the cast.</summary>
+    public static void AsCascade(Game g, int player, List<Card> exiled)
+    {
+        foreach (var (host, r) in Active(g, "Cascade").ToList())
+        {
+            var x = ContextFor(g, host, r, 0);
+            if (host.Controller != player || !PlayerOk(r, "ValidPlayer", player, x)) continue;
+            var w = r.With!;
+            var filter = Effect.FilterFor(r.Face, w["ChooseFromDefined"]!["ReplacedCards.".Length..]);
+            var candidates = exiled.Where(c => c.Zone == Zone.Exile && filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
+            if (candidates.Count == 0) continue;
+            var n = int.TryParse(w["ChangeNum"], out var cn) ? cn : 1;
+            var dest = Enum.Parse<Zone>(w["Destination"]!);
+            foreach (var id in g.Decider.ChooseCards(g, player, Choice.ChooseFromRevealed, host, candidates, 0, Math.Min(n, candidates.Count)))
+            {
+                g.Note($"  {host.Name}: {g.State[id].Name} to {dest.ToString().ToLowerInvariant()}");
+                g.MoveTo(g.State[id], dest, tapped: w["Tapped"] == "True");
+            }
+        }
     }
 
     private static bool OnlyKeys(ForgeParams p, params string[] keys) =>

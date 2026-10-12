@@ -3,7 +3,7 @@ using MagicSim.Core.Forge;
 
 namespace MagicSim.Core.Engine;
 
-public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower, ExileSource, Draw }
+public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower, ExileSource, Draw, ExileFromBattlefield }
 
 /// <summary>A non-mana cost component: "Sac&lt;1/CARDNAME&gt;", "Discard&lt;0/Hand&gt;", "PayLife&lt;2&gt;", …</summary>
 public sealed record CostPart(CostPartKind Kind, string Amount, string Valid, string Raw);
@@ -148,6 +148,9 @@ public sealed class FaceDef
 
     /// <summary>Whether any static ability works from the graveyard (EffectZone$ Graveyard). Read only once compiled.</summary>
     public bool HasGraveyardStatic => _graveyardStatic ??= Statics.Any(st => st["EffectZone"] == "Graveyard");
+    private bool? _exileStatic;
+    /// <summary>"You may cast this card from exile" (Misthollow Griffin): a static that works while the card is exiled.</summary>
+    public bool HasExileStatic => _exileStatic ??= Statics.Any(st => st["EffectZone"] == "Exile");
     private bool? _graveyardStatic;
     /// <summary>An Aura's spell: targets what it will enchant (rule 303.4a).</summary>
     public AbilityDef? AuraSpell { get; set; }
@@ -161,6 +164,8 @@ public sealed class FaceDef
     public List<(string Kind, string Amount, ForgeParams? Condition)> EtbCounters { get; } = new();
     /// <summary>Flashback cost, if it has flashback.</summary>
     public Cost? Flashback { get; set; }
+    /// <summary>Retrace: its graveyard cost (in <see cref="Flashback"/>) doesn't exile it afterwards.</summary>
+    public bool Retrace { get; set; }
     public Dictionary<string, string> SVars { get; init; } = new();
     public string Oracle { get; init; } = "";
     /// <summary>"You may have this enter as a copy of …" (K:ETBReplacement:Copy).</summary>
@@ -200,7 +205,7 @@ public sealed class FaceDef
         var f = new FaceDef
         {
             Name = Name, ManaCost = ManaCost, Types = types, Power = power, Toughness = toughness, Colors = colors, Loyalty = Loyalty,
-            AuraSpell = AuraSpell, DoesntUntap = DoesntUntap, AttachedDoesntUntap = AttachedDoesntUntap, Flashback = Flashback, SVars = SVars, Oracle = Oracle, EtbCopy = EtbCopy,
+            AuraSpell = AuraSpell, DoesntUntap = DoesntUntap, AttachedDoesntUntap = AttachedDoesntUntap, Flashback = Flashback, Retrace = Retrace, SVars = SVars, Oracle = Oracle, EtbCopy = EtbCopy,
             EscapeCost = EscapeCost, Splice = Splice,
         };
         f.KeywordNames.UnionWith(KeywordNames);
@@ -342,7 +347,19 @@ public static partial class CardCompiler
             if (types.Is(CardType.Land) && types.Subtypes.Contains(sub)) face.Activated.Add(mana);
 
         foreach (var t in f.Triggers) face.Triggers.Add(CompileTrigger(t, ctx));
-        foreach (var s in f.Statics) face.Statics.Add(CompileStatic(s, ctx));
+        foreach (var s in f.Statics)
+        {
+            // "This spell has cascade as long as …" (Bloodbraid Marauder): a cast trigger that checks the same condition.
+            if (s["Mode"] == "Continuous" && s["Affected"] == "Card.Self" && s["EffectZone"] == "Stack" && s["AffectedZone"] == "Stack"
+                && s["AddKeyword"] == "Cascade" && s.Values.Keys.All(k => k is "Mode" or "Affected" or "EffectZone" or "AffectedZone" or "AddKeyword" or "Description" || Presence.Params.Contains(k)))
+            {
+                face.SVars["__Cascade"] = "DB$ Cascade";
+                var conditions = string.Concat(s.Values.Where(kv => Presence.Params.Contains(kv.Key)).Select(kv => $" | {kv.Key}$ {kv.Value}"));
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ SpellCast | ValidCard$ Card.Self | TriggerZones$ Stack | Execute$ __Cascade" + conditions), ctx));
+                continue;
+            }
+            face.Statics.Add(CompileStatic(s, ctx));
+        }
 
         foreach (var st in face.Statics.Where(st => st.Mode == "AlternativeCost").ToList()) AddAlternativeCost(face, st, ctx);
         if (face.EvokeCost is { } evoke)
@@ -460,6 +477,12 @@ public static partial class CardCompiler
                 // "You may cast this card from your graveyard by discarding a card in addition to paying its other costs.
                 // Then exile this card": flashback for its mana cost plus a discard.
                 face.Flashback = new Cost { Mana = face.ManaCost }.Plus(ParseCost("Discard<1/Card>", ctx));
+                return true;
+            case "Retrace":
+                // "You may cast this card from your graveyard by discarding a land card in addition to paying its other
+                // costs": like flashback, but it goes back to the graveyard.
+                face.Flashback = new Cost { Mana = face.ManaCost }.Plus(ParseCost("Discard<1/Land>", ctx));
+                face.Retrace = true;
                 return true;
             case "Soulbond":
                 // "You may pair this creature with another unpaired creature when either enters. They remain paired for as
@@ -588,6 +611,17 @@ public static partial class CardCompiler
                 face.EvokeCost = cost;
                 return true;
             }
+            case "Buyback":
+                // "You may pay an additional [cost] as you cast this spell. If you do, put it into your hand as it resolves."
+                face.OptionalCosts.Add((new[] { "Buyback" }, ParseCost(Part(1), ctx)));
+                return true;
+            case "Miracle":
+                // "You may cast this card for its miracle cost when you draw it if it's the first card you drew this turn."
+                face.ConditionalCosts.Add(("Miracle", ParseCost(Part(1), ctx)));
+                face.SVars["__MiracleCast"] = "DB$ Play | Defined$ Self | Optional$ True | Miracle$ True";
+                face.Triggers.Add(CompileTrigger(new ForgeParams(
+                    "Mode$ Drawn | ValidCard$ Card.Self | Number$ 1 | Execute$ __MiracleCast"), ctx));
+                return true;
             case "Kicker":
                 // "Kicker {cost}": one optional additional cost. Two different kicker costs aren't supported yet.
                 if (Part(2).Length > 0) { ctx.Need("Keyword:Kicker+Second"); return true; }
@@ -935,8 +969,8 @@ public static partial class CardCompiler
         else if (p["UnlessCost"] is { } unless)
         {
             ab.UnlessCost = ParseCost(unless, ctx);
-            if (p["UnlessPayer"] is { } payer && payer is not ("You" or "TargetedController" or "Targeted" or "Opponent" or "Player"
-                    or "TriggeredActivator" or "TriggeredPlayer" or "TriggeredCardController" or "Remembered"))
+            if (p["UnlessPayer"] is { } payer && payer is not ("You" or "TargetedController" or "ThisTargetedController" or "Targeted" or "Opponent" or "Player"
+                    or "TriggeredActivator" or "TriggeredPlayer" or "TriggeredCardController" or "Remembered" or "Player.IsRemembered"))
                 ctx.Need("UnlessPayer:" + payer);
         }
 
@@ -1015,13 +1049,15 @@ public static partial class CardCompiler
                 "Return" => CostPartKind.ReturnToHand,
                 "Reveal" => CostPartKind.Reveal,
                 "Exile" when valid == "CARDNAME" || m.Groups[2].Value == "CARDNAME" => CostPartKind.ExileSource,
+                // "Exile a creature you control" (Food Chain).
+                "Exile" when valid != "" => CostPartKind.ExileFromBattlefield,
                 "Crew" => CostPartKind.TapPower,
                 "Draw" when valid == "You" => CostPartKind.Draw,
                 _ => null,
             };
             if (kind is null) { ctx.Need("Cost:" + m.Groups[1].Value); continue; }
             if (kind is CostPartKind.Sacrifice or CostPartKind.Discard or CostPartKind.ExileFromGraveyard or CostPartKind.TapUntapped
-                    or CostPartKind.ExileFromHand or CostPartKind.ReturnToHand or CostPartKind.Reveal
+                    or CostPartKind.ExileFromHand or CostPartKind.ReturnToHand or CostPartKind.Reveal or CostPartKind.ExileFromBattlefield
                 && valid is not ("CARDNAME" or "Hand" or "Random" or "Card" or ""))
                 Filter.Parse(valid, ctx);
             parts.Add(new CostPart(kind.Value, amount, valid, token));

@@ -958,6 +958,8 @@ public class MechanicsTests
         g.Perform(play);
         Assert.Equal("Land Side", card.Name);
         Assert.True(card.Types.Is(CardType.Land));
+        // Reports name it as the deck does ("Spell Side // Land Side"), whichever face was played.
+        Assert.Equal(new[] { "Spell Side // Land Side" }, g.State.Record.Cast);
     }
 
     [Fact]

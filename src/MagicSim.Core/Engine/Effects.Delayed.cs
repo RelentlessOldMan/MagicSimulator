@@ -3,7 +3,8 @@ using MagicSim.Core.Forge;
 namespace MagicSim.Core.Engine;
 
 /// <summary>A delayed triggered ability waiting for its event (rule 603.7); it triggers once.</summary>
-public sealed record DelayedTrigger(TriggerDef Trigger, int HostId, int Controller, List<int> Remembered, int Turn, bool ThisTurn, bool NextTurn);
+public sealed record DelayedTrigger(TriggerDef Trigger, int HostId, int Controller, List<int> Remembered, int Turn, bool ThisTurn, bool NextTurn,
+    List<int>? Players = null, int Number = 0);
 
 /// <summary>"At the beginning of the next end step, …", "When you next cast …": sets up a delayed trigger.</summary>
 sealed class DelayedTriggerEffect : Effect
@@ -11,7 +12,7 @@ sealed class DelayedTriggerEffect : Effect
     public override string Api => "DelayedTrigger";
 
     /// <summary>The effect's own parameters; the rest describe the trigger.</summary>
-    private static readonly string[] Own = { "RememberObjects", "ThisTurn", "NextTurn" };
+    private static readonly string[] Own = { "RememberObjects", "ThisTurn", "NextTurn", "RememberNumber" };
 
     private static readonly string[] TriggerKeys =
     {
@@ -27,14 +28,20 @@ sealed class DelayedTriggerEffect : Effect
         var p = new ForgeParams(string.Join(" | ", keys.Select(k => $"{k}$ {ab[k]}")));
         ab.Delayed = CardCompiler.CompileTrigger(p, ctx);
         if (ab.Delayed.Execute is null) ctx.Need("DelayedTrigger:NoExecute");
-        Defined.ValidateCards(ab["RememberObjects"], ctx);
+        if (ab["RememberObjects"] is { } ro && Defined.IsPlayerRef(ro)) Defined.ValidatePlayers(ro, ctx);
+        else Defined.ValidateCards(ab["RememberObjects"], ctx);
     }
 
     public override void Resolve(EffectContext x)
     {
         var ab = x.Ability;
-        var remembered = ab["RememberObjects"] is { } ro ? Defined.Cards(ro, x) : new List<int>();
-        x.S.Delayed.Add(new DelayedTrigger(ab.Delayed!, x.Host.Id, x.Controller, remembered, x.S.Turn, ab["ThisTurn"] == "True", ab["NextTurn"] == "True"));
+        var ro = ab["RememberObjects"];
+        var players = ro is not null && Defined.IsPlayerRef(ro);
+        var remembered = ro is not null && !players ? Defined.Cards(ro, x) : new List<int>();
+        // "RememberNumber$ True": the number the card remembers (Mana Drain: the countered spell's mana value).
+        var number = ab["RememberNumber"] == "True" ? x.Host.StoredVars?.GetValueOrDefault(Card.RememberedNumberKey) ?? 0 : 0;
+        x.S.Delayed.Add(new DelayedTrigger(ab.Delayed!, x.Host.Id, x.Controller, remembered, x.S.Turn, ab["ThisTurn"] == "True", ab["NextTurn"] == "True",
+            players ? Defined.Players(ro, x) : null, number));
         x.Game.Note($"  delayed trigger: {ab.Delayed!["TriggerDescription"] ?? ab.Delayed.Mode}");
     }
 }

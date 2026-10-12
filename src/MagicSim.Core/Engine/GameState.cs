@@ -19,6 +19,8 @@ public sealed class Card
     /// <summary>Which face is up (DFC back face after transforming, etc.).</summary>
     public int Face { get; set; }
     public bool Tapped { get; set; }
+    /// <summary>"It doesn't untap during its controller's next untap step."</summary>
+    public bool SkipNextUntap { get; set; }
     /// <summary>Turn this permanent came under its controller's control (summoning sickness).</summary>
     public int ControlledSinceTurn { get; set; }
     public bool IsToken { get; init; }
@@ -43,12 +45,16 @@ public sealed class Card
     public Dictionary<string, int>? Counters { get; set; }
     public HashSet<string>? TempKeywords { get; set; }
     public List<int>? Remembered { get; set; }
+    /// <summary>Players an effect remembers ("RememberObjects$ You & Targeted").</summary>
+    public List<int>? RememberedPlayers { get; set; }
     /// <summary>Remembered cards from a goldfish opponent's hand, which has no real cards: only how many (Dark Deal).</summary>
     public int RememberedUnknown { get; set; }
     /// <summary>Cards imprinted on (exiled with) this card: Chrome Mox, Tainted Pact.</summary>
     public List<int>? Imprinted { get; set; }
     /// <summary>Values set by StoreSVar$, overriding the card's SVar of that name.</summary>
     public Dictionary<string, int>? StoredVars { get; set; }
+    /// <summary>The StoredVars entry for a remembered number ("RememberCounteredCMC$"), forgotten with the remembered objects.</summary>
+    public const string RememberedNumberKey = "__RememberedNumber";
     public string? NamedCard { get; set; }
     public int AttachedTo { get; set; } = -1;
     /// <summary>The permanent entered or was cast this turn with X = this value.</summary>
@@ -82,6 +88,8 @@ public sealed class Card
     public Zone? CastFrom { get; set; }
     /// <summary>The card whose effect last exiled this one ("exiled with [source]").</summary>
     public int ExiledWith { get; set; } = -1;
+    /// <summary>Cipher: the creature this exiled card is encoded on, or -1.</summary>
+    public int EncodedOn { get; set; } = -1;
     /// <summary>Face down (morph, rule 708): a nameless 2/2 creature with no abilities but turning face up.</summary>
     public bool FaceDown { get; set; }
     /// <summary>It was cast with escape ("escapes with …", rule 702.138).</summary>
@@ -178,7 +186,7 @@ public sealed class Card
 
     public Card Clone() => new()
     {
-        Id = Id, Def = Def, CopyDef = CopyDef, CopyUntilCleanup = CopyUntilCleanup, Owner = Owner, Controller = Controller, Zone = Zone, Face = Face, Tapped = Tapped,
+        Id = Id, Def = Def, CopyDef = CopyDef, CopyUntilCleanup = CopyUntilCleanup, Owner = Owner, Controller = Controller, Zone = Zone, Face = Face, Tapped = Tapped, SkipNextUntap = SkipNextUntap,
         ControlledSinceTurn = ControlledSinceTurn, IsToken = IsToken, IsEffect = IsEffect, EffectDuration = EffectDuration,
         EffectTurn = EffectTurn, EffectHost = EffectHost, ExileOnMoved = ExileOnMoved, ForgetOnMoved = ForgetOnMoved,
         ChosenColor = ChosenColor, ChosenType = ChosenType, ChosenPlayer = ChosenPlayer, TokenPower = TokenPower, TokenToughness = TokenToughness, IsCommander = IsCommander, CommandCasts = CommandCasts,
@@ -186,10 +194,11 @@ public sealed class Card
         Counters = Counters is null ? null : new Dictionary<string, int>(Counters),
         TempKeywords = TempKeywords is null ? null : new HashSet<string>(TempKeywords),
         Remembered = Remembered is null ? null : new List<int>(Remembered), RememberedUnknown = RememberedUnknown,
+        RememberedPlayers = RememberedPlayers is null ? null : new List<int>(RememberedPlayers),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
         NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
-        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
+        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
@@ -206,7 +215,12 @@ public sealed class Player
     public int Index { get; init; }
     public int Life { get; set; }
     public int Poison { get; set; }
+    /// <summary>Other counters on the player (experience), by upper-case kind. Poison has its own field.</summary>
+    public Dictionary<string, int>? Counters { get; set; }
+    public int CounterCount(string kind) => Counters?.GetValueOrDefault(kind.ToUpperInvariant()) ?? 0;
     public ManaPool Pool;
+    /// <summary>Floating mana with a spending restriction ("spend this mana only to cast creature spells").</summary>
+    public List<RestrictedMana>? RestrictedPool;
     public int LandsPlayedThisTurn { get; set; }
     public int LandDropsPerTurn { get; set; } = 1;
     /// <summary>Extra land drops from continuous effects (Exploration, Azusa).</summary>
@@ -249,7 +263,7 @@ public sealed class Player
 
     public Player Clone() => new()
     {
-        Index = Index, Life = Life, Poison = Poison, Pool = Pool, LandsPlayedThisTurn = LandsPlayedThisTurn,
+        Index = Index, Life = Life, Poison = Poison, Counters = Counters is null ? null : new(Counters), Pool = Pool, RestrictedPool = RestrictedPool?.ToList(), LandsPlayedThisTurn = LandsPlayedThisTurn,
         LandDropsPerTurn = LandDropsPerTurn, StaticLandDrops = StaticLandDrops, StaticMaxHandSize = StaticMaxHandSize, StaticMaxHandSizeRaise = StaticMaxHandSizeRaise, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary, AbstractHand = AbstractHand,
         IsGoldfish = IsGoldfish, CommanderDamageTaken = new Dictionary<int, int>(CommanderDamageTaken),
         LifePaidTotal = LifePaidTotal, DrewFromEmpty = DrewFromEmpty, KnownTop = KnownTop, CityBlessing = CityBlessing,
@@ -291,8 +305,14 @@ public sealed class StackItem
     public int TriggerAmount { get; init; }
     /// <summary>Permanents sacrificed to pay for this (or that triggered it): "Sacrificed".</summary>
     public List<int>? Sacrificed { get; set; }
+    /// <summary>Cards exiled to pay for this: "Exiled".</summary>
+    public List<int>? Exiled { get; set; }
     /// <summary>For a delayed trigger: the objects it remembers (DelayTriggerRemembered).</summary>
     public List<int>? DelayRemembered { get; init; }
+    /// <summary>For a delayed trigger: the players it remembers ("its controller may draw up to two cards").</summary>
+    public List<int>? DelayPlayers { get; init; }
+    /// <summary>For a delayed trigger: the number it remembers (Mana Drain's mana value, TriggerRememberAmount).</summary>
+    public int DelayNumber { get; init; }
     /// <summary>The player a RepeatEach is currently on ("Remembered" as a player).</summary>
     public int? IteratedPlayer { get; set; }
     /// <summary>Cards spliced onto this spell: their effects follow its own (rule 702.47).</summary>
@@ -304,7 +324,7 @@ public sealed class StackItem
 
     public StackItem Clone() => new()
     {
-        DelayRemembered = DelayRemembered, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount, Sacrificed = Sacrificed, Spliced = Spliced,
+        DelayRemembered = DelayRemembered, DelayPlayers = DelayPlayers, DelayNumber = DelayNumber, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount, Sacrificed = Sacrificed, Exiled = Exiled, Spliced = Spliced,
         TriggeredSourceId = TriggeredSourceId, CastFrom = CastFrom, TriggeredObjectId = TriggeredObjectId,
         Id = Id, SourceId = SourceId, Ability = Ability, Controller = Controller, IsSpell = IsSpell,
         ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, TriggeredPlayer = TriggeredPlayer, Description = Description, ExileAfter = ExileAfter,
@@ -316,6 +336,8 @@ public sealed class TurnInfo
 {
     public int SpellsCast { get; set; }
     public int MaxManaSeen { get; set; }
+    /// <summary>"End the turn" (rule 723): the rest of the turn goes straight to its cleanup step.</summary>
+    public bool Ended { get; set; }
     /// <summary>"At the beginning of the next end step" actions: (card id, "Exile" or "Sacrifice").</summary>
     public List<(int CardId, string Action)> AtEndStep { get; set; } = new();
     /// <summary>Control changes that end at cleanup: (card id, controller to return it to).</summary>
@@ -352,7 +374,7 @@ public sealed class TurnInfo
     public HashSet<int> PermanentLeft { get; set; } = new();
     public TurnInfo Clone() => new()
     {
-        SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
+        SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, Ended = Ended, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
         ExtraPhases = new(ExtraPhases), Combats = Combats, AttackersDeclared = AttackersDeclared, DefendingPlayer = DefendingPlayer,
         Drawn = new(Drawn), Cast = new(Cast), DamageTaken = new(DamageTaken), CombatDamageTypes = new(CombatDamageTypes, StringComparer.OrdinalIgnoreCase), CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
     };
@@ -376,6 +398,8 @@ public sealed class GameState
     public Rng Rng;
     public bool GameOver { get; set; }
     public int? Winner { get; set; }
+    /// <summary>The monarch (rule 724): draws a card at the beginning of their end step.</summary>
+    public int? Monarch { get; set; }
     public string? WinReason { get; set; }
     public TurnInfo ThisTurn { get; set; } = new();
     public List<int> Attackers { get; set; } = new();
@@ -414,7 +438,7 @@ public sealed class GameState
         Battlefield = new List<int>(Battlefield), PhasedOut = new List<int>(PhasedOut),
         Stack = Stack.Select(s => s.Clone()).ToList(),
         Turn = Turn, ExtraTurns = ExtraTurns, ExtraTurnsTaken = ExtraTurnsTaken, Step = Step, ActivePlayer = ActivePlayer, Rng = Rng,
-        GameOver = GameOver, Winner = Winner, WinReason = WinReason, ThisTurn = ThisTurn.Clone(), Attackers = new List<int>(Attackers),
+        GameOver = GameOver, Winner = Winner, Monarch = Monarch, WinReason = WinReason, ThisTurn = ThisTurn.Clone(), Attackers = new List<int>(Attackers),
         NextStackId = NextStackId, Record = keepRecord ? Record.Clone() : new GameRecord(), Delayed = new List<DelayedTrigger>(Delayed),
         UntilHostLeaves = new(UntilHostLeaves), ReturnWhenDies = new(ReturnWhenDies),
     };

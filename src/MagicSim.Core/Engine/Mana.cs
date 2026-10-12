@@ -133,6 +133,9 @@ public sealed class ManaCost
 }
 
 /// <summary>A mana pool: counts per <see cref="ManaColor"/>.</summary>
+/// <summary>Mana in a pool that only some payments may use: <paramref name="Restriction"/> as in Forge's RestrictValid$.</summary>
+public sealed record RestrictedMana(int SourceId, string Restriction, ManaColor Color, int Amount);
+
 public struct ManaPool
 {
     private int _w, _u, _b, _r, _g, _c;

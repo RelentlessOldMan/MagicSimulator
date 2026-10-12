@@ -11,7 +11,8 @@ sealed class CopySpellAbilityEffect : Effect
         if (ab["Defined"] is { } d && d is not ("TriggeredSpellAbility" or "Parent" or "Targeted")) ctx.Need("CopySpellAbility.Defined:" + d);
         if (ab["Defined"] is null && ab.TargetFilter is null) ctx.Need("CopySpellAbility:NothingToCopy");
         if (ab["TargetType"] is { } tt && tt != "Spell") ctx.Need("CopySpellAbility.TargetType:" + tt);
-        if (ab["Controller"] is { } c && c != "You") ctx.Need("CopySpellAbility.Controller:" + c);
+        // "That player copies it" (Bonus Round): the copied spell's controller.
+        if (ab["Controller"] is { } c && c is not ("You" or "TriggeredCardController")) ctx.Need("CopySpellAbility.Controller:" + c);
         ValidateAmount(ab, "Amount", ctx);
     }
 
@@ -31,7 +32,8 @@ sealed class CopySpellAbilityEffect : Effect
         {
             var original = x.S.Stack.LastOrDefault(s => s.IsSpell && s.SourceId == id);
             if (original is null || x.S[id].Types.IsPermanent) continue;   // copies of permanent spells (tokens) aren't supported
-            for (var i = 0; i < n; i++) x.Game.CopySpell(original, x.Controller, ab["MayChooseTarget"] == "True");
+            var copier = ab["Controller"] == "TriggeredCardController" ? original.Controller : x.Controller;
+            for (var i = 0; i < n; i++) x.Game.CopySpell(original, copier, ab["MayChooseTarget"] == "True");
         }
     }
 }
@@ -42,7 +44,9 @@ sealed class PlayEffect : Effect
     public override string Api => "Play";
     public override IReadOnlySet<string> Params { get; } = P(
         "Defined", "Valid", "ValidZone", "ValidSA", "WithoutManaCost", "Optional", "Amount", "Controller", "ForgetPlayed", "RememberPlayed",
-        "ReplaceGraveyard", "ImprintPlayed");
+        "ReplaceGraveyard", "ImprintPlayed",
+        // Generated for miracle: cast it for its miracle cost.
+        "Miracle");
 
     private static readonly HashSet<string> Zones = new(StringComparer.Ordinal) { "Hand", "Exile", "Graveyard", "Library", "Command" };
 
@@ -85,14 +89,16 @@ sealed class PlayEffect : Effect
         var remaining = ab["Amount"] == "All" ? int.MaxValue : Amount(x, ab["Amount"], 1);
         while (remaining-- > 0)
         {
+            var miracle = ab["Miracle"] == "True";
             var castable = candidates.Where(id => x.S[id] is var c && !c.Types.Is(CardType.Land) && c.Zone is not (Zone.Stack or Zone.Battlefield or Zone.None)
-                                                  && x.Game.CanCastFromEffect(c, free)).ToList();
+                                                  && (miracle ? x.Game.CanCastMiracle(c) : x.Game.CanCastFromEffect(c, free))).ToList();
             if (castable.Count == 0) break;
             var pick = x.Game.Decider.ChooseCards(x.Game, x.Controller, Choice.Generic, x.Host, castable, ab["Optional"] == "True" ? 0 : 1, 1);
             if (pick.Count == 0) break;
             var card = x.S[pick[0]];
             candidates.Remove(card.Id);
-            x.Game.CastFromEffect(card, free, exileAfter: ab["ReplaceGraveyard"] == "Exile");
+            if (miracle) x.Game.CastMiracle(card);
+            else x.Game.CastFromEffect(card, free, exileAfter: ab["ReplaceGraveyard"] == "Exile");
             if (ab["RememberPlayed"] == "True") (x.Host.Remembered ??= new()).Add(card.Id);
             if (ab["ImprintPlayed"] == "True") (x.Host.Imprinted ??= new()).Add(card.Id);
             if (ab["ForgetPlayed"] == "True") x.Host.Remembered?.Remove(card.Id);
@@ -104,12 +110,16 @@ sealed class PlayEffect : Effect
 sealed class GainControlEffect : Effect
 {
     public override string Api => "GainControl";
-    public override IReadOnlySet<string> Params { get; } = P("Defined", "NewController", "LoseControl", "Untap", "AddKWs");
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "NewController", "LoseControl", "Untap", "AddKWs", "AllValid",
+        // "For each opponent, gain control of target permanent that player controls": one target per player.
+        "TargetsForEachPlayer");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         Defined.ValidateCards(ab["Defined"], ctx);
-        if (ab["Defined"] is null && ab.TargetFilter is null) ctx.Need("GainControl:NoTarget");
+        // "Gain control of all creatures" (Insurrection).
+        if (ab["AllValid"] is { } all) Filter.Parse(all, ctx);
+        else if (ab["Defined"] is null && ab.TargetFilter is null) ctx.Need("GainControl:NoTarget");
         if (ab.TargetFilter is { CanTargetPlayers: true }) ctx.Need("GainControl:Player");
         Defined.ValidatePlayers(ab["NewController"], ctx);
         if (ab["LoseControl"] is { } lc && lc != "EOT") ctx.Need("GainControl.LoseControl:" + lc);
@@ -122,7 +132,8 @@ sealed class GainControlEffect : Effect
     {
         var ab = x.Ability;
         var newController = ab["NewController"] is { } nc ? Defined.Players(nc, x).FirstOrDefault(x.Controller) : x.Controller;
-        foreach (var id in Defined.Cards(ab["Defined"], x, "Targeted"))
+        var cards = ab["AllValid"] is { } all ? Defined.Cards("Valid " + all, x) : Defined.Cards(ab["Defined"], x, "Targeted");
+        foreach (var id in cards)
         {
             var c = x.S[id];
             if (c.Zone != Zone.Battlefield) continue;

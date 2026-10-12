@@ -109,7 +109,9 @@ sealed class ChangeZoneAllEffect : Effect
     public override string Api => "ChangeZoneAll";
     public override IReadOnlySet<string> Params { get; } = P(
         "Origin", "Destination", "ChangeType", "Defined", "Shuffle", "LibraryPosition", "Tapped", "RememberChanged", "RandomOrder",
-        "UseAllOriginZones", "GainControl");
+        "UseAllOriginZones", "GainControl", "DefinedPlayer", "ForgetOtherRemembered",
+        // Face down only hides the cards from opponents, which goldfish opponents don't care about.
+        "ExileFaceDown");
 
     private static readonly HashSet<string> Zones = new() { "Library", "Hand", "Battlefield", "Graveyard", "Exile" };
 
@@ -120,6 +122,7 @@ sealed class ChangeZoneAllEffect : Effect
             if (ab[key] is not { } z || !z.Split(',').All(s => Zones.Contains(s.Trim()))) ctx.Need($"ChangeZoneAll.{key}:{ab[key]}");
         if (ab["ChangeType"] is { } ct) Filter.Parse(ct, ctx);
         Defined.ValidatePlayers(ab["Defined"], ctx);
+        Defined.ValidatePlayers(ab["DefinedPlayer"], ctx);
     }
 
     public override void Resolve(EffectContext x)
@@ -129,9 +132,21 @@ sealed class ChangeZoneAllEffect : Effect
         var dest = Enum.Parse<Zone>(ab["Destination"]!);
         var filter = ab["ChangeType"] is { } ct ? FilterFor(x.SVarFace, ct) : null;
         // Whose zones: Defined$ or targeted players, else everyone's.
-        var players = ab["Defined"] is { } d ? Defined.Players(d, x)
+        var players = (ab["Defined"] ?? ab["DefinedPlayer"]) is { } d ? Defined.Players(d, x)
             : ab.TargetFilter is not null ? Defined.Players("Targeted", x)
             : x.S.Players.Select(p => p.Index).ToList();
+        if (ab["ForgetOtherRemembered"] == "True") { x.Host.Remembered = null; x.Host.RememberedUnknown = 0; }
+        // A goldfish opponent's hand is a count: the whole hand moves (to their library count, or out of the game).
+        if (origins.Contains(Zone.Hand) && dest != Zone.Hand)
+            foreach (var p in players.Select(i => x.S.Players[i]).Where(p => p.IsGoldfish && p.AbstractHand > 0))
+            {
+                if (filter is not null && !filter.MatchesUnknownCard(p.Index, x)) continue;
+                var n = p.AbstractHand;
+                p.AbstractHand = 0;
+                if (dest == Zone.Library) p.AbstractLibrary += n;
+                if (ab["RememberChanged"] == "True") x.Host.RememberedUnknown += n;
+                x.Game.Note($"  opponent {p.Index}'s hand of {n} to {dest}");
+            }
         var cards = new List<int>();
         foreach (var z in origins)
             cards.AddRange(z == Zone.Battlefield
@@ -402,7 +417,7 @@ sealed class PutCounterAllEffect : Effect
 sealed class CounterEffect : Effect
 {
     public override string Api => "Counter";
-    public override IReadOnlySet<string> Params { get; } = P("Destination");
+    public override IReadOnlySet<string> Params { get; } = P("Destination", "RememberTargets", "RememberCounteredCMC");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -418,6 +433,12 @@ sealed class CounterEffect : Effect
         {
             var item = x.S.Stack.FirstOrDefault(s => s.IsSpell && s.SourceId == id);
             if (item is null) continue;
+            if (x.Ability["RememberTargets"] == "True") (x.Host.Remembered ??= new()).Add(id);
+            if (x.Ability["RememberCounteredCMC"] == "True")
+            {
+                x.Host.StoredVars ??= new();
+                x.Host.StoredVars[Card.RememberedNumberKey] = x.Host.StoredVars.GetValueOrDefault(Card.RememberedNumberKey) + x.S[id].CurrentFace.ManaCost.ManaValue;
+            }
             x.S.Stack.Remove(item);
             x.Game.Note($"  countered {x.S[id].Name}");
             x.Game.MoveTo(x.S[id], item.ExileAfter ? Zone.Exile : dest);
@@ -612,7 +633,8 @@ sealed class EffectEffect : Effect
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         if (ab["Duration"] is { } d && !Durations.Contains(d)) ctx.Need("Effect.Duration:" + d);
-        if (ab["EffectOwner"] is { } o && o != "You") ctx.Need("Effect.EffectOwner:" + o);
+        // "Exile target creature an opponent controls until an opponent becomes the monarch": the effect is its owner's.
+        if (ab["EffectOwner"] is { } o && o is not ("You" or "TargetedOwner")) ctx.Need("Effect.EffectOwner:" + o);
         Defined.ValidateCards(ab["RememberObjects"], ctx);
         Defined.ValidateCards(ab["ImprintCards"], ctx);
         foreach (var key in new[] { "ExileOnMoved", "ForgetOnMoved" })
@@ -635,8 +657,14 @@ sealed class EffectEffect : Effect
     public override void Resolve(EffectContext x)
     {
         var ab = x.Ability;
-        var e = x.Game.CreateEffect(ab.EffectDef!, x.Controller, x.Host, ab["Duration"], ab["ExileOnMoved"], ab["ForgetOnMoved"]);
-        if (ab["RememberObjects"] is { } ro) e.Remembered = Defined.Cards(ro, x);
+        var owner = ab["EffectOwner"] == "TargetedOwner" && Defined.Players("TargetedOwner", x) is [var to, ..] ? to : x.Controller;
+        var e = x.Game.CreateEffect(ab.EffectDef!, owner, x.Host, ab["Duration"], ab["ExileOnMoved"], ab["ForgetOnMoved"]);
+        if (ab["RememberObjects"] is { } ro)
+        {
+            e.Remembered = Defined.Cards(ro, x);
+            var players = ro.Split(" & ").Where(Defined.IsPlayerRef).SelectMany(part => Defined.Players(part, x)).Distinct().ToList();
+            if (players.Count > 0) e.RememberedPlayers = players;
+        }
         if (ab["ImprintCards"] is { } ic) e.Imprinted = Defined.Cards(ic, x);
         e.ChosenColor = x.Host.ChosenColor;
         e.ChosenType = x.Host.ChosenType;

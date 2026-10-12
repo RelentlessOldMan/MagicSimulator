@@ -58,7 +58,7 @@ public static class Effects
         new ManaReflectedEffect(), new FlipCoinEffect(), new RepeatEffect(), new StoreSVarEffect(),
         new EffectEffect(), new ChooseColorEffect(), new ChooseTypeEffect(), new ChoosePlayerEffect(),
         new CopyPermanentEffect(), new CloneEffect(), new AnimateEffect(), new ProliferateEffect(),
-        new DelayedTriggerEffect(), new RepeatEachEffect(), new TwoPilesEffect(), new CumulativeUpkeepEffect(), new PhasesEffect(), new TapAllEffect(), new PairEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
+        new DelayedTriggerEffect(), new RepeatEachEffect(), new TwoPilesEffect(), new CumulativeUpkeepEffect(), new PhasesEffect(), new TapAllEffect(), new PairEffect(), new VoteEffect(), new BecomeMonarchEffect(), new EndTurnEffect(), new CopySpellAbilityEffect(), new PlayEffect(), new GainControlEffect(),
         new AnimateAllEffect(), new FightEffect(), new BranchEffect(), new MultiplyCounterEffect(), new SetStateEffect(),
         new UntapAllEffect(), new RemoveCounterEffect(), new ClassLevelUpEffect(), new ProtectionEffect(), new RollDiceEffect(),
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
@@ -134,6 +134,7 @@ sealed class ManaEffect : Effect
         }
         var produced = ab["Produced"];
         if (produced is "Combo ColorIdentity" or "Chosen") return;
+        if (produced?.StartsWith(EachColorAmong, StringComparison.Ordinal) == true) { Filter.Parse(produced[EachColorAmong.Length..], ctx); return; }
         if (Game.ProducedMask(produced) is null && FixedMana(produced) is null) ctx.Need("ManaProduced:" + produced);
     }
 
@@ -148,6 +149,15 @@ sealed class ManaEffect : Effect
             foreach (var c in several) p.Pool.Add(c, amount);
             return;
         }
+        // "For each color among permanents you control, add one mana of that color" (Bloom Tender).
+        if (produced.StartsWith(EachColorAmong, StringComparison.Ordinal))
+        {
+            var filter = FilterFor(x.Host.CurrentFace, produced[EachColorAmong.Length..]);
+            var colors = x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).Aggregate((ColorMask)0, (m, c) => m | c.Colors);
+            foreach (var c in ManaColors.All)
+                if (c != ManaColor.C && (colors & c.Mask()) != 0) p.Pool.Add(c, amount);
+            return;
+        }
         var mask = produced switch
         {
             "Combo ColorIdentity" => x.Game.CommanderIdentity(x.Controller),
@@ -160,12 +170,16 @@ sealed class ManaEffect : Effect
         {
             // "Any" = one color chosen for all of it (e.g. Lion's Eye Diamond).
             var color = Single(mask) ?? x.Game.Decider.ChooseColor(x.Game, x.Controller, x.Host, mask);
-            p.Pool.Add(color, amount);
+            // "Spend this mana only to cast creature spells" (Food Chain): it floats apart from the rest.
+            if (x.Ability["RestrictValid"] is { } rv) (p.RestrictedPool ??= new()).Add(new RestrictedMana(x.Host.Id, rv, color, amount));
+            else p.Pool.Add(color, amount);
         }
         else
             for (var i = 0; i < amount; i++)
                 p.Pool.Add(Single(mask) ?? x.Game.Decider.ChooseColor(x.Game, x.Controller, x.Host, mask));
     }
+
+    private const string EachColorAmong = "Special EachColorAmong_Valid ";
 
     /// <summary>"U B" or "C C": a fixed list of symbols. Null for anything else.</summary>
     public static List<ManaColor>? FixedMana(string? produced)
@@ -190,13 +204,18 @@ sealed class ManaEffect : Effect
 sealed class DrawEffect : Effect
 {
     public override string Api => "Draw";
-    public override IReadOnlySet<string> Params { get; } = P("NumCards", "Defined");
+    public override IReadOnlySet<string> Params { get; } = P("NumCards", "Defined", "Upto");
     public override void Validate(AbilityDef ab, CompileContext ctx) { ValidateAmount(ab, "NumCards", ctx); Defined.ValidatePlayers(ab["Defined"], ctx); }
 
     public override void Resolve(EffectContext x)
     {
         var n = Amount(x, x.Ability["NumCards"], 1);
-        foreach (var p in Players(x)) x.Game.Draw(p, n);
+        foreach (var p in Players(x))
+        {
+            // "Draw up to N": a goldfish opponent draws them all (worse for you); you don't draw yourself out.
+            var draw = x.Ability["Upto"] == "True" && !x.S.Players[p].IsGoldfish ? Math.Min(n, Math.Max(0, x.S.Players[p].LibraryCount - 1)) : n;
+            x.Game.Draw(p, draw);
+        }
     }
 
     public static List<int> Players(EffectContext x) =>
@@ -427,7 +446,9 @@ sealed class DigEffect : Effect
     public override void Resolve(EffectContext x)
     {
         var ab = x.Ability;
-        var player = Defined.Players(ab["Defined"], x)[0];
+        var players = Defined.Players(ab["Defined"], x);
+        if (players.Count == 0) return;
+        var player = players[0];
         if (x.S.Players[player].IsGoldfish) { DigUnknown(x, x.S.Players[player]); return; }
         var lib = x.S.Players[player].Library;
         var n = Math.Min(Amount(x, ab["DigNum"], 1), lib.Count);
@@ -530,8 +551,14 @@ sealed class MillEffect : Effect
         var n = Amount(x, x.Ability["NumCards"], 1);
         foreach (var p in DrawEffect.Players(x))
         {
+            var before = x.S.Players[p].LibraryCount;
             var milled = x.Game.Mill(p, n);
-            if (x.Ability["RememberMilled"] == "True") (x.Host.Remembered ??= new()).AddRange(milled);
+            if (x.Ability["RememberMilled"] == "True")
+            {
+                (x.Host.Remembered ??= new()).AddRange(milled);
+                // A goldfish library's cards are unknown: remembered by number.
+                if (x.S.Players[p].IsGoldfish) x.Host.RememberedUnknown += before - x.S.Players[p].LibraryCount;
+            }
             if (p != x.Controller) x.Game.RememberWinCard(x.Host);
         }
     }
@@ -642,7 +669,7 @@ sealed class CleanupEffect : Effect
         if (x.Ability["ClearChosenColor"] == "True") x.Host.ChosenColor = null;
         if (x.Ability["ClearChosenCard"] == "True") x.Host.ChosenCards = null;
         if (x.Ability["ClearChosenPlayer"] == "True") x.Host.ChosenPlayer = null;
-        if (x.Ability["ClearRemembered"] == "True") { x.Host.Remembered = null; x.Host.RememberedUnknown = 0; }
+        if (x.Ability["ClearRemembered"] == "True") { x.Host.Remembered = null; x.Host.RememberedUnknown = 0; x.Host.StoredVars?.Remove(Card.RememberedNumberKey); }
         if (x.Ability["ClearImprinted"] == "True") x.Host.Imprinted = null;
         if (x.Ability["ClearNamedCard"] == "True") x.Host.NamedCard = null;
     }
@@ -666,11 +693,12 @@ sealed class NameCardEffect : Effect
 sealed class DealDamageEffect : Effect
 {
     public override string Api => "DealDamage";
-    public override IReadOnlySet<string> Params { get; } = P("NumDmg", "Defined", "DividedAsYouChoose", "DamageSource", "RememberDamaged");
+    public override IReadOnlySet<string> Params { get; } = P("NumDmg", "Defined", "DividedAsYouChoose", "DamageSource", "RememberDamaged", "DivideEvenly");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         ValidateAmount(ab, "NumDmg", ctx);
+        if (ab["DivideEvenly"] is { } even && even != "RoundedDown") ctx.Need("DealDamage.DivideEvenly:" + even);
         // Defined$ players, or cards ("deals 2 damage to it": TriggeredCardLKICopy).
         if (ab["Defined"] is { } d && !Defined.IsPlayerRef(d)) Defined.ValidateCards(d, ctx);
         else Defined.ValidatePlayers(ab["Defined"], ctx);
@@ -691,7 +719,8 @@ sealed class DealDamageEffect : Effect
         for (var i = 0; i < order.Count; i++)
         {
             var t = order[i];
-            var dmg = !divided ? n : i == 0 ? n - (order.Count - 1) : 1;
+            // "X damage divided evenly, rounded down, among any number of targets."
+            var dmg = x.Ability["DivideEvenly"] is not null ? n / order.Count : !divided ? n : i == 0 ? n - (order.Count - 1) : 1;
             if (dmg <= 0) continue;
             if (t.Player is { } p) x.Game.DamagePlayer(p, dmg, source);
             else if (t.CardId is { } id && x.S[id].Zone == Zone.Battlefield)
@@ -784,7 +813,9 @@ sealed class PumpEffect : CardsEffect
     {
         // A player gaining a keyword ("you gain protection from everything", hexproof): nothing a goldfish opponent tests.
         if (ab["Defined"] is { } who && Defined.IsPlayerRef(who)) return;
-        if (ab["Duration"] is { } dur) ctx.Need("Pump.Duration:" + dur);
+        // "That land doesn't untap during its controller's next untap step": lasts until it has skipped one.
+        if (ab["Duration"] is { } dur && !(dur == "Permanent" && ab["KW"] == SkipNextUntapKeyword && ab["NumAtt"] is null && ab["NumDef"] is null))
+            ctx.Need("Pump.Duration:" + dur);
         base.Validate(ab, ctx);
         if (ab["NumAtt"] != "Double") ValidateAmount(ab, "NumAtt", ctx);
         if (ab["NumDef"] != "Double") ValidateAmount(ab, "NumDef", ctx);
@@ -795,9 +826,11 @@ sealed class PumpEffect : CardsEffect
         if (ab["PumpZone"] is { } pz && (pz != "Graveyard" || ab["KW"] != "Flashback")) ctx.Need("Pump.PumpZone:" + pz);
     }
 
+    public const string SkipNextUntapKeyword = "HIDDEN This card doesn't untap during your next untap step.";
+
     public static void ValidateKeywords(string? kw, CompileContext ctx)
     {
-        if (kw is null) return;
+        if (kw is null or SkipNextUntapKeyword) return;
         foreach (var k in kw.Split('&', StringSplitOptions.TrimEntries))
             if (!Keywords.Supported.Contains(Forge.ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + Forge.ForgeRequirements.KeywordName(k));
     }
@@ -807,6 +840,7 @@ sealed class PumpEffect : CardsEffect
         c.PowerBonus += att;
         c.ToughnessBonus += def;
         if (kw is null) return;
+        if (kw == SkipNextUntapKeyword) { c.SkipNextUntap = true; return; }
         c.TempKeywords ??= new HashSet<string>(StringComparer.Ordinal);
         foreach (var k in kw.Split('&', StringSplitOptions.TrimEntries)) c.TempKeywords.Add(Forge.ForgeRequirements.KeywordName(k));
     }
@@ -865,11 +899,13 @@ sealed class TapEffect : CardsEffect
 sealed class PutCounterEffect : CardsEffect
 {
     public override string Api => "PutCounter";
-    public override IReadOnlySet<string> Params { get; } = P("CounterType", "CounterNum", "Defined");
+    public override IReadOnlySet<string> Params { get; } = P("CounterType", "CounterNum", "Defined", "DividedAsYouChoose");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
-        base.Validate(ab, ctx);
+        // "You get an experience counter": counters on players.
+        if (ab["Defined"] is { } who && Defined.IsPlayerRef(who)) Defined.ValidatePlayers(who, ctx);
+        else base.Validate(ab, ctx);
         ValidateAmount(ab, "CounterNum", ctx);
         if (ab["CounterType"] is null) ctx.Need("PutCounter.CounterType:none");
     }
@@ -878,7 +914,29 @@ sealed class PutCounterEffect : CardsEffect
     {
         var n = Amount(x, x.Ability["CounterNum"], 1);
         var kind = x.Ability["CounterType"]!;
-        foreach (var c in Cards(x)) x.Game.PutCounters(c, kind, n);
+        if (x.Ability["Defined"] is { } who && Defined.IsPlayerRef(who))
+        {
+            foreach (var p in Defined.Players(who, x))
+            {
+                var player = x.S.Players[p];
+                if (kind.Equals("Poison", StringComparison.OrdinalIgnoreCase)) player.Poison += n;
+                else
+                {
+                    var key = kind.ToUpperInvariant();
+                    (player.Counters ??= new())[key] = player.CounterCount(key) + n;
+                }
+                x.Game.Note($"  player {p} gets {n} {kind.ToLowerInvariant()} counter(s)");
+            }
+            return;
+        }
+        var cards = Cards(x).ToList();
+        // "Distribute four +1/+1 counters among any number of target creatures": one each, the rest on the first.
+        if (x.Ability["DividedAsYouChoose"] is not null)
+        {
+            for (var i = 0; i < cards.Count; i++) x.Game.PutCounters(cards[i], kind, i == 0 ? n - (cards.Count - 1) : 1);
+            return;
+        }
+        foreach (var c in cards) x.Game.PutCounters(c, kind, n);
     }
 }
 

@@ -14,7 +14,7 @@ public static class Keywords
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
         // Handled where they matter: Devoid makes the card colorless.
         "Devoid", "Changeling", "Infect", "Wither", "Convoke", "Toxic", "Affinity", "Annihilator", "Myriad", "Class", "TypeCycling", "MayEffectFromOpeningHand", "Suspend", "Evoke", "Mobilize", "Cascade", "Ninjutsu", "Persist", "Undying",
-        "Flashback", "Unearth", "Cumulative upkeep", "Prowl", "Spectacle", "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit", "MayFlashSac", "Overload", "Entwine", "Ascend", "Jump-start", "Multikicker", "Soulbond",
+        "Flashback", "Unearth", "Cumulative upkeep", "Prowl", "Spectacle", "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit", "MayFlashSac", "Overload", "Entwine", "Ascend", "Jump-start", "Multikicker", "Soulbond", "Improvise", "Buyback", "Miracle", "Retrace", "Split second", "Cipher",
         // An Aura's own enchant restriction (Animate Dead swapping its "enchant" ability).
         "Enchant",
     };
@@ -32,6 +32,8 @@ public static class Triggers
     private static readonly HashSet<string> CommonParams = new(StringComparer.Ordinal)
     {
         "Mode", "Execute", "TriggerDescription", "TriggerZones", "OptionalDecider", "Secondary", "ValidCard", "Static", "ActivationLimit", "ResolvedLimit", "TriggerController",
+        // "If an opponent is the monarch": some player fits.
+        "CheckDefinedPlayer",
         // Conditions aren't checked again on resolution here anyway.
         "NoResolvingCheck",
     };
@@ -42,7 +44,8 @@ public static class Triggers
         ["Phase"] = new(StringComparer.Ordinal) { "Phase", "ValidPlayer" },
         ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ActivatorThisTurnCast" },
         ["CounterAddedOnce"] = new(StringComparer.Ordinal) { "CounterType", "ValidSource" },
-        ["Attacks"] = new(StringComparer.Ordinal) { },
+        ["Attacks"] = new(StringComparer.Ordinal) { "Attacked" },
+        ["BecomeMonarch"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["Sacrificed"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["ChangesZoneAll"] = new(StringComparer.Ordinal) { "ValidCards", "Origin", "Destination" },
         ["DamageDoneOnce"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
@@ -52,7 +55,7 @@ public static class Triggers
         ["SpellCastOrCopy"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer", "ValidAttackers" },
-        ["Drawn"] = new(StringComparer.Ordinal) { "Number" },
+        ["Drawn"] = new(StringComparer.Ordinal) { "Number", "FirstCardInDrawStep" },
         ["LandPlayed"] = new(StringComparer.Ordinal) { },
         ["Discarded"] = new(StringComparer.Ordinal) { },
         ["LifeGained"] = new(StringComparer.Ordinal) { "ValidPlayer" },
@@ -97,7 +100,8 @@ public static class Triggers
         if (t["TriggerZones"] is { } tz && tz is not ("Battlefield" or "Command") && !(tz == "Stack" && t.Mode == "SpellCast")
             && !(tz == "Graveyard" && t.Mode is not ("ChangesZoneAll" or "DamageDoneOnce" or "CounterAddedOnce")))
             ctx.Need("TriggerZones:" + tz);
-        if (t["Phase"] is { } ph && ph is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "End Of Turn" or "BeginCombat" or "EndCombat"))
+        if (t["CheckDefinedPlayer"] is { } cdp) Filter.Parse(cdp, ctx);
+        if (t["Phase"] is { } ph && ph.Split(',').Any(one => one.Trim() is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "End Of Turn" or "BeginCombat" or "EndCombat")))
             ctx.Need("TriggerPhase:" + ph);
     }
 
@@ -118,6 +122,10 @@ public static class Triggers
             || source.Zone == Zone.Command && (source.IsEffect || t["TriggerZones"] == "Command")
             // "When you cast this spell" (cascade, casualty, …) triggers from the stack.
             || source.Zone == Zone.Stack && t["TriggerZones"] == "Stack"
+            // "When you draw this card" (miracle) from the hand it was drawn into.
+            || e.Mode == TriggerMode.Drawn && e.CardId == source.Id && source.Zone == Zone.Hand && t["TriggerZones"] is null
+            // "As you cast this spell" (Static$, no zone): Approach of the Second Sun noting that it was cast.
+            || source.Zone == Zone.Stack && e.Mode == TriggerMode.SpellCast && e.CardId == source.Id && t["Static"] == "True" && t["TriggerZones"] is null
             // An Equipment that leaves the battlefield becomes unattached as it goes.
             || e.Mode == TriggerMode.Unattached && e.CardId == source.Id
             // "When this exploits a creature" even when it exploits itself.
@@ -125,6 +133,7 @@ public static class Triggers
             // "When you cycle this card" triggers from wherever cycling put it.
             || e.Mode == TriggerMode.Cycled && e.CardId == source.Id && t["TriggerZones"] is null;
         if (!sourceActive) return false;
+        if (t["CheckDefinedPlayer"] is { } check && !g.State.Players.Any(p => !p.Lost && FilterOf(x, check).MatchesPlayer(p.Index, x))) return false;
         if (!ModeMatches(g, t, source, e, x)) return false;
         return Presence.Hold(t.P, x);
     }
@@ -140,7 +149,7 @@ public static class Triggers
             Item = new StackItem { SourceId = d.HostId, Ability = t.Execute ?? Game.PermanentSpell, Controller = d.Controller, DelayRemembered = d.Remembered },
         };
         if (t.Mode == "Phase" && e.Mode == TriggerMode.Phase)
-            return string.Equals(t["Phase"], e.Phase, StringComparison.OrdinalIgnoreCase) && PlayerMatches(t["ValidPlayer"], e.Player, d.Controller, x, t.Face)
+            return PhaseMatches(t["Phase"], e.Phase) && PlayerMatches(t["ValidPlayer"], e.Player, d.Controller, x, t.Face)
                 && Presence.Hold(t.P, x);
         return ModeMatches(g, t, host, e, x) && Presence.Hold(t.P, x);
     }
@@ -153,7 +162,7 @@ public static class Triggers
                 if (!ZoneMatches(t["Origin"], e.From) || !ZoneMatches(t["Destination"], e.To)) return false;
                 return CardMatches(g, t, e.CardId, x, source);
             case "Phase" when e.Mode == TriggerMode.Phase:
-                if (!string.Equals(t["Phase"], e.Phase, StringComparison.OrdinalIgnoreCase)) return false;
+                if (!PhaseMatches(t["Phase"], e.Phase)) return false;
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller, x, t.Face);
             case "TurnFaceUp" when e.Mode == TriggerMode.TurnFaceUp:
                 return CardMatches(g, t, e.CardId, x, source);
@@ -188,7 +197,13 @@ public static class Triggers
             case "SpellCast" when e.Mode == TriggerMode.SpellCast:
                 return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller, x, t.Face) && CardMatches(g, t, e.CardId, x, source);
             case "Attacks" when e.Mode == TriggerMode.Attacks:
+                // "Attacks you or a planeswalker you control": the player part (planeswalkers are never attacked here).
+                if (t["Attacked"] is { } attacked && !attacked.Split(',').Any(part => !part.StartsWith("Planeswalker", StringComparison.Ordinal)
+                        && !part.StartsWith("Battle", StringComparison.Ordinal) && PlayerMatches(part, e.Player, source.Controller, x, t.Face)))
+                    return false;
                 return CardMatches(g, t, e.CardId, x, source);
+            case "BecomeMonarch" when e.Mode == TriggerMode.BecomeMonarch:
+                return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller, x, t.Face);
             case "DamageDone" when e.Mode == TriggerMode.DamageDone:
                 if (t["CombatDamage"] is { } cd && (cd == "True") != e.Combat) return false;
                 if (t["ValidSource"] is { } vs && (e.CardId is not { } src || !FilterOf(x, vs).MatchesCard(g.State[src], x))) return false;
@@ -203,6 +218,11 @@ public static class Triggers
                 return t["ValidAttackers"] is not { } va || g.State.Attackers.Any(a => FilterOf(x, va).MatchesCard(g.State[a], x));
             case "Drawn" when e.Mode == TriggerMode.Drawn && t["Number"] is { } number:
                 return int.TryParse(number, out var nthCard) && e.Amount == nthCard && CardMatches(g, t, e.CardId, x, source, e.Player);
+            case "Drawn" when e.Mode == TriggerMode.Drawn && t["FirstCardInDrawStep"] is { } first:
+            {
+                var isFirst = e.Amount == 1 && g.State.Step == Step.Draw && g.State.ActivePlayer == e.Player;
+                return isFirst == (first == "True") && CardMatches(g, t, e.CardId, x, source, e.Player);
+            }
             case "Drawn" when e.Mode == TriggerMode.Drawn:
             case "LandPlayed" when e.Mode == TriggerMode.LandPlayed:
             case "Discarded" when e.Mode == TriggerMode.Discarded:
@@ -218,6 +238,10 @@ public static class Triggers
     }
 
     private static Filter FilterOf(EffectContext x, string text) => Effect.FilterFor(x.SVarFace, text);
+
+    /// <summary>"Phase$ Main1,Main2": any of these phases.</summary>
+    private static bool PhaseMatches(string? spec, string? phase) =>
+        spec is not null && spec.Split(',').Any(one => string.Equals(one.Trim(), phase, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Whether the event's card fits ValidCard$. A card from a goldfish opponent's hand (drawn or discarded) isn't a
@@ -278,7 +302,7 @@ public static class Conditions
     public static readonly HashSet<string> Params = new(StringComparer.Ordinal)
     {
         "ConditionCheckSVar", "ConditionSVarCompare", "ConditionDefined", "ConditionPresent", "ConditionCompare", "ConditionDescription",
-        "ConditionPhases", "ConditionPlayerTurn", "ConditionFirstCombat", "ConditionZone", "Condition",
+        "ConditionPhases", "ConditionPlayerTurn", "ConditionFirstCombat", "ConditionZone", "Condition", "ConditionOpponentTurn",
     };
 
     public static void Validate(AbilityDef ab, CompileContext ctx)
@@ -304,6 +328,7 @@ public static class Conditions
         var ab = x.Ability;
         if (ab["ConditionPhases"] is { } phases && !phases.Split(',').Any(ph => PhaseIs(x.S.Step, ph.Trim()))) return false;
         if (ab["ConditionPlayerTurn"] == "True" && x.S.ActivePlayer != x.Controller) return false;
+        if (ab["ConditionOpponentTurn"] == "True" && x.S.ActivePlayer == x.Controller) return false;
         if (ab["ConditionFirstCombat"] == "True" && x.S.ThisTurn.Combats > 1) return false;
         if (ab["Condition"] is { } cond && !Presence.ConditionHolds(cond, x)) return false;
         var ctx = new CompileContext { Face = x.SVarFace, Missing = new() };

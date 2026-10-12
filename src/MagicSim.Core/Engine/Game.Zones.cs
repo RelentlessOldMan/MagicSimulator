@@ -5,7 +5,9 @@ public sealed partial class Game
     public IEnumerable<Card> CardsIn(Zone zone) => zone switch
     {
         Zone.Battlefield => State.BattlefieldCards,
-        Zone.Stack => State.Stack.Where(s => s.IsSpell).Select(s => State[s.SourceId]),
+        // The spell that's resolving has left the stack list but is still on the stack ("if this spell was cast from your hand").
+        Zone.Stack => State.Stack.Where(s => s.IsSpell).Select(s => State[s.SourceId])
+            .Concat(_resolvingSpell is { } r && State[r].Zone == Zone.Stack ? new[] { State[r] } : Array.Empty<Card>()),
         _ => State.Players.SelectMany(p => State.ZoneList(p.Index, zone)).Select(id => State[id]),
     };
 
@@ -128,7 +130,7 @@ public sealed partial class Game
                 State.ZoneList(c.Owner, to).Add(c.Id);
                 break;
         }
-        if (to == Zone.Hand && c.Owner == Me) State.Record.Seen.Add(c.Name);
+        if (to == Zone.Hand && c.Owner == Me) State.Record.Seen.Add(c.Def.Name);
         if (from != Zone.None || c.IsToken)
         {
             State.ThisTurn.Moves.Add((c.Id, from, to));
@@ -563,18 +565,19 @@ public sealed partial class Game
     public void RememberWinCard(Card c)
     {
         State.Record.LastHitBy = c.Name;
-        if (!State.Record.WinCards.Contains(c.Name)) State.Record.WinCards.Add(c.Name);
+        if (!State.Record.WinCards.Contains(c.Def.Name)) State.Record.WinCards.Add(c.Def.Name);
     }
 }
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null);
 
-public readonly record struct PendingTrigger(int SourceId, TriggerDef Trigger, TriggerEvent Event, int Controller, List<int>? DelayRemembered = null);
+public readonly record struct PendingTrigger(int SourceId, TriggerDef Trigger, TriggerEvent Event, int Controller, List<int>? DelayRemembered = null,
+    List<int>? DelayPlayers = null, int DelayNumber = 0);
 
 public sealed partial class Game
 {
@@ -612,7 +615,7 @@ public sealed partial class Game
             if (d.NextTurn && d.Turn == State.Turn) continue;
             if (!Triggers.MatchesDelayed(this, d, e)) continue;
             State.Delayed.RemoveAt(i--);
-            _pending.Add(new PendingTrigger(d.HostId, d.Trigger, e, d.Controller, d.Remembered));
+            _pending.Add(new PendingTrigger(d.HostId, d.Trigger, e, d.Controller, d.Remembered, d.Players, d.Number));
         }
     }
 
@@ -633,7 +636,7 @@ public sealed partial class Game
                 Id = State.NextStackId++, SourceId = pt.SourceId, Ability = exec, Controller = pt.Controller,
                 TriggeredCardId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.TargetCardId : pt.Event.CardId,
                 Sacrificed = pt.Event.Mode == TriggerMode.Sacrificed && pt.Event.CardId is { } sac ? new() { sac } : null,
-                TriggeredPlayer = pt.Event.Player, DelayRemembered = pt.DelayRemembered,
+                TriggeredPlayer = pt.Event.Player, DelayRemembered = pt.DelayRemembered, DelayPlayers = pt.DelayPlayers, DelayNumber = pt.DelayNumber,
                 TriggerAmount = pt.Event.Amount,
                 TriggeredSourceId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.CardId : null,
                 TriggeredObjectId = pt.Event.Mode == TriggerMode.Unattached ? pt.Event.TargetCardId : null,
@@ -738,7 +741,8 @@ public sealed partial class Game
         // Within LegalActions the same sources come up for every card: reuse them, minus the card being paid for.
         // Not when convoke or delve, or a restricted source, makes them depend on what's being paid for.
         var wanted = excludeId;
-        var cacheable = _autoSourceCache is not null && !(_payingForSpell && _payingFor is { } paying && (paying.HasKeyword("Convoke") || paying.HasKeyword("Delve")));
+        var cacheable = _autoSourceCache is not null && !(_payingForSpell && _payingFor is { } paying
+            && (paying.HasKeyword("Convoke") || paying.HasKeyword("Delve") || paying.HasKeyword("Improvise")));
         if (cacheable)
         {
             if (_autoSourceCache!.TryGetValue(player, out var cached)) return Without(cached, wanted);
@@ -787,6 +791,11 @@ public sealed partial class Game
             foreach (var c in State.BattlefieldCards)
                 if (c.Controller == player && c.Types.Is(CardType.Creature) && !c.Tapped && c.Id != excludeId && !list.Any(m => m.CardId == c.Id))
                     list.Add(new ManaSource(c.Id, ConvokeAbility, c.Colors == 0 ? ManaColor.C.Mask() : c.Colors | ManaColor.C.Mask(), 1, 0, 8));
+        // Improvise: each untapped artifact can pay for {1} (rule 702.126).
+        if (_payingForSpell && _payingFor is { } improviser && improviser.HasKeyword("Improvise"))
+            foreach (var c in State.BattlefieldCards)
+                if (c.Controller == player && c.Types.Is(CardType.Artifact) && !c.Tapped && c.Id != excludeId && !list.Any(m => m.CardId == c.Id))
+                    list.Add(new ManaSource(c.Id, ConvokeAbility, ManaColor.C.Mask(), 1, 0, 8));
         // Delve: each card exiled from your graveyard pays for {1} (rule 702.66). Preferred to tapping lands.
         if (_payingForSpell && _payingFor is { } delver && delver.HasKeyword("Delve"))
             foreach (var id in p.Graveyard)
@@ -815,6 +824,7 @@ public sealed partial class Game
     public List<(ManaSource Source, ManaColor Color)>? PlanManaPayment(int player, ManaCost cost, int x, int excludeId, int lifeAvailable)
     {
         var pool = State.Players[player].Pool;
+        foreach (var r in UsableRestrictedMana(player)) pool.Add(r.Color, r.Amount);
         var probe = pool;
         var spendable = lifeAvailable - 1;
         if (ManaPayment.TryPay(ref probe, cost, x, out var life0) && life0 <= spendable) return new();
@@ -941,6 +951,7 @@ public sealed partial class Game
                     if (CostCandidates(part, source, player).Count < AmountOf(part, x)) return false;
                     break;
                 case CostPartKind.ExileFromGraveyard:
+                case CostPartKind.ExileFromBattlefield:
                 case CostPartKind.TapUntapped:
                 case CostPartKind.ExileFromHand:
                 case CostPartKind.ReturnToHand:
@@ -968,6 +979,31 @@ public sealed partial class Game
     }
 
     /// <summary>How many a cost part asks for: its number, or X ("pay X life") once X is chosen.</summary>
+    /// <summary>Restricted floating mana that what's being paid for now may use.</summary>
+    private List<RestrictedMana> UsableRestrictedMana(int player) =>
+        State.Players[player].RestrictedPool is { Count: > 0 } rp
+            ? rp.Where(r => ManaRestriction.Allows(this, State[r.SourceId], r.Restriction, _payingFor, _payingForSpell)).ToList()
+            : new();
+
+    /// <summary>Takes what a payment spent out of the pools, restricted mana first.</summary>
+    private static void SpendPools(Player p, List<RestrictedMana> usable, ManaPool before, ManaPool after)
+    {
+        foreach (var k in ManaColors.All)
+        {
+            var spent = before[k] - after[k];
+            foreach (var r in usable.Where(r => r.Color == k))
+            {
+                if (spent <= 0) break;
+                var take = Math.Min(spent, r.Amount);
+                spent -= take;
+                var i = p.RestrictedPool!.IndexOf(r);
+                if (take == r.Amount) p.RestrictedPool.RemoveAt(i);
+                else p.RestrictedPool[i] = r with { Amount = r.Amount - take };
+            }
+            p.Pool[k] -= spent;
+        }
+    }
+
     private static int AmountOf(CostPart part, int x = 1) => int.TryParse(part.Amount, out var n) ? n : part.Amount == "X" ? x : 1;
 
     private List<int> CostCandidates(CostPart part, Card source, int player)
@@ -981,7 +1017,7 @@ public sealed partial class Game
             CostPartKind.Discard => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
             CostPartKind.ExileFromGraveyard => State.Players[player].Graveyard.Select(id => State[id]).Where(c => c.Id != source.Id),
             CostPartKind.ExileFromHand => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
-            CostPartKind.ReturnToHand => State.BattlefieldCards.Where(c => c.Controller == player),
+            CostPartKind.ReturnToHand or CostPartKind.ExileFromBattlefield => State.BattlefieldCards.Where(c => c.Controller == player),
             CostPartKind.Reveal => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
             CostPartKind.TapPower => State.BattlefieldCards.Where(c => c.Controller == player && !c.Tapped && c.Id != source.Id && c.Types.Is(CardType.Creature)),
             _ => Enumerable.Empty<Card>(),
@@ -1009,19 +1045,26 @@ public sealed partial class Game
 
     /// <summary>Permanents sacrificed to pay the last cost paid ("Sacrificed$CardPower").</summary>
     public List<int> LastSacrificed { get; } = new();
+    /// <summary>Cards exiled to pay the last cost ("Exiled$CardManaCost").</summary>
+    public List<int> LastExiled { get; } = new();
 
     private bool PayCostCore(Cost cost, Card source, int player, int x, bool excludeSourceFromMana)
     {
         LastSacrificed.Clear();
+        LastExiled.Clear();
         var p = State.Players[player];
         var lifeNeeded = cost.Parts.Where(q => q.Kind == CostPartKind.PayLife).Sum(q => AmountOf(q, x));
         var plan = PlanManaPayment(player, cost.Mana, x, excludeSourceFromMana ? source.Id : -1, Math.Max(0, p.Life - lifeNeeded));
         if (plan is null) return false;
 
         foreach (var (src, color) in plan) UseManaSource(src, color, player);
+        var usable = UsableRestrictedMana(player);
         var before = p.Pool;
-        if (!ManaPayment.TryPay(ref p.Pool, cost.Mana, x, out var phyrexianLife)) return false;
-        LastColorsSpent = ManaColors.All.Count(k => k != ManaColor.C && p.Pool[k] < before[k]);
+        foreach (var r in usable) before.Add(r.Color, r.Amount);
+        var after = before;
+        if (!ManaPayment.TryPay(ref after, cost.Mana, x, out var phyrexianLife)) return false;
+        LastColorsSpent = ManaColors.All.Count(k => k != ManaColor.C && after[k] < before[k]);
+        SpendPools(p, usable, before, after);
         if (phyrexianLife > 0) PayLife(player, phyrexianLife);
 
         if (cost.Tap) Tap(source);
@@ -1065,7 +1108,17 @@ public sealed partial class Game
                     break;
                 case CostPartKind.ExileFromGraveyard:
                     foreach (var id in Decider.ChooseCards(this, player, Choice.ExileFromGraveyard, source, CostCandidates(part, source, player), n, n))
+                    {
+                        LastExiled.Add(id);
                         MoveTo(State[id], Zone.Exile);
+                    }
+                    break;
+                case CostPartKind.ExileFromBattlefield:
+                    foreach (var id in Decider.ChooseCards(this, player, Choice.Sacrifice, source, CostCandidates(part, source, player), n, n))
+                    {
+                        LastExiled.Add(id);
+                        MoveTo(State[id], Zone.Exile);
+                    }
                     break;
                 case CostPartKind.TapUntapped:
                     foreach (var id in Decider.ChooseCards(this, player, Choice.TapForCost, source, CostCandidates(part, source, player), n, n))

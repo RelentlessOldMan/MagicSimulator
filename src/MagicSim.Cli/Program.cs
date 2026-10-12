@@ -45,7 +45,8 @@ public static class Program
         }
         catch (Exception e)
         {
-            return Fail(RunError, e.Message);
+            // MAGICSIM_DEBUG=1 shows where it failed.
+            return Fail(RunError, Environment.GetEnvironmentVariable("MAGICSIM_DEBUG") is { Length: > 0 } ? e.ToString() : e.Message);
         }
     }
 

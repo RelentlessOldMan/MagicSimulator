@@ -89,7 +89,7 @@ public sealed class Filter
     }
 
     private static bool IsKnownBase(string b) =>
-        b is "Card" or "Permanent" or "Spell" or "Player" or "Opponent" or "You" or "Any" or "Creature" or "Planeswalker" or "Emblem"
+        b is "Card" or "Permanent" or "Spell" or "Player" or "Opponent" or "You" or "Any" or "Creature" or "Planeswalker" or "Emblem" or "Effect"
         || CardTypes.ContainsKey(b) || KnownSubtypes.Contains(b);
 
     private static Prop? ParseProp(string p, CompileContext ctx)
@@ -102,19 +102,26 @@ public sealed class Filter
         {
             "YouCtrl" => (c, pl, x) => c is not null ? c.Controller == x.Controller : pl == x.Controller,
             "YouOwn" => (c, pl, x) => c is not null && c.Owner == x.Controller,
+            "YouDontOwn" => (c, pl, x) => c is not null && c.Owner != x.Controller,
+            // Owned by the player being voted for / iterated over ("a permanent owned by the voter").
+            "RememberedPlayerOwn" => (c, pl, x) => c is not null && c.Owner == x.Item.IteratedPlayer,
             "OppCtrl" => (c, pl, x) => c is not null ? c.Controller != x.Controller : pl is not null && pl != x.Controller,
             "OppOwn" => (c, pl, x) => c is not null && c.Owner != x.Controller,
             "ActivePlayerCtrl" => (c, pl, x) => c is not null ? c.Controller == x.S.ActivePlayer : pl == x.S.ActivePlayer,
             "ChosenCtrl" => (c, pl, x) => c is not null ? c.Controller == x.Host.ChosenPlayer : pl is not null && pl == x.Host.ChosenPlayer,
             "Chosen" => (c, pl, x) => c is null && pl is not null && pl == x.Host.ChosenPlayer,
             "DrawnThisTurn" => (c, pl, x) => c is not null && x.S.ThisTurn.Drawn.Contains(c.Id),
+            // Shares a color with another remembered card; the unknown ones are only the color every card is (Painter's Servant).
+            "SharesColorWithOther Remembered" => (c, pl, x) => c is not null && c.Colors != 0
+                && ((x.Host.Remembered ?? new()).Any(id => id != c.Id && (x.S[id].Colors & c.Colors) != 0)
+                    || x.Host.RememberedUnknown > 0 && (Statics.EverywhereColors(x.Game) & c.Colors) != 0),
             // Soulbond: paired with anything, or with this card.
             "Paired" => (c, pl, x) => c?.PairedWith is not null,
             "PairedWith" => (c, pl, x) => c is not null && c.PairedWith == x.Host.Id,
             "prowled" => (c, pl, x) => c is not null && (c.PaidOptional?.Contains("Prowl") ?? false),
             // "If you cast it" (from your hand): the permanent came from a spell. Only you cast spells here.
             "wasCast" or "wasCastByYou" => (c, pl, x) => c is not null && c.CastFrom is not null && c.Controller == x.Controller,
-            "wasCastFromHand" or "wasCastFromYourHandByYou" => (c, pl, x) => c is not null && c.CastFrom == Zone.Hand && c.Controller == x.Controller,
+            "wasCastFromHand" or "wasCastFromYourHand" or "wasCastFromYourHandByYou" => (c, pl, x) => c is not null && c.CastFrom == Zone.Hand && c.Controller == x.Controller,
             "ChosenCard" => (c, pl, x) => c is not null && (x.Host.ChosenCards?.Contains(c.Id) ?? false),
             // The controller of the creature this Aura enchants (Dance of the Dead's upkeep).
             "EnchantedController" => (c, pl, x) => c is null && pl is not null && x.Host.AttachedTo >= 0 && pl == x.S[x.Host.AttachedTo].Controller,
@@ -124,6 +131,9 @@ public sealed class Filter
             "Self" or "StrictlySelf" => (c, pl, x) => c is not null && c.Id == x.Item.SourceId,
             "escaped" => (c, pl, x) => c is not null && c.Escaped,
             "TriggeredCard" => (c, pl, x) => c is not null && c.Id == x.Item.TriggeredCardId,
+            // "Player.OpponentOf Remembered": an opponent of any of those players.
+            _ when p.StartsWith("OpponentOf ", StringComparison.Ordinal) && Defined.IsKnownPlayerRef(p[11..]) =>
+                (c, pl, x) => pl is { } who && Defined.Players(p[11..], x) is var of && of.Count > 0 && of.All(o => o != who),
             _ when p.StartsWith("ChosenMode", StringComparison.Ordinal) && p.Length > 10 => (c, pl, x) => c is not null && c.ChosenMode == p[10..],
             "kicked" => (c, pl, x) => c is not null && (c.PaidOptional?.Any(o => o.StartsWith("Kicker", StringComparison.Ordinal)) ?? false),
             "Other" or "StrictlyOther" => (c, pl, x) => c is null || c.Id != x.Item.SourceId,
@@ -133,6 +143,7 @@ public sealed class Filter
             "untapped" => (c, pl, x) => c is not null && !c.Tapped,
             "IsCommander" => (c, pl, x) => c is not null && c.IsCommander,
             "NamedCard" => (c, pl, x) => c is not null && x.Host.NamedCard is { } n && string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase),
+            "isMonarch" => (c, pl, x) => pl is not null && x.S.Monarch == pl,
             "IsRemembered" => (c, pl, x) => c is not null ? x.Host.Remembered?.Contains(c.Id) ?? false : pl is not null && pl == x.Item.IteratedPlayer,
             "IsTriggerRemembered" => (c, pl, x) => c is not null && (x.Item.DelayRemembered?.Contains(c.Id) ?? false),
             "ThisTurnEntered" => (c, pl, x) => c is not null && c.Zone == Zone.Battlefield && c.EnteredTurn == x.S.Turn,
@@ -228,9 +239,12 @@ public sealed class Filter
         Func<int, EffectContext, bool>? owner = p switch
         {
             "YouCtrl" or "YouOwn" => (o, x) => o == x.Controller,
+            "YouDontOwn" => (o, x) => o != x.Controller,
             "OppCtrl" or "OppOwn" => (o, x) => o != x.Controller,
             "ActivePlayerCtrl" => (o, x) => o == x.S.ActivePlayer,
             "ChosenCtrl" => (o, x) => o == x.Host.ChosenPlayer,
+            // An unknown card is a color only if every card is; then it shares it with any other remembered card.
+            "SharesColorWithOther Remembered" => (o, x) => Statics.EverywhereColors(x.Game) != 0 && (x.Host.Remembered?.Count ?? 0) + x.Host.RememberedUnknown >= 2,
             _ when TriggeredPlayerProp(p) is not null => (o, x) => o == x.Item.TriggeredPlayer,
             _ => null,
         };
@@ -257,6 +271,9 @@ public sealed class Filter
     /// Whether a card nobody can see fits: one in a goldfish opponent's hand, which is only a count. It fits a "Card"
     /// filter about whose it is ("Card.OppOwn"), never one about what it is (a type, a cost).
     /// </summary>
+    /// <summary>An opponent of the controller, as the owner of unknown cards (they're only ever from goldfish libraries and hands).</summary>
+    public static int SomeOpponent(EffectContext x) => x.S.Players.FirstOrDefault(p => p.Index != x.Controller)?.Index ?? -1;
+
     public bool MatchesUnknownCard(int owner, EffectContext x) =>
         _terms.Any(t => t.Base == "Card" && t.Props.All(p => p.OwnerTest is { } o && o(owner, x) != p.Negated));
 
@@ -285,6 +302,8 @@ public sealed class Filter
         "Card" or "Spell" => true,
         // Emblems aren't cards, and their abilities never go on the stack here.
         "Emblem" => false,
+        // An effect in the command zone ("Count$ValidCommand Effect.YouCtrl+namedApproachingSuns").
+        "Effect" => c.IsEffect,
         "Permanent" => c.Zone == Zone.Battlefield || c.Types.IsPermanent,
         "Any" => c.Types.Is(CardType.Creature) || c.Types.Is(CardType.Planeswalker) || c.Types.Is(CardType.Battle),
         "Player" or "Opponent" or "You" => false,
@@ -393,6 +412,8 @@ public sealed class Amount
         // The amount of the event that triggered this: damage dealt, life gained, cards moved.
         if (core is "TriggerCount$DamageAmount" or "TriggerCount$LifeAmount" or "TriggerCount$Amount")
             return new(core, x => x.Item.TriggerAmount);
+        // The number a delayed trigger remembers (Mana Drain).
+        if (core == "Count$TriggerRememberAmount") return new(core, x => x.Item.DelayNumber);
         if (DefinedCardsRx.Match(core) is { Success: true } dm) return DefinedCardsAmount(core, dm, ctx);
         if (PlayerCountRx.Match(core) is { Success: true } pm) return PlayerCountAmount(core, pm, ctx);
         if (DefinedPlayerRx.Match(core) is { Success: true } dp)
@@ -430,10 +451,25 @@ public sealed class Amount
         if (kind.StartsWith("Revolt.", StringComparison.Ordinal) && kind.Split('.') is [_, var r1, var r0]
             && int.TryParse(r1, out var revoltValue) && int.TryParse(r0, out var noRevoltValue))
             return new(core, x => x.S.ThisTurn.PermanentLeft.Contains(x.Controller) ? revoltValue : noRevoltValue);
+        // "Count$Monarch.7.2": one number if you're the monarch, another if not.
+        if (kind.StartsWith("Monarch.", StringComparison.Ordinal) && kind.Split('.') is [_, var m1, var m0]
+            && int.TryParse(m1, out var monarchValue) && int.TryParse(m0, out var notMonarchValue))
+            return new(core, x => x.S.Monarch == x.Controller ? monarchValue : notMonarchValue);
         // "Count$Blessing.1.0": one number with the city's blessing, another without.
         if (kind.StartsWith("Blessing.", StringComparison.Ordinal) && kind.Split('.') is [_, var b1, var b0]
             && int.TryParse(b1, out var blessed) && int.TryParse(b0, out var unblessed))
             return new(core, x => x.S.Players[x.Controller].CityBlessing ? blessed : unblessed);
+        // "Count$YourCountersExperience": counters of a kind on you.
+        if (kind.StartsWith("YourCounters", StringComparison.Ordinal) && kind.Length > 12)
+        {
+            var playerCounter = kind[12..];
+            if (playerCounter == "Poison") return new(core, x => x.S.Players[x.Controller].Poison);
+            return new(core, x => x.S.Players[x.Controller].CounterCount(playerCounter));
+        }
+        // "Count$wasCastFromGraveyard.2.1": one number if this spell was cast from a graveyard, another if not.
+        if (kind.StartsWith("wasCastFromGraveyard.", StringComparison.Ordinal) && kind.Split('.') is [_, var g1, var g0]
+            && int.TryParse(g1, out var fromGrave) && int.TryParse(g0, out var notFromGrave))
+            return new(core, x => x.Host.CastFrom == Zone.Graveyard ? fromGrave : notFromGrave);
         if (kind == "TimesKicked") return new(core, x => x.Host.PaidOptional?.Count(o => o.StartsWith("Kicker", StringComparison.Ordinal)) ?? 0);
         if (kind == "Compare" && arg.Split(' ') is [var left, var rest] && rest.Length > 2 && rest[2..].Split('.') is [var rhs, var yes, var no])
         {
@@ -512,6 +548,8 @@ public sealed class Amount
             "Hand" => Zone.Hand,
             "Library" => Zone.Library,
             "Exile" => Zone.Exile,
+            "Command" => Zone.Command,
+            "Stack" => Zone.Stack,
             _ => Zone.None,
         }).ToList() : null;
         if (zones is not null && !zones.Contains(Zone.None) && arg.Length > 0)
@@ -596,7 +634,7 @@ public sealed class Amount
         return null;
     }
 
-    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TriggeredCard|TriggeredSpellAbility|TriggeredSource|Remembered|RememberedLKI|Imprinted|Sacrificed)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+)(?: (.+))?$", RegexOptions.Compiled);
+    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TargetedObjects|TriggeredCard|TriggeredSpellAbility|TriggeredSource|Remembered|RememberedLKI|Imprinted|Sacrificed|Exiled)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+)(?: (.+))?$", RegexOptions.Compiled);
 
     /// <summary>"Targeted$CardPower", "Remembered$CardManaCost", "Imprinted$Valid Card.X": a property of defined cards (summed), or how many there are.</summary>
     private static Amount DefinedCardsAmount(string core, Match m, CompileContext ctx)
@@ -605,6 +643,12 @@ public sealed class Amount
         var prop = m.Groups[2].Value;
         var filter = prop == "Valid" ? Filter.Parse(m.Groups[3].Value, ctx) : null;
         if (prop != "Valid" && m.Groups[3].Success) ctx.Need("Amount:" + core);
+        // "TargetedObjects$Amount": how many targets, players included.
+        if (which == "TargetedObjects")
+        {
+            if (prop != "Amount") ctx.Need("Amount:" + core);
+            return new(core, x => x.OwnOrParentTargets.Count);
+        }
         List<Card> Cards(EffectContext x)
         {
             IEnumerable<int> ids = which switch
@@ -614,6 +658,7 @@ public sealed class Amount
                 "TriggeredSource" => x.Item.TriggeredSourceId is { } sid ? new[] { sid } : Array.Empty<int>(),
                 "Remembered" or "RememberedLKI" => x.Host.Remembered ?? new List<int>(),
                 "Sacrificed" => x.Item.Sacrificed ?? new List<int>(),
+                "Exiled" => x.Item.Exiled ?? new List<int>(),
                 _ => x.Host.Imprinted ?? new List<int>(),
             };
             return ids.Select(id => x.S[id]).ToList();
@@ -625,7 +670,8 @@ public sealed class Amount
             "CardToughness" => new(core, x => Cards(x).Sum(c => c.LastKnownToughness)),
             "CardManaCost" or "CardManaCostLKI" => new(core, x => Cards(x).Sum(c => c.CurrentFace.ManaCost.ManaValue)),
             "Amount" => new(core, x => Cards(x).Count + (which is "Remembered" or "RememberedLKI" ? x.Host.RememberedUnknown : 0)),
-            _ => new(core, x => Cards(x).Count(c => filter!.MatchesCard(c, x))),
+            _ => new(core, x => Cards(x).Count(c => filter!.MatchesCard(c, x))
+                + (which is "Remembered" or "RememberedLKI" && x.Host.RememberedUnknown > 0 && filter!.MatchesUnknownCard(Filter.SomeOpponent(x), x) ? x.Host.RememberedUnknown : 0)),
         };
     }
 
@@ -652,6 +698,7 @@ public static class Defined
         "You", "Player", "Opponent", "Targeted", "TargetedPlayer", "ParentTarget", "TargetedController", "Player.Opponent",
         "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner", "ChosenPlayer", "Remembered", "TriggeredActivator",
         "TriggeredCardOwner", "TriggeredSourceController", "TriggeredDefendingPlayer", "Spawner>TriggeredTarget",
+        "RememberedOwner", "RememberedController", "DelayTriggerRemembered", "OppNonRememberedOwner", "TriggeredAttackerController",
     };
 
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
@@ -663,8 +710,11 @@ public static class Defined
     };
 
     /// <summary>Whether a Defined$ names players ("You", "Player.Opponent") rather than cards.</summary>
+    /// <summary>Any player reference this file resolves, including ones that can also mean cards ("Remembered").</summary>
+    public static bool IsKnownPlayerRef(string text) => PlayerRefs.Contains(text);
+
     public static bool IsPlayerRef(string text) =>
-        text is not ("Targeted" or "ParentTarget" or "Remembered") && PlayerRefs.Contains(text) || text.StartsWith("Player.", StringComparison.Ordinal);
+        text is not ("Targeted" or "ParentTarget" or "Remembered" or "DelayTriggerRemembered") && PlayerRefs.Contains(text) || text.StartsWith("Player.", StringComparison.Ordinal);
 
     public static void ValidatePlayers(string? text, CompileContext ctx)
     {
@@ -680,7 +730,7 @@ public static class Defined
         if (text is not null && text.Contains(" & ", StringComparison.Ordinal))
         {
             foreach (var part in text.Split(" & "))
-                if (!PlayerRefs.Contains(part)) ValidateCards(part, ctx);
+                if (!IsPlayerRef(part)) ValidateCards(part, ctx);
             return;
         }
         // "Valid Creature.YouCtrl": every permanent matching the filter.
@@ -699,11 +749,18 @@ public static class Defined
             "Targeted" or "TargetedPlayer" => x.OwnOrParentTargets.Where(t => t.Player is not null).Select(t => t.Player!.Value).ToList(),
             "ParentTarget" => x.ParentTargets.Where(t => t.Player is not null).Select(t => t.Player!.Value).ToList(),
             "TargetedController" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Controller).ToList(),
-            "TriggeredCardController" => x.Item.TriggeredCardId is { } tc ? new() { x.S[tc].Controller } : new(),
+            "TriggeredCardController" or "TriggeredAttackerController" => x.Item.TriggeredCardId is { } tc ? new() { x.S[tc].Controller } : new(),
             "TriggeredCardOwner" => x.Item.TriggeredCardId is { } tco ? new() { x.S[tco].Owner } : new(),
             "TriggeredSourceController" => x.Item.TriggeredSourceId is { } ts ? new() { x.S[ts].Controller } : new(),
             "ChosenPlayer" => x.Host.ChosenPlayer is { } cp ? new() { cp } : new(),
-            "Remembered" => x.Item.IteratedPlayer is { } ip ? new() { ip } : new(),
+            "Remembered" => x.Item.IteratedPlayer is { } ip ? new() { ip } : x.Host.RememberedPlayers is { } rp ? new(rp) : new(),
+            "RememberedOwner" => (x.Host.Remembered ?? new()).Select(id => x.S[id].Owner).Distinct().ToList(),
+            // "Each opponent who didn't [put a land onto the battlefield]": opponents who own none of the remembered cards.
+            "OppNonRememberedOwner" => players.Where(p => !p.Lost && p.Index != x.Controller && !(x.Host.Remembered ?? new()).Any(id => x.S[id].Owner == p.Index))
+                .Select(p => p.Index).ToList(),
+            "RememberedController" => (x.Host.Remembered ?? new()).Select(id => x.S[id].Controller).Distinct().ToList(),
+            // A delayed trigger's players, else the controllers of the cards it remembers.
+            "DelayTriggerRemembered" => x.Item.DelayPlayers?.ToList() ?? (x.Item.DelayRemembered ?? new()).Select(id => x.S[id].Controller).Distinct().ToList(),
             "TargetedOwner" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => x.S[t.CardId!.Value].Owner).Take(1).ToList(),
             "TriggeredTarget" or "TriggeredPlayer" or "TriggeredActivator" or "TriggeredDefendingPlayer" or "Spawner>TriggeredTarget" => x.Item.TriggeredPlayer is { } tp ? new() { tp } : new(),
             var f when f.StartsWith("Player.", StringComparison.Ordinal) =>
@@ -715,7 +772,7 @@ public static class Defined
     public static List<int> Cards(string? text, EffectContext x, string fallback = "Self")
     {
         if (text is not null && text.Contains(" & ", StringComparison.Ordinal))
-            return text.Split(" & ").Where(part => !PlayerRefs.Contains(part)).SelectMany(part => Cards(part, x)).Distinct().ToList();
+            return text.Split(" & ").Where(part => !IsPlayerRef(part)).SelectMany(part => Cards(part, x)).Distinct().ToList();
         if (text is not null && text.StartsWith("Valid ", StringComparison.Ordinal))
         {
             var filter = Effect.FilterFor(x.SVarFace, text[6..]);

@@ -2,7 +2,7 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.8.2** (2026-10-12).
+Status: **draft v0.8.4** (2026-10-12).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
@@ -15,6 +15,8 @@ Status: **draft v0.8.2** (2026-10-12).
 - v0.7.2: the default `--max-turn` goes from 10 to 20, so slower decks get a full curve (§3). Pass `--max-turn 10` for the old behavior.
 - v0.8: adds an opt-in Forge playtest: `sim forge-setup` and `sim forge-gauntlet` play a deck against other decks in Forge's AI-vs-AI simulator and write `magicsim.forge/1`, and `sim report` shows those results when they exist (§3). Nothing else changes.
 - v0.8.2: three more goldfish rules (§3): your attackers all attack the opponent with the least life, chosen as you declare them; effects on an opponent's library ("exiles the top twenty cards") take cards off their library count; and when an opponent separates cards into two piles (Fact or Fiction), they put the card with the highest mana value in a pile by itself. No field changes.
+- v0.8.3: one more goldfish rule (§3): when everyone votes (Expropriate, "will of the council"), each opponent votes for the first choice you didn't. At `1v1` that ties; at `1v1v1` they outvote you. No field changes.
+- v0.8.4: one more goldfish rule (§3): an opponent facing "loses life unless they discard" (Court of Ambition) takes the life loss unless it would kill them, and then discards if they can. No field changes.
 - v0.8.1: goldfish opponents take a turn that does nothing, and their hand is a count that discard can empty (§3). "Each opponent's upkeep" and "each end step" now trigger in their turns, and they draw a card in each, so mill decks get a little faster. No field changes.
 - Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
@@ -152,10 +154,12 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
 - Each opponent has 40 life and a 99-card library, and never interacts.
 - After your turn (and any extra turns), each opponent takes a turn in which they play nothing. Their upkeep, draw step and end step happen, so "at the beginning of each opponent's upkeep" and "each end step" trigger, and they draw a card. You don't act in their turn; triggers resolve.
 - An opponent's hand is a count, not cards. It starts at 7, goes up 1 for each card they draw and down 1 for each card discarded, and goes back to 7 at their cleanup. Because they never play a card, a discard deck faces a full hand, which is the hardest case for it.
-- Where what's in an opponent's hand matters, assume what's worse for you. A discard that needs a kind of card ("discards a creature card") finds none. "Unless they discard an artifact card" finds one. Optional discards are declined. "Whenever an opponent discards a card" triggers, but "a creature card" doesn't.
+- Where what's in an opponent's hand matters, assume what's worse for you. A discard that needs a kind of card ("discards a creature card") finds none. Optional discards are declined. "Whenever an opponent discards a card" triggers, but "a creature card" doesn't.
 - Nobody blocks. Your attackers all attack the opponent with the least life, chosen as you declare attackers. That's the "defending player" ("whenever this attacks, defending player exiles the top twenty cards of their library").
 - An opponent's library is a count too: cards taken off the top (mill, exile) come off it. A filter that needs a kind of card ("exile each creature card revealed") takes none.
 - When an opponent separates cards into two piles for you (Fact or Fiction), they put the card with the highest mana value in a pile by itself and the rest in the other, and you choose.
+- When every player votes (Expropriate, "will of the council"), you vote first and each opponent votes for the first choice you didn't. At `1v1` that's a tie, which goes to the card's tie rule or else to your vote; at `1v1v1` they outvote you. "For each vote" cards do each opponent's choice for that opponent.
+- "Loses 3 life unless they discard a card" and other punishers: an opponent takes the life loss or damage unless it would kill them. Then they pay if they can with cards from their hand ("unless they discard an artifact card" finds one) or life. They have no mana or permanents to pay with, so "unless that player pays {1}" always happens.
 - You start at 40 life.
 - A win means every opponent is out, so `1v1` needs 40 damage where `1v1v1` needs 80.
 - Game *i* uses the same shuffle at both sizes, so the two can be paired game by game.

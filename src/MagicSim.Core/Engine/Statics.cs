@@ -126,12 +126,33 @@ public static class Statics
     private static readonly HashSet<string> ReduceCostParams = new(StringComparer.Ordinal)
     {
         "Amount", "ValidCard", "Type", "EffectZone", "Activator",
+        // "Costs {1} more for each target beyond the first" (Fireball): see Game.ChooseChainTargets.
+        "Relative",
     };
 
     private static readonly HashSet<string> CantAttackParams = new(StringComparer.Ordinal) { "ValidCard", "EffectZone" };
     private static readonly HashSet<string> ValidPlayerParams = new(StringComparer.Ordinal) { "ValidPlayer", "EffectZone" };
     private static readonly HashSet<string> CastWithFlashParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Caster" };
     private static readonly HashSet<string> PanharmoniconParams = new(StringComparer.Ordinal) { "ValidMode", "ValidCard", "ValidCause", "Origin", "Destination" };
+
+    private static readonly HashSet<string> CantBeCastParams = new(StringComparer.Ordinal) { "ValidCard", "Caster", "NumLimitEachTurn" };
+
+    /// <summary>Whether a "can't be cast" effect on the battlefield stops <paramref name="caster"/> casting <paramref name="spell"/> now.</summary>
+    public static bool CantBeCast(Game g, Card spell, int caster)
+    {
+        foreach (var (source, st) in Pairs(g))
+        {
+            if (st.Mode != "CantBeCast" || source.Zone != Zone.Battlefield) continue;
+            if (st["Caster"] is "Opponent" || st["Caster"] == "You" && caster != source.Controller) continue;
+            var x = ContextFor(g, source, st);
+            if (st["ValidCard"] is { } vc && !Effect.FilterFor(source.CurrentFace, vc).MatchesCard(spell, x)) continue;
+            if (!Presence.Hold(st.P, x)) continue;
+            // Only you cast spells here, so the turn's spell count is yours.
+            if (st["NumLimitEachTurn"] is { } limit && int.Parse(limit) > (caster == Game.Me ? g.State.ThisTurn.SpellsCast : 0)) continue;
+            return true;
+        }
+        return false;
+    }
 
     private static readonly HashSet<string> AlternativeCostParams = new(StringComparer.Ordinal)
     {
@@ -145,6 +166,8 @@ public static class Statics
         if (s.Mode is "CantBeCast" or "CantBeActivated" && (s["Caster"] ?? s["Activator"]) == "Opponent") return;
         // "Creatures can't attack you unless …" (Ghostly Prison), "can't attack you": goldfish opponents never attack.
         if (s.Mode is "CantAttackUnless" or "CantAttack" && s["Target"] is "You" or "You,Planeswalker.YouCtrl") return;
+        // "No more than two creatures can attack you each combat" (Crawlspace).
+        if (s.Mode == "AttackRestrict" && s["ValidDefender"] == "You") return;
         HashSet<string> own;
         // "Can't attack or block": blocking never comes up against goldfish opponents.
         switch (s.Mode is "CantAttack,CantBlock" or "CantBlock,CantAttack" ? "CantAttack" : s.Mode)
@@ -195,6 +218,13 @@ public static class Statics
                 if (s["Cost"] is not null) ctx.Need("RaiseCost.Cost");
                 Amount.Parse(s["Amount"] ?? "1", ctx);
                 break;
+            case "CantBeCast":
+                // "Each player can't cast more than one spell each turn" (Archon of Emeria), "can't cast creature spells".
+                own = CantBeCastParams;
+                if (s["Caster"] is { } cbc && cbc is not ("Player" or "You")) ctx.Need("CantBeCast.Caster:" + cbc);
+                if (s["ValidCard"] is { } cvc2) Filter.Parse(cvc2, ctx);
+                if (s["NumLimitEachTurn"] is { } limit && !int.TryParse(limit, out _)) ctx.Need("CantBeCast.NumLimitEachTurn:" + limit);
+                break;
             case "ReduceCost":
                 own = ReduceCostParams;
                 if (s["Type"] is { } type && type != "Spell") ctx.Need("ReduceCost.Type:" + type);
@@ -229,9 +259,10 @@ public static class Statics
         else if (s["MayPlayAltManaCost"] is not null) ctx.Need("MayPlayAltManaCost+NoMayPlay");
         if (s["MayLookAt"] is { } look && (look is not ("You" or "Player") || s["AffectedZone"] != "Library" || s["MayPlay"] is null && s.P.Values.Keys.Any(k => k is not ("Mode" or "Affected" or "AffectedZone" or "MayLookAt" or "Description"))))
             ctx.Need("MayLookAt:" + look + "+" + s["AffectedZone"]);
-        if (s["MayPlay"] is null && s["MayLookAt"] is null && s["AffectedZone"] is { } az && az != "Battlefield" && !IsEscapeGrant(s))
+        if (s["MayPlay"] is null && s["MayLookAt"] is null && s["AffectedZone"] is { } az && az != "Battlefield" && !IsEscapeGrant(s) && !IsColorEverywhere(s))
             ctx.Need("AffectedZone:" + az);
-        if (s["EffectZone"] is { } ez && ez is not ("Battlefield" or "All" or "Command" or "Graveyard")) ctx.Need("EffectZone:" + ez);
+        if (s["EffectZone"] is { } ez && ez is not ("Battlefield" or "All" or "Command" or "Graveyard" or "Exile")) ctx.Need("EffectZone:" + ez);
+        if (s["EffectZone"] == "Exile" && (s["MayPlay"] is null || s["Affected"] != "Card.Self")) ctx.Need("EffectZone:Exile+" + s["Affected"]);
         foreach (var key in new[] { "AddPower", "AddToughness", "SetPower", "SetToughness", "AdjustLandPlays" })
             if (s[key] is { } v && v != "Unlimited") Amount.Parse(v, ctx);
         if (s["SetMaxHandSize"] is { } mh && mh != "Unlimited") Amount.Parse(mh, ctx);
@@ -309,7 +340,7 @@ public static class Statics
                 if (st["MayLookAt"] is not null && c.Zone == Zone.Battlefield && s.Players[c.Controller] is { IsGoldfish: false } looker && looker.Library.Count > 0)
                     looker.KnownTop = Math.Max(looker.KnownTop, 1);
                 // Effects on cards in other zones (may play, escape) are looked up where they matter.
-                if (st["MayPlay"] is null && st["MayLookAt"] is null && st["AffectedZone"] is null or "Battlefield") active.Add((c, st, ContextFor(g, c, st)));
+                if (st["MayPlay"] is null && st["MayLookAt"] is null && st["AffectedZone"] is null or "Battlefield" || IsColorEverywhere(st)) active.Add((c, st, ContextFor(g, c, st)));
             }
         var animated = new List<Card>();
         var leveled = new List<Card>();
@@ -322,6 +353,12 @@ public static class Statics
         g.StaticsApplied = active.Count > 0 || animated.Count > 0 || leveled.Count > 0;
 
         foreach (var c in s.BattlefieldCards) c.ClearStaticEffects();
+        if (g.OffFieldColors)
+        {
+            foreach (var c in s.Cards)
+                if (c.Zone != Zone.Battlefield) c.StaticColors = null;
+            g.OffFieldColors = false;
+        }
         foreach (var p in s.Players) { p.StaticLandDrops = 0; p.StaticMaxHandSize = null; p.StaticMaxHandSizeRaise = 0; }
 
         var holding = active.Where(a => Presence.Hold(a.Static.P, a.X)).ToList();
@@ -479,6 +516,7 @@ public static class Statics
     {
         Zone.Battlefield => st["EffectZone"] is null or "Battlefield" or "All",
         Zone.Graveyard => st["EffectZone"] == "Graveyard",
+        Zone.Exile => st["EffectZone"] == "Exile",
         _ => true,
     };
 
@@ -503,6 +541,9 @@ public static class Statics
         foreach (var p in g.State.Players)
             foreach (var id in p.Graveyard)
                 if (g.State[id] is { IsBlank: false } gc && gc.CurrentFace.HasGraveyardStatic) yield return gc;
+        foreach (var p in g.State.Players)
+            foreach (var id in p.Exile)
+                if (g.State[id] is { IsBlank: false } ec && ec.CurrentFace.HasExileStatic) yield return ec;
         foreach (var c in g.State.BattlefieldCards)
             if (!c.IsBlank && (c.CurrentFace.Statics.Count > 0 || c.Animations is not null || c.ClassLevel > 1)) yield return c;
         foreach (var p in g.State.Players)
@@ -544,6 +585,11 @@ public static class Statics
     {
         var filter = st["Affected"] is { } a ? Effect.FilterFor(source.CurrentFace, a) : null;
         IEnumerable<Card> cards;
+        if (IsColorEverywhere(st))
+        {
+            g.OffFieldColors = true;
+            return g.State.Cards.Where(c => c.Zone is not (Zone.None or Zone.PhasedOut) && (filter is null || filter.MatchesCard(c, x))).ToList();
+        }
         switch (st["AffectedDefined"])
         {
             case "Self":
@@ -560,6 +606,22 @@ public static class Statics
                 break;
         }
         return cards.Where(c => filter is null || filter.MatchesCard(c, x)).ToList();
+    }
+
+    /// <summary>"All cards that aren't on the battlefield, spells, and permanents are the chosen color" (Painter's Servant).</summary>
+    private static bool IsColorEverywhere(StaticDef s) =>
+        s["AffectedZone"] == "All" && s["AddColor"] is not null
+        && s.P.Values.Keys.All(k => k is "Mode" or "Affected" or "AffectedZone" or "AddColor" or "Description" or "EffectZone" || Presence.Params.Contains(k));
+
+    /// <summary>The colors every card has, wherever it is (Painter's Servant): what a card nobody can see is known to be.</summary>
+    public static ColorMask EverywhereColors(Game g)
+    {
+        ColorMask colors = 0;
+        foreach (var c in g.State.BattlefieldCards)
+            foreach (var st in c.Statics)
+                if (st.Mode == "Continuous" && IsColorEverywhere(st) && st["Affected"] is "Card" or null && ColorOf(st["AddColor"]!, c) is { } add)
+                    colors |= add;
+        return colors;
     }
 
     private static IEnumerable<Player> AffectedPlayers(Game g, StaticDef st, EffectContext x)
