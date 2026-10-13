@@ -64,7 +64,7 @@ public static class Effects
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
         new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
-        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
+        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new DamageResolveEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -128,8 +128,8 @@ sealed class ManaEffect : Effect
         if (ab.P.Values.Keys.Any(Presence.Params.Contains) && ab.Kind != AbilityKind.Activated) ctx.Need("Mana.IsPresent+NotActivated");
         if (ab["RestrictValid"] is { } rv)
         {
-            // Restricted mana is only ever spent automatically, on a payment it's allowed for.
-            if (ab.Kind != AbilityKind.Activated || !ab.Cost.Mana.IsZero || ab.Cost.Untap) ctx.Need("Mana.RestrictValid+Manual");
+            // Restricted mana floats apart and is only ever spent automatically, on a payment it's allowed for.
+            if (ab.Kind != AbilityKind.Activated) ctx.Need("Mana.RestrictValid+NotActivated");
             ManaRestriction.Validate(rv, ctx);
         }
         var produced = ab["Produced"];
@@ -695,7 +695,10 @@ sealed class NameCardEffect : Effect
 sealed class DealDamageEffect : Effect
 {
     public override string Api => "DealDamage";
-    public override IReadOnlySet<string> Params { get; } = P("NumDmg", "Defined", "DividedAsYouChoose", "DamageSource", "RememberDamaged", "DivideEvenly");
+    public override IReadOnlySet<string> Params { get; } = P("NumDmg", "Defined", "DividedAsYouChoose", "DamageSource", "RememberDamaged", "DivideEvenly",
+        // "Deals 4 damage to any target and 3 damage to each of up to two other targets" (Drakuseth): Forge holds the
+        // damage until DamageResolve$ deals it all at once; here each part is dealt as it resolves.
+        "DamageMap");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {

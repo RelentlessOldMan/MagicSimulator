@@ -316,6 +316,14 @@ sealed class ChooseNumberEffect : Effect
     }
 }
 
+/// <summary>Deals the damage DamageMap$ held back; here it was already dealt (see DealDamage).</summary>
+sealed class DamageResolveEffect : Effect
+{
+    public override string Api => "DamageResolve";
+    public override IReadOnlySet<string> Params { get; } = P();
+    public override void Resolve(EffectContext x) { }
+}
+
 /// <summary>"Choose a source": a card on the battlefield or the stack (prevention shields name it).</summary>
 sealed class ChooseSourceEffect : Effect
 {

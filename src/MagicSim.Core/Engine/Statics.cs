@@ -121,6 +121,8 @@ public static class Statics
         "IgnoreLandWalk", "MustAttack",
         // Untapping during other players' untap steps: the simulation only plays your turns.
         "UntapOtherPlayer",
+        // "Damage can't be prevented": nothing here prevents the damage your cards deal (only goldfish opponents could).
+        "CantPreventDamage",
     };
 
     private static readonly HashSet<string> CommonParams = new(StringComparer.Ordinal) { "Mode", "Description", "Secondary" };

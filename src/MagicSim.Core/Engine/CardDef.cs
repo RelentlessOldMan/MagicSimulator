@@ -298,7 +298,7 @@ public static partial class CardCompiler
         "SP", "AB", "DB", "ST", "Cost", "SubAbility", "ValidTgts", "TgtPrompt", "TargetMin", "TargetMax",
         "SpellDescription", "StackDescription", "AILogic", "AIPreference", "AITgts", "AIManaPref", "AINoRecursiveCheck",
         "PrecostDesc", "CostDesc", "IsCurse", "AILifeThreshold", "AIMaxTgtsCount", "AITgtBeforeCostEval", "AIPowerThreshold",
-        "SorcerySpeed", "ActivationPhases", "InstantSpeed", "PlayerTurn", "AnyPlayer", "TargetType", "MayChooseTarget",
+        "SorcerySpeed", "InstantSpeed", "PlayerTurn", "AnyPlayer", "TargetType", "MayChooseTarget",
         "Planeswalker", "Ultimate", "AIHintRequired", "AIActivateLast", "ShowCurrentCard", "AICheckSVar", "AISVarCompare",
         "ValidDescription", "ValidCardsDesc", "ValidTgtsDesc", "ChoiceTitle", "AIRespondsToOwnAbility", "TgtPromptInfo",
         "AIPhyrexianPayment", "NoLooking", "UnlessAI", "ValidMessage",
@@ -307,7 +307,7 @@ public static partial class CardCompiler
     /// <summary>Parameters any ability may have, handled by the engine rather than the effect.</summary>
     private static readonly HashSet<string> GenericParams = new(StringComparer.Ordinal)
     {
-        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "UnlessSwitched", "ETB", "ActivationZone", "OptionalDecider", "Activation", "ActivationGameTypes", "ReduceCost",
+        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "UnlessSwitched", "ActivationPhases", "ActivationFirstCombat", "TargetUnique", "ETB", "ActivationZone", "OptionalDecider", "Activation", "ActivationGameTypes", "ReduceCost",
     };
 
     public static CardDef Compile(ForgeCard source, Func<string, CardDef?>? tokens = null)
@@ -1040,6 +1040,8 @@ public static partial class CardCompiler
         // "Activate only if …" (Activation$ Metalcraft).
         if (p["Activation"] is { } activation && !Presence.IsKnownCondition(activation)) ctx.Need("Activation:" + activation);
         if (p["UnlessResolveSubs"] is { } urs && urs != "WhenPaid") ctx.Need("UnlessResolveSubs:" + urs);
+        // "Activate only during your upkeep", "cast only before the combat damage step".
+        if (p["ActivationPhases"] is { } phases && Game.StepRanges(phases) is null) ctx.Need("ActivationPhases:" + phases);
         // "This ability costs {1} less to activate for each …"
         if (p["ReduceCost"] is { } reduce) Amount.Parse(reduce, ctx);
         if (p["UnlessCost"] is { } unlessAmount && ctx.Face.SVars.TryGetValue(unlessAmount, out var amountBody) && !unlessAmount.Contains(' ')

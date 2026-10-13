@@ -598,9 +598,10 @@ public sealed class Amount
         }
         if (kind == "Devotion.Chosen")
             return new(core, x => x.Host.ChosenColor is { } chosen && chosen != ManaColor.C ? Devotion(x, chosen.Mask()) : 0);
-        if (kind.StartsWith("Devotion.", StringComparison.Ordinal) || kind == "Devotion")
+        if (kind.StartsWith("Devotion.", StringComparison.Ordinal) || kind == "Devotion" || kind.StartsWith("DevotionDual.", StringComparison.Ordinal))
         {
-            var colors = kind.Length > 9 ? kind[9..] : arg;
+            // "DevotionDual.Red.Green": devotion to red and green (a hybrid symbol counts once).
+            var colors = kind.StartsWith("DevotionDual.", StringComparison.Ordinal) ? kind[13..] : kind.Length > 9 ? kind[9..] : arg;
             var mask = ColorMask.None;
             foreach (var w in colors.Split(new[] { '.', ' ', '+' }, StringSplitOptions.RemoveEmptyEntries))
                 if (ManaColors.FromWord(w) is { } col && col != ManaColor.C) mask |= col.Mask();
@@ -701,7 +702,7 @@ public sealed class Amount
         return null;
     }
 
-    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TargetedObjects|TriggeredCard|TriggeredSpellAbility|TriggeredSource|Remembered|RememberedLKI|Imprinted|Sacrificed|Exiled|ReplacedCard|ReplacedCardLKI)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+|CastTotalManaSpent)(?: (.+))?$", RegexOptions.Compiled);
+    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|ParentTargeted|TargetedObjects|TriggeredCard|TriggeredSpellAbility|TriggeredSource|Remembered|RememberedLKI|Imprinted|Sacrificed|Exiled|ReplacedCard|ReplacedCardLKI)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+|CastTotalManaSpent)(?: (.+))?$", RegexOptions.Compiled);
 
     /// <summary>"Targeted$CardPower", "Remembered$CardManaCost", "Imprinted$Valid Card.X": a property of defined cards (summed), or how many there are.</summary>
     private static Amount DefinedCardsAmount(string core, Match m, CompileContext ctx)
@@ -723,6 +724,7 @@ public sealed class Amount
             IEnumerable<int> ids = which switch
             {
                 "Targeted" => x.OwnOrParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value),
+                "ParentTargeted" => x.ParentTargets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value),
                 "TriggeredCard" or "TriggeredSpellAbility" => x.Item.TriggeredCardId is { } id ? new[] { id } : Array.Empty<int>(),
                 "TriggeredSource" => x.Item.TriggeredSourceId is { } sid ? new[] { sid } : Array.Empty<int>(),
                 "Remembered" or "RememberedLKI" => x.Host.Remembered ?? new List<int>(),

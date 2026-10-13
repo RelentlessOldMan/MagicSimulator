@@ -893,9 +893,41 @@ public sealed partial class Game
                 if (!check || CanCast(c, i)) result.Add(new GameAction.Cast(c.Id, i, face));
     }
 
+    /// <summary>"Upkeep->Declare Blockers,Main2": the steps an ability may be used in, or null if a name isn't known.</summary>
+    public static List<(Step From, Step To)>? StepRanges(string phases)
+    {
+        var ranges = new List<(Step, Step)>();
+        foreach (var part in phases.Split(','))
+        {
+            var ends = part.Split("->");
+            if (ends.Length > 2 || StepNamed(ends[0].Trim()) is not { } from || StepNamed(ends[^1].Trim()) is not { } to) return null;
+            ranges.Add((from, to));
+        }
+        return ranges;
+    }
+
+    // Nobody blocks a goldfish, so the declare blockers step is part of declaring attackers here.
+    private static Step? StepNamed(string name) => name switch
+    {
+        "Untap" => Step.Untap, "Upkeep" => Step.Upkeep, "Draw" => Step.Draw, "Main1" => Step.Main1, "BeginCombat" => Step.BeginCombat,
+        "Declare Attackers" or "Declare Blockers" => Step.DeclareAttackers, "FirstStrikeDamage" or "Combat Damage" or "CombatDamage" => Step.CombatDamage,
+        "EndCombat" => Step.EndCombat, "Main2" => Step.Main2, "End of Turn" or "End Of Turn" => Step.End, "Cleanup" => Step.Cleanup,
+        _ => null,
+    };
+
+    /// <summary>ActivationPhases$ and ActivationFirstCombat$ ("only before the combat damage step").</summary>
+    private bool TimingAllows(AbilityDef ab)
+    {
+        if (ab["ActivationPhases"] is { } phases && StepRanges(phases) is { } ranges && !ranges.Any(r => State.Step >= r.From && State.Step <= r.To))
+            return false;
+        return ab["ActivationFirstCombat"] != "True" || State.ThisTurn.Combats == 0
+            || State.ThisTurn.Combats == 1 && State.Step is Step.BeginCombat or Step.DeclareAttackers;
+    }
+
     private bool CanActivate(Card c, AbilityDef ab, bool sorcerySpeed)
     {
         if (ab["SorcerySpeed"] == "True" && !sorcerySpeed) return false;
+        if (!TimingAllows(ab)) return false;
         if (ab["Activation"] is { } activation && !Presence.ConditionHolds(activation, ContextFor(c))) return false;
         // "Commander only" abilities (War Room): this is a Commander game if the player has a commander.
         if (ab["ActivationGameTypes"] is { } gameTypes
@@ -998,6 +1030,7 @@ public sealed partial class Game
             return false;
         if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].AltCondition is { } condition && !AltConditionHolds(c, condition))
             return false;
+        if (spellIndex >= 0 && !TimingAllows(c.CurrentFace.SpellAbilities[spellIndex])) return false;
         if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex] is { CharmNumExpr: { } charmNum } modal
             && modal.CharmCount > Effect.EvalAmount(ContextFor(c), charmNum))
             return false;
@@ -1339,6 +1372,8 @@ public sealed partial class Game
         {
             if (ab.TargetFilter is null) { result.Add(new()); continue; }
             var candidates = TargetCandidates(source, ab, controller, trigger);
+            // "Each of up to two other targets": none chosen earlier in the chain.
+            if (ab["TargetUnique"] == "True") candidates = candidates.Where(t => !result.Any(earlier => earlier.Contains(t))).ToList();
             var (tmin, tmax) = TargetBounds(source, ab, controller, x);
             // "For each opponent, … target permanent that player controls": one target among each player's.
             if (ab["TargetsForEachPlayer"] == "True")
