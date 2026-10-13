@@ -600,7 +600,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch, AbilityCast }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch, AbilityCast, BecomesTarget }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null,
@@ -666,11 +666,11 @@ public sealed partial class Game
             var item = new StackItem
             {
                 Id = State.NextStackId++, SourceId = pt.SourceId, Ability = exec, Controller = pt.Controller,
-                TriggeredCardId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.TargetCardId : pt.Event.CardId,
+                TriggeredCardId = pt.Event.Mode is TriggerMode.DamageDone or TriggerMode.BecomesTarget ? pt.Event.TargetCardId : pt.Event.CardId,
                 Sacrificed = pt.Event.Mode == TriggerMode.Sacrificed && pt.Event.CardId is { } sac ? new() { sac } : null,
                 TriggeredPlayer = pt.Event.Player, DelayRemembered = pt.DelayRemembered, DelayPlayers = pt.DelayPlayers, DelayNumber = pt.DelayNumber,
                 TriggerAmount = pt.Event.Amount,
-                TriggeredSourceId = pt.Event.Mode == TriggerMode.DamageDone ? pt.Event.CardId : null,
+                TriggeredSourceId = pt.Event.Mode is TriggerMode.DamageDone or TriggerMode.BecomesTarget ? pt.Event.CardId : null,
                 TriggeredObjectId = pt.Event.Mode == TriggerMode.Unattached ? pt.Event.TargetCardId : null,
                 TriggeredAbilityId = pt.Event.Activated?.Id,
                 Description = $"{src.Name} trigger",
@@ -680,10 +680,18 @@ public sealed partial class Game
             if (pt.Trigger["Static"] == "True") { RunChain(item); continue; }
             State.Stack.Add(item);
             Note($"trigger: {src.Name}" + TargetText(item));
+            FireBecomesTarget(item);
         }
     }
 
     public bool HasPendingTriggers => _pending.Count > 0;
+
+    /// <summary>Each object and player a spell or ability on the stack targets "becomes the target" of it.</summary>
+    private void FireBecomesTarget(StackItem item)
+    {
+        foreach (var t in item.ChainTargets.SelectMany(ts => ts).Distinct())
+            Fire(new TriggerEvent(TriggerMode.BecomesTarget, CardId: item.SourceId, Player: t.Player, TargetCardId: t.CardId, Activated: item));
+    }
 }
 
 // ---- costs and mana ------------------------------------------------------------------

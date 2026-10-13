@@ -72,6 +72,8 @@ public static class Triggers
         ["Always"] = new(StringComparer.Ordinal) { },
         ["LifeLost"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["Countered"] = new(StringComparer.Ordinal) { "ValidCause", "ValidSA" },
+        // "Whenever this becomes the target of a spell or ability [you control for the first time each turn]".
+        ["BecomesTarget"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "Valiant", "FirstTime" },
     };
 
     public static readonly HashSet<string> Supported = new(ModeParams.Keys.Concat(NeverInGoldfish), StringComparer.Ordinal);
@@ -84,7 +86,15 @@ public static class Triggers
                 ctx.Need($"TriggerParam:{t.Mode}.{key}");
         Presence.Validate(t.P, ctx);
         if (t["ValidCard"] is { } vc) Filter.Parse(vc, ctx);
-        if (t["ValidSource"] is { } vs) Filter.Parse(vs, ctx);
+        if (t["ValidSource"] is { } vs)
+        {
+            if (t.Mode == "BecomesTarget")
+                foreach (var part in vs.Split(','))
+                {
+                    if (TargetingSource(part.Trim()).Card is { } cardFilter) Filter.Parse(cardFilter, ctx);
+                }
+            else Filter.Parse(vs, ctx);
+        }
         if (t["ValidTarget"] is { } vt) Filter.Parse(vt, ctx);
         if (t["ValidAttachment"] is { } va) Filter.Parse(va, ctx);
         if (t["ValidObject"] is { } vo) Filter.Parse(vo, ctx);
@@ -266,6 +276,16 @@ public static class Triggers
                     if (e.Player is { } p ? !f.MatchesPlayer(p, x) : e.TargetCardId is not { } tc || !f.MatchesCard(g.State[tc], x)) return false;
                 }
                 return true;
+            case "BecomesTarget" when e.Mode == TriggerMode.BecomesTarget:
+                if (t["ValidSource"] is { } targeter && !targeter.Split(',').Any(part => TargetingSource(part.Trim()) is var (spellOnly, filter)
+                        && (!spellOnly || e.Activated!.IsSpell) && (filter is null || FilterOf(x, filter).MatchesCard(g.State[e.CardId!.Value], x))))
+                    return false;
+                if (t["ValidTarget"] is { } targeted)
+                {
+                    var f = FilterOf(x, targeted);
+                    if (e.Player is { } p ? !f.MatchesPlayer(p, x) : e.TargetCardId is not { } tc || !f.MatchesCard(g.State[tc], x)) return false;
+                }
+                return true;
             case "AttackersDeclared" when e.Mode == TriggerMode.AttackersDeclared:
                 if (e.Player != source.Controller) return false;
                 // "Whenever enchanted player is attacked": everything attacks one player here.
@@ -311,11 +331,30 @@ public static class Triggers
         return FilterOf(x, vc).MatchesCard(g.State[id], x);
     }
 
+    /// <summary>
+    /// What may target for a BecomesTarget trigger: "Spell" / "Spell.Aura" (spells only), "SpellAbility.OppCtrl" (spells
+    /// or abilities), or a card filter for spells ("Instant,Sorcery").
+    /// </summary>
+    private static (bool SpellOnly, string? Card) TargetingSource(string part)
+    {
+        var dot = part.IndexOf('.');
+        var head = dot < 0 ? part : part[..dot];
+        var rest = dot < 0 ? null : "Card" + part[dot..];
+        return head switch
+        {
+            "Spell" => (true, rest),
+            "SpellAbility" => (false, rest),
+            _ => (true, part),
+        };
+    }
+
     /// <summary>"This ability triggers only once each turn" (ActivationLimit$): counts this triggering if allowed.</summary>
     public static bool UnderLimit(Game g, Card source, TriggerDef t)
     {
-        // "Do this only once each turn" (ResolvedLimit$) is counted the same way, when it triggers.
-        if ((t["ActivationLimit"] ?? t["ResolvedLimit"]) is not { } lim || !int.TryParse(lim, out var limit)) return true;
+        // "Do this only once each turn" (ResolvedLimit$) is counted the same way, when it triggers, and so is
+        // "becomes the target … for the first time each turn" (Valiant$, FirstTime$).
+        var lim = t["ActivationLimit"] ?? t["ResolvedLimit"] ?? (t["Valiant"] == "True" || t["FirstTime"] == "True" ? "1" : null);
+        if (lim is null || !int.TryParse(lim, out var limit)) return true;
         source.TriggerUses ??= new();
         var (turn, count) = source.TriggerUses.GetValueOrDefault(t);
         if (turn != g.State.Turn) count = 0;

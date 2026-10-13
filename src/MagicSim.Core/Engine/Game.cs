@@ -1084,6 +1084,7 @@ public sealed partial class Game
             if (copies > 0) Note($"storm: {copies} cop{(copies == 1 ? "y" : "ies")}");
         }
         Fire(new TriggerEvent(TriggerMode.SpellCast, CardId: c.Id, Player: player));
+        FireBecomesTarget(item);
     }
 
     /// <summary>Whether a cost has an X to choose: in its mana ({X}) or another part ("pay X life").</summary>
@@ -1234,6 +1235,7 @@ public sealed partial class Game
         };
         Note($"activate {c.Name}: {ab.Description}" + TargetText(item));
         if (!ab.IsSpecialAction) Fire(new TriggerEvent(TriggerMode.AbilityCast, CardId: c.Id, Player: player, Activated: item));
+        if (!ab.IsSpecialAction && !ab.IsManaAbility) FireBecomesTarget(item);
         if (ab.IsSpecialAction) RunChain(item);   // turning a permanent face up doesn't use the stack (rule 116.2b)
         else if (ab.IsManaAbility)
         {
