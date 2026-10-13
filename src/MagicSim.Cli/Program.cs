@@ -25,6 +25,7 @@ public static class Program
         try
         {
             var opts = Options.Parse(args[1..]);
+            if (LowPriority.Requested(opts)) LowPriority.Apply();
             return args[0] switch
             {
                 "sync-cards" => await SyncCards(opts),
@@ -184,7 +185,7 @@ public static class Program
         return new RunOptions
         {
             Games = Int("--games", 10000), Seed = seed, MaxTurn = Int("--max-turn", 20), Mulligans = mulls, Seats = seats, Tables = tables,
-            Rollouts = Int("--rollouts", 2, 0), Threads = Int("--threads", Environment.ProcessorCount),
+            Rollouts = Int("--rollouts", 2, 0), Threads = LowPriority.Active ? OneCore(o, "--threads") : Int("--threads", Environment.ProcessorCount),
         };
     }
 
@@ -262,7 +263,8 @@ public static class Program
             if (o.Get(key) is not { } v) return fallback;
             return int.TryParse(v, out var n) && n >= 1 ? n : throw new UsageException($"{key} must be an integer >= 1");
         }
-        var options = new GauntletOptions { Games = Int("--games", 20), Parallel = Int("--parallel", 1), TimeoutSeconds = Int("--timeout", 120) };
+        var options = new GauntletOptions { Games = Int("--games", 20), Parallel = LowPriority.Active ? OneCore(o, "--parallel") : Int("--parallel", 1),
+            Priority = LowPriority.Active ? System.Diagnostics.ProcessPriorityClass.Idle : System.Diagnostics.ProcessPriorityClass.BelowNormal, TimeoutSeconds = Int("--timeout", 120) };
         var app = ForgeApp.Load(o.Get("--forge-app"));
         var opponents = Gauntlet.ResolveOpponents(deckPath, o.GetAll("--against"));
         if (opponents.Count == 0) throw new UsageException("no opponent decks found (a deck is a .txt with a *CMDR* line)");
@@ -276,6 +278,10 @@ public static class Program
         Emit(o, JsonSerializer.Serialize(GauntletReport.Document(result), JsonOut));
         return Ok;
     }
+
+    /// <summary>--low runs everything on one core, so a larger --threads or --parallel is a mistake.</summary>
+    private static int OneCore(Options o, string key) =>
+        o.Get(key) is { } v && v != "1" ? throw new UsageException($"--low runs on one core, so {key} must be 1 (or left out)") : 1;
 
     private static int Replay(Options o)
     {
@@ -337,6 +343,7 @@ public static class Program
                                                    play the deck against other decks with Forge's AI (1v1 Commander)
 
             Planned (see CONTRACT.md): compare.
+            Any command: --low (or MAGICSIM_LOW=1) runs at idle priority on one core, one thread at a time.
             Card index path: --cards, else %MAGICSIM_CARDS%, else %LOCALAPPDATA%\MagicSim\oracle-cards.jsonl.gz
             """);
         return code;

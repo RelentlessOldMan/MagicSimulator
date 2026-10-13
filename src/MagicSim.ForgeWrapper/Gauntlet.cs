@@ -9,6 +9,8 @@ public sealed class GauntletOptions
 {
     public int Games { get; init; } = 20;
     public int Parallel { get; init; } = 1;
+    /// <summary>Priority of each Forge process.</summary>
+    public ProcessPriorityClass Priority { get; init; } = ProcessPriorityClass.BelowNormal;
     public int TimeoutSeconds { get; init; } = 120;
 }
 
@@ -96,7 +98,7 @@ public static class Gauntlet
             var done = 0;
             Parallel.ForEach(jobs, new ParallelOptions { MaxDegreeOfParallelism = options.Parallel }, job =>
             {
-                var error = RunProcess(app, work, $"opp{job.Opponent}.dck", job.Games, options.TimeoutSeconds, g =>
+                var error = RunProcess(app, work, $"opp{job.Opponent}.dck", job.Games, options.TimeoutSeconds, options.Priority, g =>
                 {
                     games[job.Opponent].Add(g);
                     var n = Interlocked.Increment(ref done);
@@ -122,7 +124,8 @@ public static class Gauntlet
     public static int? Round(ForgeGame g) => g.Turn is { } t ? (t + 1) / 2 : null;
 
     /// <summary>Runs one Forge process; returns why it failed, or null.</summary>
-    private static string? RunProcess(ForgeApp app, string work, string opponentFile, int games, int timeoutSeconds, Action<ForgeGame> onGame)
+    private static string? RunProcess(ForgeApp app, string work, string opponentFile, int games, int timeoutSeconds,
+        ProcessPriorityClass priority, Action<ForgeGame> onGame)
     {
         var psi = app.StartInfo("sim", "-d", "deck.dck", opponentFile, "-D", work.Replace('\\', '/') + "/", "-n", games.ToString(),
             "-f", "Commander", "-c", timeoutSeconds.ToString(), "-q");
@@ -146,7 +149,7 @@ public static class Gauntlet
                 if (stderr.Count < 2000) stderr.Add(e.Data);
         };
         p.Start();
-        try { p.PriorityClass = ProcessPriorityClass.BelowNormal; } catch (InvalidOperationException) { }
+        try { p.PriorityClass = priority; } catch (InvalidOperationException) { }
         p.BeginOutputReadLine();
         p.BeginErrorReadLine();
 
