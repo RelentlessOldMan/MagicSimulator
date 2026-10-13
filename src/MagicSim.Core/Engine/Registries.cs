@@ -78,6 +78,13 @@ public static class Triggers
 
     public static readonly HashSet<string> Supported = new(ModeParams.Keys.Concat(NeverInGoldfish), StringComparer.Ordinal);
 
+    /// <summary>
+    /// A trigger that can't fire against goldfish opponents: blocking and the like, or "whenever a spell or ability an
+    /// opponent controls destroys …" (Karmic Justice). What it would do never matters.
+    /// </summary>
+    public static bool NeverFires(Forge.ForgeParams t) =>
+        NeverInGoldfish.Contains(t["Mode"] ?? "") || t["Mode"] == "Destroyed" && t["ValidCauser"] == "Player.Opponent";
+
     public static void Validate(TriggerDef t, CompileContext ctx)
     {
         if (!ModeParams.TryGetValue(t.Mode, out var own)) return;   // unsupported (already reported) or never fires
@@ -141,7 +148,7 @@ public static class Triggers
         ["Ninjutsu"] = a => a.Api == "Ninjutsu",
     };
 
-    private static void ValidateActivated(string valid, CompileContext ctx)
+    public static void ValidateActivated(string valid, CompileContext ctx)
     {
         foreach (var term in valid.Split(','))
         {
@@ -153,7 +160,7 @@ public static class Triggers
         }
     }
 
-    private static bool ActivatedMatches(string valid, AbilityDef ab) =>
+    public static bool ActivatedMatches(string valid, AbilityDef ab) =>
         valid.Split(',').Any(term => term.Trim().Split('.', 2) is var parts
             && (parts.Length == 1 || parts[1].Split('+').All(p => ActivatedProps[p.TrimStart('!')](ab) != p.StartsWith('!'))));
 

@@ -928,6 +928,8 @@ public sealed partial class Game
     {
         if (ab["SorcerySpeed"] == "True" && !sorcerySpeed) return false;
         if (!TimingAllows(ab)) return false;
+        if (Statics.CantBeActivated(this, c, ab)) return false;
+        if (ab.Kind == AbilityKind.Activated && ab.P.Values.Keys.Any(Presence.Params.Contains) && !Presence.Hold(ab.P, ContextFor(c))) return false;
         if (ab["Activation"] is { } activation && !Presence.ConditionHolds(activation, ContextFor(c))) return false;
         // "Commander only" abilities (War Room): this is a Commander game if the player has a commander.
         if (ab["ActivationGameTypes"] is { } gameTypes

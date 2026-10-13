@@ -37,6 +37,14 @@ public sealed class TypeLine
 
     public static bool IsCreatureType(string subtype) => !NonCreatureSubtypes.Contains(subtype);
 
+    private static readonly HashSet<string> LandSubtypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Plains", "Island", "Swamp", "Mountain", "Forest", "Gate", "Desert", "Lair", "Locus", "Mine", "Power-Plant", "Tower", "Urza's", "Cave",
+        "Sphere", "Town",
+    };
+
+    public static bool IsLandType(string subtype) => LandSubtypes.Contains(subtype);
+
     public static TypeLine Parse(string text)
     {
         CardType types = 0;

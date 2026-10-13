@@ -307,7 +307,7 @@ public static partial class CardCompiler
     /// <summary>Parameters any ability may have, handled by the engine rather than the effect.</summary>
     private static readonly HashSet<string> GenericParams = new(StringComparer.Ordinal)
     {
-        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "UnlessSwitched", "ActivationPhases", "ActivationFirstCombat", "TargetUnique", "ETB", "ActivationZone", "OptionalDecider", "Activation", "ActivationGameTypes", "ReduceCost",
+        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "UnlessSwitched", "ActivationPhases", "ActivationFirstCombat", "TargetUnique", "TargetsForEachPlayer", "ETB", "ActivationZone", "OptionalDecider", "Activation", "ActivationGameTypes", "ReduceCost",
     };
 
     public static CardDef Compile(ForgeCard source, Func<string, CardDef?>? tokens = null)
@@ -440,6 +440,7 @@ public static partial class CardCompiler
     public static TriggerDef CompileTrigger(ForgeParams t, CompileContext ctx)
     {
         var mode = t["Mode"] ?? "?";
+        if (Triggers.NeverFires(t)) return new TriggerDef { P = t, Mode = mode, Face = ctx.Face };
         if (!Triggers.Supported.Contains(mode)) ctx.Need("Trigger:" + mode);
         AbilityDef? exec = null;
         if (t["Execute"] is { } svar)
@@ -1063,8 +1064,11 @@ public static partial class CardCompiler
 
         if (handler is not null)
         {
+            // On an activated ability, IsPresent$, CheckSVar$ and the like restrict when it can be activated.
+            var restricted = kind == AbilityKind.Activated && p.Values.Keys.Any(Presence.Params.Contains);
+            if (restricted) Presence.Validate(p, ctx);
             foreach (var key in p.Values.Keys)
-                if (!CosmeticParams.Contains(key) && !GenericParams.Contains(key) && !handler.Params.Contains(key))
+                if (!CosmeticParams.Contains(key) && !GenericParams.Contains(key) && !handler.Params.Contains(key) && !(restricted && Presence.Params.Contains(key)))
                     ctx.Need($"Param:{api}.{key}");
             handler.Validate(ab, ctx);
             Conditions.Validate(ab, ctx);

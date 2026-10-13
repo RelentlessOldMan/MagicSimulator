@@ -131,7 +131,7 @@ public static class Statics
     {
         "Affected", "AffectedDefined", "AddPower", "AddToughness", "AddKeyword", "SetPower", "SetToughness",
         "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize", "RaiseMaxHandSize", "MayPlay", "MayPlayWithoutManaCost",
-        "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
+        "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "RemoveLandTypes", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
         "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost", "MayPlayIgnoreType",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
         "AddSVar", "GainsAbilitiesOf", "GainsAbilitiesOfZones",
@@ -147,6 +147,7 @@ public static class Statics
     };
 
     private static readonly HashSet<string> CantAttackParams = new(StringComparer.Ordinal) { "ValidCard", "EffectZone" };
+    private static readonly HashSet<string> CantBeActivatedParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Activator" };
     private static readonly HashSet<string> ValidPlayerParams = new(StringComparer.Ordinal) { "ValidPlayer", "EffectZone" };
     private static readonly HashSet<string> CastWithFlashParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Caster" };
     private static readonly HashSet<string> OptionalAttackCostParams = new(StringComparer.Ordinal) { "ValidCard", "Trigger", "Cost" };
@@ -191,8 +192,19 @@ public static class Statics
         if (s.Mode == "AttackRestrict" && s["ValidDefender"] == "You") return;
         HashSet<string> own;
         // "Can't attack or block": blocking never comes up against goldfish opponents.
-        switch (s.Mode is "CantAttack,CantBlock" or "CantBlock,CantAttack" ? "CantAttack" : s.Mode)
+        // "Enchanted permanent can't attack or block, and its activated abilities can't be activated" (Faith's Fetters).
+        var modes = s.Mode.Split(',');
+        var mode = modes.Contains("CantBeActivated") && modes.All(m => m is "CantBeActivated" or "CantAttack" or "CantBlock") ? "CantBeActivated"
+            : s.Mode is "CantAttack,CantBlock" or "CantBlock,CantAttack" ? "CantAttack" : s.Mode;
+        switch (mode)
         {
+            case "CantBeActivated":
+                own = CantBeActivatedParams;
+                if (s["ValidCard"] is { } bvc) Filter.Parse(bvc, ctx);
+                if (s["ValidSA"] is { } bsa) Triggers.ValidateActivated(bsa, ctx);
+                // Everything here is activated by you.
+                if (s["Activator"] is { } activator && activator is not ("You" or "Player")) ctx.Need("CantBeActivated.Activator:" + activator);
+                break;
             case "AlternativeCost":   // the compiler adds the alternative-cost spell abilities
                 own = AlternativeCostParams;
                 if (s["EffectZone"] is { } aez && aez != "All") ctx.Need("AlternativeCost.EffectZone:" + aez);
@@ -407,11 +419,11 @@ public static class Statics
         {
             var (source, st, x) = holding[i];
             if (st["AddType"] is null && st["RemoveCardTypes"] is null && st["RemoveCreatureTypes"] is null && st["AddAllCreatureTypes"] is null
-                && st["RemoveType"] is null) continue;
+                && st["RemoveType"] is null && st["RemoveLandTypes"] is null) continue;
             var words = st["AddType"] is { } at ? TypeChange.Words(at, source) : null;
             foreach (var card in Affected(i))
                 card.StaticTypes = TypeChange.Apply(card.Types, words, st["RemoveCardTypes"] == "True", st["RemoveCreatureTypes"] == "True",
-                    false, st["AddAllCreatureTypes"] == "True", st["RemoveType"]);
+                    false, st["AddAllCreatureTypes"] == "True", st["RemoveType"], st["RemoveLandTypes"] == "True");
         }
         foreach (var card in animated)
             foreach (var a in card.Animations!)
@@ -499,7 +511,9 @@ public static class Statics
             if (st["SetPower"] is null && st["SetToughness"] is null) continue;
             foreach (var card in Affected(i))
             {
-                var cx = ContextFor(g, st["CharacteristicDefining"] == "True" ? card : source, st);
+                // "AffectedX" is worked out for each affected card (Starfield of Nyx: its own mana value).
+                var perCard = st["CharacteristicDefining"] == "True" || (st["SetPower"] ?? st["SetToughness"])!.StartsWith("Affected", StringComparison.Ordinal);
+                var cx = ContextFor(g, perCard ? card : source, st);
                 if (st["SetPower"] is { } sp) card.SetPower = Effect.EvalAmount(cx, sp);
                 if (st["SetToughness"] is { } stt) card.SetToughness = Effect.EvalAmount(cx, stt);
             }
@@ -722,6 +736,20 @@ public static class Statics
                 if (st.Mode != "ActivateAbilityAsIfHaste" || !WorksFrom(source, st)) continue;
                 var x = ContextFor(g, source, st);
                 if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(creature, x)) && Presence.Hold(st.P, x)) return true;
+            }
+        return false;
+    }
+
+    /// <summary>"Its activated abilities can't be activated [unless they're mana abilities]".</summary>
+    public static bool CantBeActivated(Game g, Card card, AbilityDef ability)
+    {
+        foreach (var source in Sources(g))
+            foreach (var st in source.Statics)
+            {
+                if (!st.Mode.Split(',').Contains("CantBeActivated") || st["Activator"] == "Opponent" || !WorksFrom(source, st)) continue;
+                var x = ContextFor(g, source, st);
+                if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(card, x))
+                    && (st["ValidSA"] is not { } sa || Triggers.ActivatedMatches(sa, ability)) && Presence.Hold(st.P, x)) return true;
             }
         return false;
     }

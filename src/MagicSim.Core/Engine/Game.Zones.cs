@@ -794,6 +794,8 @@ public sealed partial class Game
         var p = State.Players[player];
         IEnumerable<Card> candidates = State.BattlefieldCards.Where(c => c.Controller == player)
             .Concat(p.Hand.Select(id => State[id]));
+        // "Activated abilities of artifacts can't be activated" (Stony Silence) stops mana abilities too.
+        var anyCantActivate = Statics.Sources(this).Any(s => s.Statics.Any(st => st.Mode.Contains("CantBeActivated", StringComparison.Ordinal)));
         foreach (var c in candidates)
         {
             if (c.Id == excludeId || c.IsBlank) continue;
@@ -801,6 +803,7 @@ public sealed partial class Game
             foreach (var ab in c.Activated)
             {
                 if (!IsAutoManaAbility(ab)) continue;
+                if (anyCantActivate && Statics.CantBeActivated(this, c, ab)) continue;
                 var fromHand = ab["ActivationZone"] == "Hand";
                 if (fromHand != (c.Zone == Zone.Hand)) continue;
                 if (ab.Cost.Tap && (c.Tapped || IsSickForAbilities(c))) continue;

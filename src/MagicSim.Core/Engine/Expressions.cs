@@ -178,6 +178,9 @@ public sealed class Filter
             "Other" or "StrictlyOther" => (c, pl, x) => c is null || c.Id != x.Item.SourceId,
             "token" => (c, pl, x) => c is not null && c.IsToken,
             "tapped" => (c, pl, x) => c is not null && c.Tapped,
+            // "For each Aura attached to it" (Kor Spiritdancer): attached to the source.
+            "Attached" => (c, pl, x) => c is not null && c.AttachedTo == x.Host.Id,
+            "enchanted" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Aura")),
             "faceUp" => (c, pl, x) => c is not null && !c.FaceDown,
             "wasCastFromGraveyard" => (c, pl, x) => c is not null && c.CastFrom == Zone.Graveyard,
             "wasCastFromExile" => (c, pl, x) => c is not null && c.CastFrom == Zone.Exile,
@@ -545,6 +548,9 @@ public sealed class Amount
             case "xPaid": return new(core, x => x.X);
             case "CardPower": return new(core, x => x.Host.LastKnownPower);
             case "ChosenNumber": return new(core, x => x.Host.ChosenNumber);
+            // "Base power and toughness each equal to its mana value" (Starfield of Nyx's AffectedX).
+            case "CardManaCost": return new(core, x => x.Host.ManaValue);
+            case "LifeYouLostThisTurn": return new(core, x => x.S.ThisTurn.LifeLost.GetValueOrDefault(x.Controller));
             case "CastTotalManaSpent": return new(core, x => x.Host.ManaSpentToCast);
             // "If an opponent lost life this turn" (Theater of Horrors): how much they lost in all.
             case "LifeOppsLostThisTurn": return new(core, x => x.S.ThisTurn.LifeLost.Where(kv => kv.Key != x.Controller).Sum(kv => kv.Value));
