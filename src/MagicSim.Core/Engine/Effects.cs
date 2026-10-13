@@ -64,7 +64,7 @@ public static class Effects
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
         new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
-        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new DamageResolveEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
+        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new DamageResolveEffect(), new FogEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -141,6 +141,7 @@ sealed class ManaEffect : Effect
     public override void Resolve(EffectContext x)
     {
         var amount = Amount(x, x.Ability["Amount"], 1);
+        if (x.Ability.Kind == AbilityKind.Activated) amount = x.Game.TappedForMana(x.Host, x.Ability, x.Controller, amount);
         var produced = x.Ability["Produced"]!;
         // Defined$: who gets the mana (e.g. the player who tapped a land, for TapsForMana triggers).
         var p = x.S.Players[x.Ability["Defined"] is { } d ? Defined.Players(d, x).FirstOrDefault(x.Controller) : x.Controller];

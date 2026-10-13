@@ -60,6 +60,8 @@ public static class Replacements
         ["LifeReduced"] = new(StringComparer.Ordinal) { "ValidPlayer", "IsDamage", "Result" },
         ["Moved"] = new(StringComparer.Ordinal) { "ValidCard", "Origin", "Destination", "ValidLKI", "ReplacementResult" },
         ["Draw"] = new(StringComparer.Ordinal) { "ValidPlayer", "NotFirstCardInDrawStep" },
+        // "If you tap a permanent for mana, it produces three times as much of that mana instead" (Nyxbloom Ancient).
+        ["ProduceMana"] = new(StringComparer.Ordinal) { "ValidCard", "ValidActivator" },
     };
 
     /// <summary>Compiles a non-self replacement into <paramref name="face"/>. False if it isn't one this knows.</summary>
@@ -148,6 +150,11 @@ public static class Replacements
                 newAmount = "ReplaceCount$Amount/" + (w["Amount"] ?? "Twice");
                 if (newAmount.EndsWith("Thrice")) newAmount = newAmount[..^"Thrice".Length] + "Times.3";
                 break;
+            case "ProduceMana" when w.Api == "ReplaceMana" && int.TryParse(w["ReplaceAmount"], out var times) && OnlyKeys(w, "ReplaceAmount"):
+                kind = ReplacementKind.Amount;
+                newAmount = "ReplaceCount$Amount/Times." + times;
+                if (r["ValidActivator"] is { } va) Filter.Parse(va, ctx);
+                break;
             case "AddCounter" when w.Api == "ReplaceCounter" && OnlyKeys(w, "Amount", "ValidCounterType", "ChooseCounter"):
                 if (w["ValidCounterType"] is { } wct && r["ValidCounterType"] is { } rct && wct != rct) return false;
                 kind = ReplacementKind.Amount;
@@ -229,6 +236,9 @@ public static class Replacements
     }
 
     /// <summary>Permanents and effect objects whose replacement effects apply now.</summary>
+    /// <summary>Whether any replacement of this event applies now (a quick check before working out amounts).</summary>
+    public static bool AnyActive(Game g, string evt) => Active(g, evt).Any();
+
     private static IEnumerable<(Card Host, ReplacementDef R)> Active(Game g, string evt)
     {
         foreach (var c in g.State.BattlefieldCards)
@@ -291,6 +301,7 @@ public static class Replacements
                 "AddCounter" => CardOk(r, "ValidCard", targetCard, x) && (r["ValidObject"] is null || CardOk(r, "ValidObject", targetCard, x))
                     && (r["ValidCounterType"] is not { } ct || ct == counterType),
                 "GainLife" => PlayerOk(r, "ValidPlayer", targetPlayer, x),
+                "ProduceMana" => CardOk(r, "ValidCard", source, x) && PlayerOk(r, "ValidActivator", targetPlayer, x),
                 "LifeReduced" => PlayerOk(r, "ValidPlayer", targetPlayer, x) && (r["IsDamage"] != "True" || damage)
                     && (r["Result"] is not { } res || Filter.Compare(g.State.Players[targetPlayer!.Value].Life - amount, res[..2], int.Parse(res[2..]))),
                 _ => false,

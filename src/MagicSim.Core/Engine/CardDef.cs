@@ -713,6 +713,12 @@ public static partial class CardCompiler
                 if (ManaCost.Parse(Part(1)) is not { } strive) { ctx.Need("Keyword:Strive+" + Part(1)); return true; }
                 face.Strive = strive;
                 return true;
+            case "Tribute":
+                // "As this enters, an opponent may put N +1/+1 counters on it. When it enters, if tribute wasn't paid, …":
+                // a goldfish opponent never pays it.
+                if (!face.SVars.ContainsKey("TrigNotTribute")) return false;
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ TrigNotTribute"), ctx));
+                return true;
             case "Mentor":
                 // "Whenever this creature attacks, put a +1/+1 counter on target attacking creature with lesser power."
                 face.SVars["__Mentor"] = "DB$ PutCounter | ValidTgts$ Creature.attacking+powerLT__MentorX | CounterType$ P1P1 | CounterNum$ 1";
@@ -1036,7 +1042,7 @@ public static partial class CardCompiler
             if (maxExpr is not null && p["TargetMin"] is null) ab.TargetMin = 0;
         }
 
-        if (p["OptionalDecider"] is { } od && od is not ("You" or "TargetedController" or "Targeted" or "Opponent" or "TriggeredActivator"))
+        if (p["OptionalDecider"] is { } od && od is not ("You" or "TargetedController" or "Targeted" or "Opponent" or "TriggeredActivator" or "TriggeredCardController"))
             ctx.Need("OptionalDecider:" + od);
         // "Activate only if …" (Activation$ Metalcraft).
         if (p["Activation"] is { } activation && !Presence.IsKnownCondition(activation)) ctx.Need("Activation:" + activation);

@@ -527,6 +527,7 @@ public sealed partial class Game
     private void CombatDamage()
     {
         Statics.Apply(this);
+        if (State.ThisTurn.NoCombatDamage) { Note("  combat damage prevented"); return; }
         // Attackers hit the player they attacked; if that player has lost, the next with the least life.
         var defender = State.ThisTurn.DefendingPlayer is { } d && !State.Players[d].Lost ? State.Players[d]
             : State.Players.Where(p => p.Index != Me && !p.Lost).OrderBy(p => p.Life).ThenBy(p => p.Index).FirstOrDefault();

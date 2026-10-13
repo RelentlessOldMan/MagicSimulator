@@ -180,6 +180,13 @@ public sealed class Filter
             "tapped" => (c, pl, x) => c is not null && c.Tapped,
             // "For each Aura attached to it" (Kor Spiritdancer): attached to the source.
             "Attached" => (c, pl, x) => c is not null && c.AttachedTo == x.Host.Id,
+            // "If its power is greater than each other creature's power" (Selvala): ties count, as in Forge.
+            "greatestPower" => (c, pl, x) => c is not null && !x.S.BattlefieldCards.Any(o => o.Types.Is(CardType.Creature) && o.Power > c.Power),
+            // "Doesn't have the same name as another creature you control or a creature card in your graveyard" (Guardian Project).
+            "doesNotShareNameWith YourGraveyard" => (c, pl, x) => c is not null && !x.S.Players[x.Controller].Graveyard.Any(id => id != c.Id && x.S[id].Name == c.Name),
+            "doesNotShareNameWith OtherYourBattlefield" => (c, pl, x) => c is not null
+                && !x.S.BattlefieldCards.Any(o => o.Id != c.Id && o.Controller == x.Controller && o.Name == c.Name),
+            "hasABasicLandType" => (c, pl, x) => c is not null && TypeLine.BasicLandTypes.Any(c.Types.HasSubtype),
             "enchanted" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Aura")),
             "faceUp" => (c, pl, x) => c is not null && !c.FaceDown,
             "wasCastFromGraveyard" => (c, pl, x) => c is not null && c.CastFrom == Zone.Graveyard,

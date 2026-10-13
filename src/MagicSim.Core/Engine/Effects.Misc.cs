@@ -31,7 +31,7 @@ sealed class AnimateAllEffect : Effect
 sealed class FightEffect : Effect
 {
     public override string Api => "Fight";
-    public override IReadOnlySet<string> Params { get; } = P("Defined");
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "Optional");
 
     public override void Validate(AbilityDef ab, CompileContext ctx) => Defined.ValidateCards(ab["Defined"], ctx);
 
@@ -40,6 +40,7 @@ sealed class FightEffect : Effect
         var fighters = (x.Ability["Defined"] is { } d ? Defined.Cards(d, x) : new List<int>())
             .Concat(Defined.Cards("Targeted", x)).Distinct().Select(id => x.S[id]).Where(c => c.Zone == Zone.Battlefield && c.Types.Is(CardType.Creature)).ToList();
         if (fighters.Count != 2) return;
+        if (x.Ability["Optional"] == "True" && !x.Game.Decider.ChooseYesNo(x.Game, x.Controller, x.Host, $"have {fighters[0].Name} fight {fighters[1].Name}?")) return;
         var (a, b) = (fighters[0], fighters[1]);
         int pa = a.Power, pb = b.Power;
         x.Game.DamageCard(b, pa, a);

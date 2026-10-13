@@ -316,6 +316,14 @@ sealed class ChooseNumberEffect : Effect
     }
 }
 
+/// <summary>"Prevent all combat damage that would be dealt this turn" (Fog).</summary>
+sealed class FogEffect : Effect
+{
+    public override string Api => "Fog";
+    public override IReadOnlySet<string> Params { get; } = P();
+    public override void Resolve(EffectContext x) => x.S.ThisTurn.NoCombatDamage = true;
+}
+
 /// <summary>Deals the damage DamageMap$ held back; here it was already dealt (see DealDamage).</summary>
 sealed class DamageResolveEffect : Effect
 {

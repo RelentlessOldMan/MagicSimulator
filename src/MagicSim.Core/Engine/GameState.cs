@@ -378,6 +378,8 @@ public sealed class TurnInfo
     public int? DefendingPlayer { get; set; }
     /// <summary>Combat phases so far this turn.</summary>
     public int Combats { get; set; }
+    /// <summary>"Prevent all combat damage that would be dealt this turn" (Fog).</summary>
+    public bool NoCombatDamage { get; set; }
     /// <summary>Life each player gained this turn.</summary>
     public Dictionary<int, int> LifeGained { get; set; } = new();
     /// <summary>Cards each player drew this turn.</summary>
@@ -403,7 +405,7 @@ public sealed class TurnInfo
     public TurnInfo Clone() => new()
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, Ended = Ended, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
-        ExtraPhases = new(ExtraPhases), Combats = Combats, AttackersDeclared = AttackersDeclared, Attacks = new(Attacks), DefendingPlayer = DefendingPlayer,
+        ExtraPhases = new(ExtraPhases), Combats = Combats, NoCombatDamage = NoCombatDamage, AttackersDeclared = AttackersDeclared, Attacks = new(Attacks), DefendingPlayer = DefendingPlayer,
         Drawn = new(Drawn), Cast = new(Cast), DamageTaken = new(DamageTaken), CombatDamageTypes = new(CombatDamageTypes, StringComparer.OrdinalIgnoreCase), CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
     };
 }

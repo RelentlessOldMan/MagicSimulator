@@ -796,6 +796,7 @@ public sealed partial class Game
             .Concat(p.Hand.Select(id => State[id]));
         // "Activated abilities of artifacts can't be activated" (Stony Silence) stops mana abilities too.
         var anyCantActivate = Statics.Sources(this).Any(s => s.Statics.Any(st => st.Mode.Contains("CantBeActivated", StringComparison.Ordinal)));
+        var multiplied = Replacements.AnyActive(this, "ProduceMana");
         foreach (var c in candidates)
         {
             if (c.Id == excludeId || c.IsBlank) continue;
@@ -823,7 +824,9 @@ public sealed partial class Game
                     + (ab.Cost.Parts.Any(q => q.Kind == CostPartKind.Sacrifice) ? 20 : 0)
                     + (ab.Cost.Parts.Any(q => q.Kind == CostPartKind.ExileSelf) ? 30 : 0);
                 // One auto ability per card: the cheapest, then the most flexible (a Swamp given "add any color").
-                var source = new ManaSource(c.Id, ab, mask, ab["Amount"] is { } a ? int.Parse(a) : 1, life, penalty);
+                var amount = ab["Amount"] is { } a ? int.Parse(a) : 1;
+                if (multiplied) amount = TappedForMana(c, ab, player, amount);
+                var source = new ManaSource(c.Id, ab, mask, amount, life, penalty);
                 if (best is not { } b || penalty < b.Penalty
                     || penalty == b.Penalty && System.Numerics.BitOperations.PopCount((uint)mask) > System.Numerics.BitOperations.PopCount((uint)b.Options))
                     best = source;
@@ -914,6 +917,10 @@ public sealed partial class Game
     {
         P = new Forge.ForgeParams("AB$ Mana | Produced$ C"), Api = "Mana", Kind = AbilityKind.Activated,
     };
+
+    /// <summary>How much mana a permanent tapped for mana makes, after "it produces three times as much instead".</summary>
+    public int TappedForMana(Card c, AbilityDef ab, int player, int amount) =>
+        ab.Cost.Tap && c.Zone == Zone.Battlefield ? Replacements.Amount(this, "ProduceMana", amount, source: c, targetPlayer: player) : amount;
 
     private void UseManaSource(ManaSource src, ManaColor color, int player)
     {
