@@ -81,6 +81,13 @@ public sealed partial class Game
             c.ColorsSpent = 0;
             c.ClearStaticEffects();
             State.Attackers.Remove(c.Id);
+            // A melded permanent is two cards: the other one goes where it goes (rule 712.4c).
+            if (c.MeldedWith >= 0)
+            {
+                var other = State[c.MeldedWith];
+                c.MeldedWith = -1;
+                if (other.Zone == Zone.Exile) MoveTo(other, to == Zone.Battlefield ? Zone.Graveyard : to);
+            }
         }
         // Off the battlefield and the stack a modal double-faced card is its front face again.
         if (to is not (Zone.Battlefield or Zone.Stack) && c.Def.Layout is "Modal" or "Adventure" or "Split") c.Face = 0;
@@ -626,7 +633,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch, AbilityCast, BecomesTarget, CounterRemoved, CounterAdded, BecomeMonstrous }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch, AbilityCast, BecomesTarget, CounterRemoved, CounterAdded, BecomeMonstrous, Untaps }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null,
@@ -1051,6 +1058,9 @@ public sealed partial class Game
                 case CostPartKind.RemoveCounter:
                     if (part.Amount != "All" && source.CounterCount(part.Valid) < AmountOf(part, x)) return false;
                     break;
+                case CostPartKind.Unattach:
+                    if (source.AttachedTo < 0) return false;
+                    break;
                 case CostPartKind.RemoveAnyCounter:
                     if (CostCandidates(part, source, player).Sum(id => State[id].Counters?.Values.Sum() ?? 0) < AmountOf(part, x)) return false;
                     break;
@@ -1241,6 +1251,9 @@ public sealed partial class Game
                     // "Remove all +1/+1 counters": how many were removed is remembered (Sage of Hours).
                     var removed = RemoveCounters(source, part.Valid, part.Amount == "All" ? source.CounterCount(part.Valid) : n);
                     (source.StoredVars ??= new())["CostCountersRemoved"] = removed;
+                    break;
+                case CostPartKind.Unattach:
+                    source.AttachedTo = -1;
                     break;
                 case CostPartKind.RemoveAnyCounter:
                     // "Remove three counters from among other artifacts, creatures and planeswalkers you control": from

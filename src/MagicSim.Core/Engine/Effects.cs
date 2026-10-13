@@ -64,7 +64,7 @@ public static class Effects
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
         new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
-        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new DamageResolveEffect(), new FogEffect(), new AddOrRemoveCounterEffect(), new ControlPlayerEffect(), new ExchangeControlEffect(), new RemoveFromCombatEffect(), new GoadEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
+        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new DamageResolveEffect(), new FogEffect(), new AddOrRemoveCounterEffect(), new ControlPlayerEffect(), new ExchangeControlEffect(), new RemoveFromCombatEffect(), new GoadEffect(), new MeldEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -909,14 +909,14 @@ sealed class UntapEffect : CardsEffect
     {
         if (x.Ability["UntapType"] is not { } type)
         {
-            foreach (var c in Cards(x)) c.Tapped = false;
+            foreach (var c in Cards(x)) x.Game.Untap(c);
             return;
         }
         // "Untap up to three lands": untapping never hurts against a goldfish, so as many as allowed.
         var filter = FilterFor(x.SVarFace, type);
         var tapped = x.S.BattlefieldCards.Where(c => c.Tapped && c.Controller == x.Controller && filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
         var n = Math.Min(Amount(x, x.Ability["Amount"], 1), tapped.Count);
-        foreach (var id in x.Game.Decider.ChooseCards(x.Game, x.Controller, Choice.Generic, x.Host, tapped, n, n)) x.S[id].Tapped = false;
+        foreach (var id in x.Game.Decider.ChooseCards(x.Game, x.Controller, Choice.Generic, x.Host, tapped, n, n)) x.Game.Untap(x.S[id]);
     }
 }
 

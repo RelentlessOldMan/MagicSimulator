@@ -80,7 +80,8 @@ sealed class TokenEffect : Effect
 sealed class AttachEffect : Effect
 {
     public override string Api => "Attach";
-    public override IReadOnlySet<string> Params { get; } = P("Defined", "Object");
+    // Optional$: "you may attach any number of Auras and Equipment" (Ardenn) — each one is a choice.
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "Object", "Optional");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -96,7 +97,11 @@ sealed class AttachEffect : Effect
         foreach (var id in Defined.Cards(x.Ability["Object"], x))
         {
             var obj = x.S[id];
-            if (obj.Zone != Zone.Battlefield || obj.Id == to.Id) continue;
+            if (obj.Zone != Zone.Battlefield || obj.Id == to.Id || obj.AttachedTo == to.Id) continue;
+            // An Equipment goes only on a creature, an Aura only on what it can enchant.
+            if (obj.Types.HasSubtype("Equipment") && !to.Types.Is(CardType.Creature)) continue;
+            if (obj.Types.HasSubtype("Aura") && obj.CurrentFace.AuraSpell?.TargetFilter is { } enchant && !enchant.MatchesCard(to, x.Game.ContextFor(obj))) continue;
+            if (x.Ability["Optional"] == "True" && !x.Game.Decider.ChooseYesNo(x.Game, x.Controller, x.Host, $"attach {obj.Name} to {to.Name}?")) continue;
             if (obj.AttachedTo >= 0 && obj.AttachedTo != to.Id)
                 x.Game.Fire(new TriggerEvent(TriggerMode.Unattached, CardId: obj.Id, TargetCardId: obj.AttachedTo));
             obj.AttachedTo = to.Id;
@@ -398,6 +403,34 @@ sealed class GoadEffect : CardsEffect
             c.GoadedTurn = x.S.Turn;
             x.Game.Note($"  goad {c.Name}");
         }
+    }
+}
+
+/// <summary>
+/// Meld (rule 701.37): exile this and the named partner you own and control, then put them onto the battlefield as one
+/// permanent — the primary card showing the melded face, the other kept with it until it leaves.
+/// </summary>
+sealed class MeldEffect : Effect
+{
+    public override string Api => "Meld";
+    public override IReadOnlySet<string> Params { get; } = P("Name", "Primary", "Secondary");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Primary"] is null || ab["Secondary"] is null) ctx.Need("Meld:NoPair");
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var cards = new[] { x.Ability["Primary"]!, x.Ability["Secondary"]! }
+            .Select(name => x.S.BattlefieldCards.FirstOrDefault(c => c.Def.Faces[0].Name == name && c.Controller == x.Controller && c.Owner == x.Controller)).ToList();
+        if (cards[0] is not { } primary || cards[1] is not { } secondary || primary.Def.Faces.Count < 2) return;
+        x.Game.MoveTo(primary, Zone.Exile);
+        x.Game.MoveTo(secondary, Zone.Exile);
+        x.Game.MoveTo(primary, Zone.Battlefield);
+        primary.Face = 1;
+        primary.MeldedWith = secondary.Id;
+        x.Game.Note($"  {primary.Def.Faces[0].Name} and {secondary.Name} meld into {primary.Name}");
     }
 }
 

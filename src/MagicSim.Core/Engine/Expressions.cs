@@ -177,7 +177,7 @@ public sealed class Filter
             // "If you cast it" (from your hand): the permanent came from a spell. Only you cast spells here.
             "wasCast" or "wasCastByYou" => (c, pl, x) => c is not null && c.CastFrom is not null && c.Controller == x.Controller,
             "wasCastFromHand" or "wasCastFromYourHand" or "wasCastFromYourHandByYou" => (c, pl, x) => c is not null && c.CastFrom == Zone.Hand && c.Controller == x.Controller,
-            "ChosenCard" => (c, pl, x) => c is not null && (x.Host.ChosenCards?.Contains(c.Id) ?? false),
+            "ChosenCard" or "ChosenCardStrict" => (c, pl, x) => c is not null && (x.Host.ChosenCards?.Contains(c.Id) ?? false),
             // The controller of the creature this Aura enchants (Dance of the Dead's upkeep).
             "EnchantedController" => (c, pl, x) => c is null && pl is not null && x.Host.AttachedTo >= 0 && pl == x.S[x.Host.AttachedTo].Controller,
             "YouDontCtrl" => (c, pl, x) => c is not null && c.Controller != x.Controller,
@@ -273,6 +273,17 @@ public sealed class Filter
             test = byWhom == "ControlledBy"
                 ? (c, pl, x) => c is not null && x.Item.TriggeredPlayer is { } tp && c.Controller == tp
                 : (c, pl, x) => c is not null && x.Item.TriggeredPlayer is { } tp && c.Owner == tp;
+        // "Equipment.AttachedTo Creature.YouCtrl": attached to a permanent that fits; "Creature.EnchantedBy Aura.Other": with such an Aura on it.
+        if (test is null && p.StartsWith("AttachedTo ", StringComparison.Ordinal))
+        {
+            var hosts = Parse(p[11..], ctx);
+            test = (c, pl, x) => c is not null && c.AttachedTo >= 0 && hosts.MatchesCard(x.S[c.AttachedTo], x);
+        }
+        if (test is null && p.StartsWith("EnchantedBy ", StringComparison.Ordinal))
+        {
+            var auras = Parse(p[12..], ctx);
+            test = (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && auras.MatchesCard(a, x));
+        }
         // "Permanent.ControlledBy Player.wasDealtCombatDamageThisTurnBySource": whose controller fits a player filter.
         if (test is null && p.StartsWith("ControlledBy Player", StringComparison.Ordinal))
         {
@@ -572,6 +583,13 @@ public sealed class Amount
         if (kind.StartsWith("IfCastInOwnMainPhase.", StringComparison.Ordinal) && kind.Split('.') is [_, var mp1, var mp0]
             && int.TryParse(mp1, out var mainValue) && int.TryParse(mp0, out var notMainValue))
             return new(core, x => x.Host.CastInOwnMainPhase ? mainValue : notMainValue);
+        // "Count$ThisTurnActivated_Activated.Equip+YouCtrl": activated abilities like that activated this turn.
+        if (kind.StartsWith("ThisTurnActivated_", StringComparison.Ordinal))
+        {
+            var activatedKind = kind[18..] + (arg.Length > 0 ? " " + arg : "");
+            Triggers.ValidateActivated(activatedKind, ctx);
+            return new(core, x => x.S.ThisTurn.Activated.Count(a => Triggers.ActivatedMatches(activatedKind, a)));
+        }
         // "Count$MostCardName Land.YouCtrl": the most cards among them that share a name (Endless Atlas).
         if (kind == "MostCardName" && arg.Length > 0)
         {
@@ -861,7 +879,7 @@ public static class Defined
     {
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
         "Enchanted", "Equipped", "Imprinted", "ExiledWith", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards",
-        "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredAttackers", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
+        "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredAttackers", "TriggeredSource", "TriggeredTarget", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
         "ReplacedCard", "ReplacedNewCard", "ExiledCards", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard", "Parent", "DirectRemembered",
     };
 
@@ -974,6 +992,8 @@ public static class Defined
             "ExiledCards" => x.Item.Exiled?.ToList() ?? new(),
             // "Those creatures" (attacking that player): every attacker attacks the same player here.
             "TriggeredAttackers" => x.S.Attackers.ToList(),
+            // The creature that was dealt damage or became the target ("exile that creature").
+            "TriggeredTarget" => x.Item.TriggeredCardId is { } targetCard && (x.Item.TriggeredSourceId is not null) ? new() { targetCard } : new(),
             "TopOfLibrary" => x.S.Players[x.Controller].Library.Take(1).ToList(),
             _ => new(),
         };

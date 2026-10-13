@@ -55,6 +55,8 @@ public static class Triggers
         // "Whenever a +1/+1 counter is put on this" (Fathom Mage); "when this becomes monstrous".
         ["CounterAdded"] = new(StringComparer.Ordinal) { "CounterType" },
         ["BecomeMonstrous"] = new(StringComparer.Ordinal) { },
+        // "Whenever this becomes untapped" (Key to the City).
+        ["Untaps"] = new(StringComparer.Ordinal) { },
         // "Whenever you cast a spell that targets only [this]" (Zada): IsSingleTarget$, TargetsValid$.
         ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ActivatorThisTurnCast", "IsSingleTarget", "TargetsValid" },
         ["CounterAddedOnce"] = new(StringComparer.Ordinal) { "CounterType", "ValidSource" },
@@ -161,6 +163,9 @@ public static class Triggers
         ["hasTapCost"] = a => a.Cost.Tap,
         ["Loyalty"] = a => a["Planeswalker"] == "True",
         ["Ninjutsu"] = a => a.Api == "Ninjutsu",
+        ["Equip"] = a => a.IsEquip,
+        // Only you activate abilities here.
+        ["YouCtrl"] = a => true,
     };
 
     public static void ValidateActivated(string valid, CompileContext ctx)
@@ -243,6 +248,8 @@ public static class Triggers
                 return CardMatches(g, t, e.CardId, x, source);
             case "CounterAdded" when e.Mode == TriggerMode.CounterAdded:
                 return (t["CounterType"] is not { } addedKind || addedKind == e.CounterType) && CardMatches(g, t, e.CardId, x, source);
+            case "Untaps" when e.Mode == TriggerMode.Untaps:
+                return CardMatches(g, t, e.CardId, x, source);
             case "BecomeMonstrous" when e.Mode == TriggerMode.BecomeMonstrous:
                 return CardMatches(g, t, e.CardId, x, source);
             case "CounterRemoved" when e.Mode == TriggerMode.CounterRemoved:

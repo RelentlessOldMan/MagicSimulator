@@ -336,7 +336,7 @@ public sealed partial class Game
                         else if (c.HasKeyword(MayNotUntap) && State.ControlLinks.Any(l => l.HostId == c.Id && l.Until.Contains("Untap"))) continue;
                         else if (c.Tapped) untapping.Add(c);
                     }
-                foreach (var c in LimitUntaps(untapping)) c.Tapped = false;
+                foreach (var c in LimitUntaps(untapping)) Untap(c);
                 return;   // no priority in the untap step
             case Step.Upkeep:
                 State.Players[State.ActivePlayer].PrevUpkeepTurn = State.Players[State.ActivePlayer].UpkeepTurn;
@@ -976,8 +976,18 @@ public sealed partial class Game
     }
 
     /// <summary>An activated ability's cost, less any "costs {1} less for each …" (ReduceCost$).</summary>
+    /// <summary>Untaps a permanent: "whenever this becomes untapped" (Key to the City).</summary>
+    public void Untap(Card c)
+    {
+        if (!c.Tapped) return;
+        c.Tapped = false;
+        Fire(new TriggerEvent(TriggerMode.Untaps, CardId: c.Id, Player: c.Controller));
+    }
+
     private Cost AbilityCost(Card c, AbilityDef ab)
     {
+        // "You may pay {0} rather than pay the equip cost" (Bruenor): taken whenever it's offered.
+        if (ab.IsEquip && Statics.EquipAltCost(this, c) is { } instead) return new Cost { Mana = instead.Mana, Tap = ab.Cost.Tap, Untap = ab.Cost.Untap, Parts = ab.Cost.Parts.Concat(instead.Parts).ToList() };
         if (ab["ReduceCost"] is not { } reduce) return ab.Cost;
         var n = Effect.EvalAmount(ContextFor(c), reduce);
         return n <= 0 ? ab.Cost : new Cost { Mana = ab.Cost.Mana.WithExtraGeneric(-n), Tap = ab.Cost.Tap, Untap = ab.Cost.Untap, Parts = ab.Cost.Parts };
@@ -1305,6 +1315,7 @@ public sealed partial class Game
         if (HasX(cost)) x = Decider.ChooseX(this, player, c, MaxAffordableX(cost, c, player));
         var targets = ChooseChainTargets(c, ab, player, x);
         if (ab["Planeswalker"] == "True") c.LoyaltyActivatedTurn = State.Turn;
+        if (!ab.IsManaAbility) State.ThisTurn.Activated.Add(ab);
         if (ab["ActivationLimit"] is not null)
         {
             c.ActivationUses ??= new();

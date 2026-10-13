@@ -137,6 +137,8 @@ public static class Statics
         "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost", "MayPlayIgnoreType", "MayPlayIgnoreColor",
         // "Once each turn, you may pay {0} rather than pay the mana cost for a spell you cast" (As Foretold).
         "MayPlayDontGrantZonePermissions", "MayPlayLimit",
+        // "… and loses flying" (Colossus Hammer).
+        "RemoveKeyword",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
         "AddSVar", "GainsAbilitiesOf", "GainsAbilitiesOfZones",
         // Goaded creatures must attack someone else: only opponents' creatures get goaded, and they never attack.
@@ -353,15 +355,20 @@ public static class Statics
             if (parts.Length != 3 || !int.TryParse(parts[2], out _) || s["Affected"] is not ("Player" or "Player.Opponent" or "You")) ctx.Need("Keyword:" + adjust);
             else Filter.Parse(parts[1], ctx);
         }
-        List<TriggerDef>? keywordTriggers = null;
+        Grants? keywordGrants = null;
         // "If an opponent would search a library, that player searches the top four cards instead": goldfish don't search.
         if (s["AddKeyword"] is "LimitSearchLibrary" && s["Affected"] == "Player.Opponent") { }
         else if (s["AddKeyword"] is { } kws && !kws.StartsWith("UntapAdjust:", StringComparison.Ordinal))
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
             {
                 if (Keywords.Supported.Contains(ForgeRequirements.KeywordName(k))) continue;
-                // A keyword that stands for triggered abilities (dethrone, mentor) gives the affected cards those triggers.
-                if (CardCompiler.KeywordTriggers(k, ctx) is { } triggers) (keywordTriggers ??= new()).AddRange(triggers);
+                // A keyword that stands for triggered or activated abilities (dethrone, equip) gives the affected cards those.
+                if (CardCompiler.KeywordGrants(k, ctx) is { } granted)
+                {
+                    keywordGrants ??= new Grants();
+                    keywordGrants.Triggers.AddRange(granted.Triggers);
+                    keywordGrants.Activated.AddRange(granted.Activated);
+                }
                 else ctx.Need("Keyword:" + ForgeRequirements.KeywordName(k));
             }
         if (s["GainControl"] is { } gc && gc != "You") ctx.Need("Continuous.GainControl:" + gc);
@@ -369,7 +376,12 @@ public static class Statics
         foreach (var key in new[] { "SetColor", "AddColor" })
             if (s[key] is { } col && col != "ChosenColor" && AnimateEffect.ColorsOf(col) is null) ctx.Need($"{key}:{col}");
         s.Grants = Grants.Compile(s.P, ctx, "AddAbility", "AddTrigger", null);
-        if (keywordTriggers is not null) (s.Grants ??= new Grants()).Triggers.AddRange(keywordTriggers);
+        if (keywordGrants is not null)
+        {
+            s.Grants ??= new Grants();
+            s.Grants.Triggers.AddRange(keywordGrants.Triggers);
+            s.Grants.Activated.AddRange(keywordGrants.Activated);
+        }
     }
 
     /// <summary>"Each nonland card in your graveyard has escape" (Underworld Breach): gives cards in the graveyard an escape cost.</summary>
@@ -587,6 +599,9 @@ public static class Statics
         foreach (var card in animated)
             foreach (var a in card.Animations!)
             {
+                if (a.Ability["RemoveKeywords"] is { } gone)
+                    (card.StaticRemovedKeywords ??= new(StringComparer.Ordinal)).UnionWith(gone.Split('&', StringSplitOptions.TrimEntries)
+                        .Select(ForgeRequirements.KeywordName).Where(k => k != "Enchant"));
                 if (a.Power is { } pw) card.SetPower = pw;
                 if (a.Toughness is { } tg) card.SetToughness = tg;
             }
@@ -597,6 +612,8 @@ public static class Statics
             // "AffectedX": worked out for each affected card (Moraug: +1/+0 for each time it attacked this turn).
             var perCard = st["AddPower"] is { } apc && apc.StartsWith("Affected", StringComparison.Ordinal)
                           || st["AddToughness"] is { } atc && atc.StartsWith("Affected", StringComparison.Ordinal);
+            if (st["RemoveKeyword"] is { } lost)
+                foreach (var card in Affected(i)) (card.StaticRemovedKeywords ??= new(StringComparer.Ordinal)).UnionWith(lost.Split('&', StringSplitOptions.TrimEntries).Select(ForgeRequirements.KeywordName));
             var addPower = st["AddPower"] is { } ap && !perCard ? Effect.EvalAmount(x, ap) : 0;
             var addToughness = st["AddToughness"] is { } at && !perCard ? Effect.EvalAmount(x, at) : 0;
             if (perCard)
@@ -897,6 +914,18 @@ public static class Statics
             if (st.Mode == "AttackRestrict" && st["ValidDefender"] is null && WorksFrom(source, st) && Presence.Hold(st.P, ContextFor(g, source, st)))
                 most = Math.Min(most ?? int.MaxValue, int.Parse(st["MaxAttackers"]!));
         return most;
+    }
+
+    /// <summary>"You may pay {0} rather than pay the equip cost of the first equip ability you activate each turn" (Bruenor).</summary>
+    public static Cost? EquipAltCost(Game g, Card equipment)
+    {
+        foreach (var (source, st) in Pairs(g))
+        {
+            if (st.Mode != "AlternativeCost" || st["ValidSA"] != "Activated.Equip" || source.Controller != equipment.Controller || !WorksFrom(source, st)) continue;
+            if (!Presence.Hold(st.P, ContextFor(g, source, st))) continue;
+            return CachedCost(st["Cost"]!, source.CurrentFace);
+        }
+        return null;
     }
 
     /// <summary>"You can't play lands" (Aggressive Mining).</summary>

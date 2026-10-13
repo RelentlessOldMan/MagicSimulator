@@ -134,6 +134,10 @@ public sealed class Card
     public int StaticPower { get; set; }
     public int StaticToughness { get; set; }
     public HashSet<string>? StaticKeywords { get; set; }
+    /// <summary>Keywords a static ability or an effect takes away ("loses flying").</summary>
+    public HashSet<string>? StaticRemovedKeywords { get; set; }
+    /// <summary>The other card of a melded pair, kept in exile while they're one permanent; -1 if none.</summary>
+    public int MeldedWith { get; set; } = -1;
 
     /// <summary>A copy effect on this permanent (Clone): its copiable values, replacing the printed card's.</summary>
     public CardDef? CopyDef { get; set; }
@@ -199,13 +203,15 @@ public sealed class Card
         CurrentFace.Flashback ?? (TempKeywords?.Contains("Flashback") == true ? new Cost { Mana = CurrentFace.ManaCost } : null);
 
     public bool HasKeyword(string k) =>
-        (!LostAbilities && CurrentFace.KeywordNames.Contains(k)) || (TempKeywords?.Contains(k) ?? false) || (StaticKeywords?.Contains(k) ?? false);
+        ((!LostAbilities && CurrentFace.KeywordNames.Contains(k)) || (TempKeywords?.Contains(k) ?? false) || (StaticKeywords?.Contains(k) ?? false))
+        && !(StaticRemovedKeywords?.Contains(k) ?? false);
 
     public void ClearStaticEffects()
     {
         SetPower = SetToughness = null;
         StaticPower = StaticToughness = 0;
         StaticKeywords = null;
+        StaticRemovedKeywords = null;
         StaticTypes = null;
         StaticColors = null;
         StaticActivated = null;
@@ -226,7 +232,7 @@ public sealed class Card
         RememberedPlayers = RememberedPlayers is null ? null : new List<int>(RememberedPlayers),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, Monstrous = Monstrous, GoadedTurn = GoadedTurn, CastInOwnMainPhase = CastInOwnMainPhase, StaticControlBase = StaticControlBase, EnchantedPlayer = EnchantedPlayer, ChosenNumber = ChosenNumber, ManaSpentToCast = ManaSpentToCast, TreasureManaSpent = TreasureManaSpent, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
+        NamedCard = NamedCard, Monstrous = Monstrous, MeldedWith = MeldedWith, GoadedTurn = GoadedTurn, CastInOwnMainPhase = CastInOwnMainPhase, StaticControlBase = StaticControlBase, EnchantedPlayer = EnchantedPlayer, ChosenNumber = ChosenNumber, ManaSpentToCast = ManaSpentToCast, TreasureManaSpent = TreasureManaSpent, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
         TriggerUses = TriggerUses is null ? null : new(TriggerUses), ActivationUses = ActivationUses is null ? null : new(ActivationUses), StaticUses = StaticUses is null ? null : new(StaticUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
@@ -419,6 +425,8 @@ public sealed class TurnInfo
     public Dictionary<int, int> LifeLost { get; set; } = new();
     /// <summary>Damage each source dealt this turn.</summary>
     public Dictionary<int, int> DamageDealtBy { get; set; } = new();
+    /// <summary>Activated abilities activated this turn ("the first equip ability you activate each turn").</summary>
+    public List<AbilityDef> Activated { get; set; } = new();
     /// <summary>Which sources dealt combat damage to which players this turn (Steel Hellkite).</summary>
     public HashSet<(int Source, int Player)> CombatDamagedBy { get; set; } = new();
     /// <summary>Players who controlled a permanent that left the battlefield this turn (revolt).</summary>
@@ -427,7 +435,7 @@ public sealed class TurnInfo
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, Ended = Ended, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
         ExtraPhases = new(ExtraPhases), Combats = Combats, Upkeeps = Upkeeps, NoCombatDamage = NoCombatDamage, AttackersDeclared = AttackersDeclared, Attacks = new(Attacks), DefendingPlayer = DefendingPlayer,
-        Drawn = new(Drawn), Cast = new(Cast), DamageTaken = new(DamageTaken), CombatDamageTypes = new(CombatDamageTypes, StringComparer.OrdinalIgnoreCase), CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), CombatDamagedBy = new(CombatDamagedBy), Moves = new(Moves),
+        Drawn = new(Drawn), Cast = new(Cast), DamageTaken = new(DamageTaken), CombatDamageTypes = new(CombatDamageTypes, StringComparer.OrdinalIgnoreCase), CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), CombatDamagedBy = new(CombatDamagedBy), Activated = new(Activated), Moves = new(Moves),
     };
 }
 

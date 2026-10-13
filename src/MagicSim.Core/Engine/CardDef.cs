@@ -3,7 +3,7 @@ using MagicSim.Core.Forge;
 
 namespace MagicSim.Core.Engine;
 
-public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower, ExileSource, Draw, ExileFromBattlefield, ExileAnyGraveyard, RemoveAnyCounter }
+public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower, ExileSource, Draw, ExileFromBattlefield, ExileAnyGraveyard, RemoveAnyCounter, Unattach }
 
 /// <summary>A non-mana cost component: "Sac&lt;1/CARDNAME&gt;", "Discard&lt;0/Hand&gt;", "PayLife&lt;2&gt;", …</summary>
 public sealed record CostPart(CostPartKind Kind, string Amount, string Valid, string Raw);
@@ -52,6 +52,8 @@ public sealed class AbilityDef
     public bool Evoke { get; set; }
     /// <summary>A cycling ability: using it is cycling ("whenever you cycle", rule 702.29).</summary>
     public bool IsCycling { get; set; }
+    /// <summary>An equip ability ("the first equip ability you activate each turn", Bruenor Battlehammer).</summary>
+    public bool IsEquip { get; set; }
     /// <summary>Activated mana ability: resolves immediately, doesn't use the stack.</summary>
     public bool IsManaAbility { get; init; }
     /// <summary>Cached <see cref="Game.IsAutoManaAbility"/> (abilities don't change once compiled).</summary>
@@ -320,7 +322,7 @@ public static partial class CardCompiler
             def.Faces.Add(CompileFace(f, def.Missing, tokens));
         if (source.AlternateMode == "Split" && def.Faces.Count == 2 && def.Faces.Any(face => face.KeywordNames.Contains("Fuse"))) AddFused(def);
         // Two-faced transforming cards play their front face; other multi-face layouts need casting support first.
-        if (source.AlternateMode is { } mode && mode is not ("DoubleFaced" or "Modal" or "Adventure" or "Split"))
+        if (source.AlternateMode is { } mode && mode is not ("DoubleFaced" or "Modal" or "Adventure" or "Split" or "Meld"))
             def.Missing.Add("Layout:" + mode);
         return def;
     }
@@ -488,17 +490,21 @@ public static partial class CardCompiler
 
     /// <summary>Keywords that stand for abilities (Equip, Cycling, …): adds those abilities. False if not one of these.</summary>
     /// <summary>
-    /// The triggered abilities a keyword stands for, when another card grants it ("other creatures you control have
-    /// dethrone"); null if the keyword is more than triggers.
+    /// The triggered and activated abilities a keyword stands for, when another card grants it ("other creatures you
+    /// control have dethrone"); null if the keyword is more than that.
     /// </summary>
-    public static List<TriggerDef>? KeywordTriggers(string raw, CompileContext ctx)
+    public static Grants? KeywordGrants(string raw, CompileContext ctx)
     {
         var face = new FaceDef { Name = ctx.Face.Name, ManaCost = ctx.Face.ManaCost, Types = ctx.Face.Types, SVars = new(ctx.Face.SVars) };
         var temp = new CompileContext { Face = face, Missing = new(), Tokens = ctx.Tokens };
-        if (!CompileKeyword(raw, ForgeRequirements.KeywordName(raw), face, temp) || temp.Missing.Count > 0 || face.Triggers.Count == 0
-            || face.SpellAbilities.Count + face.Activated.Count + face.Statics.Count + face.EtbReplacements.Count + face.EtbCounters.Count + face.Replacements.Count > 0)
+        if (!CompileKeyword(raw, ForgeRequirements.KeywordName(raw), face, temp) || temp.Missing.Count > 0 || face.Triggers.Count + face.Activated.Count == 0
+            || face.SpellAbilities.Count + face.Statics.Count + face.EtbReplacements.Count + face.EtbCounters.Count + face.Replacements.Count > 0)
             return null;
-        return face.Triggers;
+        // "Equipment you control have equip {0}" (Puresteel Paladin): activated abilities too.
+        var grants = new Grants();
+        grants.Triggers.AddRange(face.Triggers);
+        grants.Activated.AddRange(face.Activated);
+        return grants;
     }
 
     private static bool CompileKeyword(string raw, string name, FaceDef face, CompileContext ctx)
@@ -511,6 +517,14 @@ public static partial class CardCompiler
                 if (Part(4).Length > 0) { ctx.Need("Keyword:Equip+" + Part(4).Split('$')[0]); return true; }
                 var valid = Part(2).Length > 0 ? Part(2) : "Creature.YouCtrl";
                 AddGenerated(face, ctx, $"AB$ Attach | Cost$ {Part(1)} | ValidTgts$ {valid} | SorcerySpeed$ True | SpellDescription$ Equip {Part(1)}");
+                face.Activated[^1].IsEquip = true;
+                return true;
+            case "Living Weapon":
+                // "When this Equipment enters, create a 0/0 black Phyrexian Germ creature token, then attach this to it."
+                face.SVars["__LivingWeapon"] = "DB$ Token | TokenScript$ b_0_0_phyrexian_germ | TokenOwner$ You | RememberTokens$ True | SubAbility$ __LivingWeaponAttach";
+                face.SVars["__LivingWeaponAttach"] = "DB$ Attach | Defined$ Remembered | Object$ Self | SubAbility$ __LivingWeaponForget";
+                face.SVars["__LivingWeaponForget"] = "DB$ Cleanup | ClearRemembered$ True";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ __LivingWeapon"), ctx));
                 return true;
             case "Enchant":
                 // "Enchant creature card in a graveyard" (Animate Dead) targets there.
@@ -894,6 +908,8 @@ public static partial class CardCompiler
     /// <summary>"You may [cost] rather than pay this spell's mana cost": each way to cast it gets an alternative-cost twin.</summary>
     private static void AddAlternativeCost(FaceDef face, StaticDef st, CompileContext ctx)
     {
+        // "You may pay {0} rather than pay the equip cost" (Bruenor): looked up as an equip ability is activated.
+        if (st["ValidSA"] == "Activated.Equip") { if (st["Cost"] is { } equipCost) ParseCost(equipCost, ctx); else ctx.Need("AlternativeCost:NoCost"); return; }
         if (!(st["ValidSA"] == "Spell.Self" || st["ValidSA"] == "Spell" && st["ValidCard"] == "Card.Self")) { ctx.Need("AlternativeCost.ValidSA:" + st["ValidSA"]); return; }
         if (st["Cost"] is not { } costText) { ctx.Need("AlternativeCost:NoCost"); return; }
         var cost = ParseCost(costText, ctx);
@@ -1257,6 +1273,8 @@ public static partial class CardCompiler
                 // "Exile a creature you control" (Food Chain).
                 "Exile" when valid != "" => CostPartKind.ExileFromBattlefield,
                 "Crew" => CostPartKind.TapPower,
+                // "Unattach [this Equipment]" (Sunforger).
+                "Unattach" when valid == "CARDNAME" => CostPartKind.Unattach,
                 "Draw" when valid == "You" => CostPartKind.Draw,
                 _ => null,
             };

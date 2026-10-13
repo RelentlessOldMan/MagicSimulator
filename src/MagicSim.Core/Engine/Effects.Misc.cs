@@ -6,7 +6,7 @@ sealed class AnimateAllEffect : Effect
     public override string Api => "AnimateAll";
     public override IReadOnlySet<string> Params { get; } = P(
         "ValidCards", "Types", "Power", "Toughness", "Keywords", "Colors", "OverwriteColors", "RemoveCardTypes", "RemoveCreatureTypes",
-        "RemoveSuperTypes", "RemoveAllAbilities", "Abilities", "Triggers", "staticAbilities", "Duration", "sVars", "AddAllCreatureTypes");
+        "RemoveSuperTypes", "RemoveAllAbilities", "Abilities", "Triggers", "staticAbilities", "Duration", "sVars", "AddAllCreatureTypes", "RemoveKeywords");
 
     private static readonly AnimateEffect Single = new();
 
