@@ -64,7 +64,7 @@ public static class Effects
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
         new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
-        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new DamageResolveEffect(), new FogEffect(), new AddOrRemoveCounterEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
+        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new DamageResolveEffect(), new FogEffect(), new AddOrRemoveCounterEffect(), new ControlPlayerEffect(), new ExchangeControlEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -720,7 +720,10 @@ sealed class DealDamageEffect : Effect
     {
         var n = Amount(x, x.Ability["NumDmg"], 0);
         var targets = x.Ability["Defined"] is { } d
-            ? Defined.IsPlayerRef(d) ? Defined.Players(d, x).Select(TargetRef.OfPlayer).ToList() : Defined.Cards(d, x).Select(TargetRef.OfCard).ToList()
+            ? Defined.IsPlayerRef(d) ? Defined.Players(d, x).Select(TargetRef.OfPlayer).ToList()
+            // "Remembered" may be cards or players (Wheel of Misfortune remembers the players who chose highest).
+            : d == "Remembered" ? Defined.Cards(d, x).Select(TargetRef.OfCard).Concat(Defined.Players(d, x).Select(TargetRef.OfPlayer)).ToList()
+            : Defined.Cards(d, x).Select(TargetRef.OfCard).ToList()
             : x.Targets;
         // "N damage divided as you choose": one to each target, the rest to the first (players first).
         var divided = x.Ability["DividedAsYouChoose"] is not null && targets.Count > 0;

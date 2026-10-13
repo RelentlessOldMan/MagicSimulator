@@ -145,7 +145,7 @@ public static class Triggers
             if (t["LifeAmount"] is not { Length: > 2 } la) ctx.Need("LifeAmount:" + t["LifeAmount"]);
             else Amount.Parse(la[2..], ctx);
         }
-        if (t["Phase"] is { } ph && ph.Split(',').Any(one => one.Trim() is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "End Of Turn" or "BeginCombat" or "EndCombat")))
+        if (t["Phase"] is { } ph && ph.Split(',').Any(one => one.Trim() is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "End Of Turn" or "BeginCombat" or "EndCombat" or "Cleanup")))
             ctx.Need("TriggerPhase:" + ph);
     }
 
@@ -224,6 +224,7 @@ public static class Triggers
         };
         if (t.Mode == "Phase" && e.Mode == TriggerMode.Phase)
             return PhaseMatches(t["Phase"], e.Phase) && PlayerMatches(t["ValidPlayer"], e.Player, d.Controller, x, t.Face)
+                && (d.ForPlayers is not { } whose || e.Player is { } active && whose.Contains(active))
                 && Presence.Hold(t.P, x);
         return ModeMatches(g, t, host, e, x) && Presence.Hold(t.P, x);
     }
@@ -422,6 +423,7 @@ public static class Conditions
         "Declare Attackers" or "DeclareAttackers" => step == Step.DeclareAttackers,
         "CombatDamage" or "Combat Damage" => step == Step.CombatDamage,
         "EndCombat" => step == Step.EndCombat,
+        "Cleanup" => step == Step.Cleanup,
         "End of Turn" or "End Of Turn" => step == Step.End,
         _ => false,
     };

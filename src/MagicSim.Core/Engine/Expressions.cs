@@ -669,6 +669,8 @@ public sealed class Amount
                 case "CardToughness": return new(core, x => Matching(x).Sum(card => card.Toughness));
                 case "SumCMC": return new(core, x => Matching(x).Sum(card => card.ManaValue));
                 case "DifferentCardNames": return new(core, x => Matching(x).Select(card => card.Name).Distinct(StringComparer.Ordinal).Count());
+                // "For each card type among cards in your graveyard" (Emrakul, the Promised End).
+                case "CardTypes": return new(core, x => System.Numerics.BitOperations.PopCount((uint)Matching(x).Aggregate(CardType.None, (all, card) => all | card.Types.Types)));
                 default: ctx.Need("Count:" + kind + "$" + arg[(dollar + 1)..]); return Const(0);
             }
         }

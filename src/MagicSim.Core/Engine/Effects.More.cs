@@ -298,10 +298,19 @@ sealed class ForetellEffect : Effect
 sealed class ChooseNumberEffect : Effect
 {
     public override string Api => "ChooseNumber";
-    public override IReadOnlySet<string> Params { get; } = P("Defined", "Min", "Max", "ListTitle");
+    // Each player choosing (Wheel of Misfortune): Highest$ for those who chose the highest, NotLowest$ for the rest
+    // but the lowest. Secretly$ changes nothing when the others are goldfish.
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "Min", "Max", "ListTitle", "Secretly", "Highest", "NotLowest");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
+        if (ab["Defined"] == "Player")
+        {
+            if (ab["Highest"] is null && ab["NotLowest"] is null) ctx.Need("ChooseNumber.Player:NoOutcome");
+            foreach (var key in new[] { "Highest", "NotLowest" })
+                if (ab[key] is not null && CardCompiler.CompileSideChain(ab, key, ctx) is null) ctx.Need("ChooseNumber." + key);
+            return;
+        }
         if (ab["Defined"] is { } d && d != "You") ctx.Need("ChooseNumber.Defined:" + d);
         ValidateAmount(ab, "Min", ctx);
         if (ab["Max"] is null) ctx.Need("ChooseNumber:NoMax");
@@ -310,10 +319,63 @@ sealed class ChooseNumberEffect : Effect
 
     public override void Resolve(EffectContext x)
     {
+        if (x.Ability["Defined"] == "Player") { EachPlayerChooses(x); return; }
         var min = Amount(x, x.Ability["Min"], 0);
         var max = Math.Max(min, Amount(x, x.Ability["Max"], 0));
         x.Host.ChosenNumber = Math.Max(min, x.Game.Decider.ChooseX(x.Game, x.Controller, x.Host, max));
         x.Game.Note($"  chose {x.Host.ChosenNumber}");
+    }
+
+    /// <summary>
+    /// Every player chooses a number 0 or more. Goldfish opponents choose 0; you choose 0 or 1, since against them any
+    /// higher number only costs you more.
+    /// </summary>
+    private static void EachPlayerChooses(EffectContext x)
+    {
+        var chosen = new Dictionary<int, int>();
+        foreach (var p in x.S.Players.Where(p => !p.Lost))
+            chosen[p.Index] = p.IsGoldfish ? 0 : x.Game.Decider.ChooseOption(x.Game, p.Index, x.Host, new List<string> { "0", "1" });
+        var (highest, lowest) = (chosen.Values.Max(), chosen.Values.Min());
+        x.Host.ChosenNumber = highest;
+        x.Game.Note("  chose " + string.Join(", ", chosen.Select(kv => $"player {kv.Key}: {kv.Value}")));
+        foreach (var (key, who) in new[] { ("Highest", chosen.Where(kv => kv.Value == highest)), ("NotLowest", chosen.Where(kv => kv.Value != lowest)) })
+        {
+            if (x.Ability.SideChains?.GetValueOrDefault(key) is not { } chain) continue;
+            x.Host.RememberedPlayers = who.Select(kv => kv.Key).ToList();
+            if (x.Host.RememberedPlayers.Count > 0) x.Game.RunSideChain(x, chain);
+        }
+        x.Host.RememberedPlayers = null;
+    }
+}
+
+/// <summary>"You control target player during that player's next turn" (Mindslaver): goldfish opponents' turns hold nothing to control.</summary>
+sealed class ControlPlayerEffect : Effect
+{
+    public override string Api => "ControlPlayer";
+    public override IReadOnlySet<string> Params { get; } = P();
+    public override void Resolve(EffectContext x) => x.Game.Note("  (a goldfish opponent's turn has nothing to control)");
+}
+
+/// <summary>"Exchange control of [these two permanents]" (Puca's Mischief).</summary>
+sealed class ExchangeControlEffect : Effect
+{
+    public override string Api => "ExchangeControl";
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "TargetsWithRelatedProperty");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        Defined.ValidateCards(ab["Defined"], ctx);
+        if (ab["TargetsWithRelatedProperty"] is { } rel && rel != "LECMC") ctx.Need("ExchangeControl.TargetsWithRelatedProperty:" + rel);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var both = (x.Ability["Defined"] is { } d ? Defined.Cards(d, x) : new List<int>()).Concat(x.Targets.Where(t => t.CardId is not null).Select(t => t.CardId!.Value))
+            .Distinct().Select(id => x.S[id]).Where(c => c.Zone == Zone.Battlefield).ToList();
+        if (both.Count != 2 || both[0].Controller == both[1].Controller) return;
+        (both[0].Controller, both[1].Controller) = (both[1].Controller, both[0].Controller);
+        foreach (var c in both) c.ControlledSinceTurn = x.S.Turn;
+        x.Game.Note($"  {both[0].Name} and {both[1].Name} exchange controllers");
     }
 }
 

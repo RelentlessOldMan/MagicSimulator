@@ -150,6 +150,7 @@ public static class Statics
 
     private static readonly HashSet<string> CantAttackParams = new(StringComparer.Ordinal) { "ValidCard", "EffectZone" };
     private static readonly HashSet<string> CantBeActivatedParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Activator" };
+    private static readonly HashSet<string> PlayerParams = new(StringComparer.Ordinal) { "Player", "EffectZone" };
     private static readonly HashSet<string> ValidPlayerParams = new(StringComparer.Ordinal) { "ValidPlayer", "EffectZone" };
     private static readonly HashSet<string> CastWithFlashParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Caster" };
     private static readonly HashSet<string> OptionalAttackCostParams = new(StringComparer.Ordinal) { "ValidCard", "Trigger", "Cost" };
@@ -208,8 +209,12 @@ public static class Statics
                 own = CantBeActivatedParams;
                 if (s["ValidCard"] is { } bvc) Filter.Parse(bvc, ctx);
                 if (s["ValidSA"] is { } bsa) Triggers.ValidateActivated(bsa, ctx);
-                // Everything here is activated by you.
-                if (s["Activator"] is { } activator && activator is not ("You" or "Player")) ctx.Need("CantBeActivated.Activator:" + activator);
+                // "Enchanted player can't activate abilities" (Overwhelming Splendor): whoever activates fits the filter.
+                if (s["Activator"] is { } activator && activator is not ("You" or "Player")) Filter.Parse(activator, ctx);
+                break;
+            case "CantPlayLand":
+                own = PlayerParams;
+                if (s["Player"] is { } who) Filter.Parse(who, ctx);
                 break;
             case "AlternativeCost":   // the compiler adds the alternative-cost spell abilities
                 own = AlternativeCostParams;
@@ -827,9 +832,22 @@ public static class Statics
             {
                 if (!st.Mode.Split(',').Contains("CantBeActivated") || st["Activator"] == "Opponent" || !WorksFrom(source, st)) continue;
                 var x = ContextFor(g, source, st);
+                if (st["Activator"] is { } who && who is not ("You" or "Player") && !Effect.FilterFor(x.SVarFace, who).MatchesPlayer(card.Controller, x)) continue;
                 if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(card, x))
                     && (st["ValidSA"] is not { } sa || Triggers.ActivatedMatches(sa, ability)) && Presence.Hold(st.P, x)) return true;
             }
+        return false;
+    }
+
+    /// <summary>"You can't play lands" (Aggressive Mining).</summary>
+    public static bool CantPlayLand(Game g, int player)
+    {
+        foreach (var (source, st) in Pairs(g))
+        {
+            if (st.Mode != "CantPlayLand" || !WorksFrom(source, st)) continue;
+            var x = ContextFor(g, source, st);
+            if ((st["Player"] is not { } who || Effect.FilterFor(x.SVarFace, who).MatchesPlayer(player, x)) && Presence.Hold(st.P, x)) return true;
+        }
         return false;
     }
 

@@ -310,7 +310,7 @@ public static partial class CardCompiler
     /// <summary>Parameters any ability may have, handled by the engine rather than the effect.</summary>
     private static readonly HashSet<string> GenericParams = new(StringComparer.Ordinal)
     {
-        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "UnlessSwitched", "ActivationPhases", "ActivationFirstCombat", "TargetUnique", "TargetsForEachPlayer", "ActivationLimit", "ETB", "ActivationZone", "OptionalDecider", "Activation", "ActivationGameTypes", "ReduceCost",
+        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "UnlessSwitched", "ActivationPhases", "ActivationFirstCombat", "TargetUnique", "TargetsForEachPlayer", "ActivationLimit", "TargetsWithRelatedProperty", "ETB", "ActivationZone", "OptionalDecider", "Activation", "ActivationGameTypes", "ReduceCost",
     };
 
     public static CardDef Compile(ForgeCard source, Func<string, CardDef?>? tokens = null)

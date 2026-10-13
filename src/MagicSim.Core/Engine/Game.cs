@@ -206,6 +206,8 @@ public sealed partial class Game
             SetStep(Step.Cleanup);
             p.AbstractHand = Math.Min(p.AbstractHand, p.MaxHandSizeWith(Settings.MaxHandSize));
             EndOfTurnCleanup();
+            FirePhase("Cleanup");
+            ResolveWithoutActing();
         }
         State.ActivePlayer = Me;
     }
@@ -579,12 +581,23 @@ public sealed partial class Game
 
     private void Cleanup()
     {
+        DiscardToHandSize();
+        EndOfTurnCleanup();
+        // "At the beginning of the cleanup step": if anything triggers, it resolves and there's another cleanup (rule 514.3a).
+        FirePhase("Cleanup");
+        if (!HasPendingTriggers) return;
+        PriorityLoop();
+        DiscardToHandSize();
+        EndOfTurnCleanup();
+    }
+
+    private void DiscardToHandSize()
+    {
         var me = State.Players[Me];
         var excess = me.Hand.Count - me.MaxHandSizeWith(Settings.MaxHandSize);
         if (excess > 0)
             foreach (var id in Decider.ChooseCards(this, Me, Choice.Discard, null, me.Hand.ToList(), excess, excess))
                 Discard(State[id]);
-        EndOfTurnCleanup();
     }
 
     /// <summary>The cleanup step after the active player's discard: "until end of turn" ends and damage wears off.</summary>
@@ -887,7 +900,7 @@ public sealed partial class Game
     {
         if (c.Types.Is(CardType.Land))
         {
-            if (c.Zone != Zone.Command && sorcerySpeed && p.LandsPlayedThisTurn < p.LandDropsPerTurn + p.StaticLandDrops)
+            if (c.Zone != Zone.Command && sorcerySpeed && p.LandsPlayedThisTurn < p.LandDropsPerTurn + p.StaticLandDrops && !Statics.CantPlayLand(this, p.Index))
                 result.Add(new GameAction.PlayLand(c.Id, face));
             return;
         }
@@ -1404,6 +1417,9 @@ public sealed partial class Game
         {
             if (ab.TargetFilter is null) { result.Add(new()); continue; }
             var candidates = TargetCandidates(source, ab, controller, trigger);
+            // "With an equal or lesser mana value" than the target chosen before it (Puca's Mischief).
+            if (ab["TargetsWithRelatedProperty"] == "LECMC" && result.LastOrDefault(r => r.Count > 0)?.FirstOrDefault().CardId is { } related)
+                candidates = candidates.Where(t => t.CardId is { } id && State[id].ManaValue <= State[related].ManaValue).ToList();
             // "Each of up to two other targets": none chosen earlier in the chain.
             if (ab["TargetUnique"] == "True") candidates = candidates.Where(t => !result.Any(earlier => earlier.Contains(t))).ToList();
             var (tmin, tmax) = TargetBounds(source, ab, controller, x);
