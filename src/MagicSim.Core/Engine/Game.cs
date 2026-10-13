@@ -339,6 +339,7 @@ public sealed partial class Game
             case Step.Upkeep:
                 State.Players[State.ActivePlayer].PrevUpkeepTurn = State.Players[State.ActivePlayer].UpkeepTurn;
                 State.Players[State.ActivePlayer].UpkeepTurn = State.Turn;
+                State.ThisTurn.Upkeeps++;
                 Suspended();
                 FirePhase("Upkeep");
                 break;
@@ -485,7 +486,7 @@ public sealed partial class Game
     {
         foreach (var c in State.Players[State.ActivePlayer].Exile.Select(id => State[id]).Where(c => c.Suspended).ToList())
         {
-            if (c.CounterCount("TIME") > 0) c.Counters!["TIME"]--;
+            if (c.CounterCount("TIME") > 0) RemoveCounters(c, "TIME", 1);
             Note($"{c.Name}: {c.CounterCount("TIME")} time counter(s) left");
             if (c.CounterCount("TIME") > 0) continue;
             c.Suspended = false;
@@ -985,9 +986,13 @@ public sealed partial class Game
     }
 
     /// <summary>The spell's cost: its spell ability's Cost$ (which includes any mana) or the face's mana cost, plus commander tax.</summary>
+    /// <summary>The once-each-turn static whose other cost <see cref="SpellCost"/> last used, if any.</summary>
+    private (Card Source, StaticDef Static)? _altCostGrant;
+
     private Cost SpellCost(Card c, int spellIndex)
     {
         Cost cost;
+        _altCostGrant = null;
         var spell = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : null;
         if (c.Zone == Zone.Graveyard && c.FlashbackCost is { } flashback)
             cost = flashback;
@@ -1000,7 +1005,12 @@ public sealed partial class Game
         else if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].Cost is { } abCost && c.CurrentFace.SpellAbilities[spellIndex]["Cost"] is not null)
             cost = abCost;
         else
+        {
             cost = new Cost { Mana = c.CurrentFace.ManaCost };
+            // "You may pay {0} rather than pay the mana cost" (As Foretold): taken whenever it's offered.
+            _altCostGrant = Statics.AltCostFor(this, c);
+            if (_altCostGrant is { } offered) cost = Statics.AltManaCost(c, offered.Static["MayPlayAltManaCost"]!);
+        }
         // "You may cast it without paying its mana cost" from an effect, or for another cost instead (Bolas's Citadel).
         var grant = c.Zone is Zone.Exile or Zone.Graveyard or Zone.Library ? Statics.MayPlay(this, c.Controller).GetValueOrDefault(c.Id) : default;
         if (c.Id == _freeCast || grant.Free)
@@ -1070,6 +1080,7 @@ public sealed partial class Game
         var player = c.Controller;
         var from = c.Zone;
         var cost = SpellCost(c, spellIndex);
+        var altGrant = _altCostGrant;
         var ability = spellIndex >= 0 ? c.CurrentFace.SpellAbilities[spellIndex] : c.CurrentFace.AuraSpell ?? PermanentSpell;
 
         var x = 0;
@@ -1102,6 +1113,7 @@ public sealed partial class Game
         var paid = PayCost(cost, c, player, x, excludeSourceFromMana: true);
         _payingForSpell = false;
         if (!paid) throw new InvalidOperationException($"could not pay for {c.Name} after checking it was castable");
+        if (altGrant is { } grant) Statics.UseOnce(this, grant.Source, grant.Static);
         c.ColorsSpent = LastColorsSpent;
         c.ManaSpentToCast = LastManaSpent;
         c.TreasureManaSpent = LastTreasureManaSpent;
@@ -1607,7 +1619,7 @@ public sealed partial class Game
     private int? PlayerFor(EffectContext x, string? spec) => spec switch
     {
         "You" => x.Controller,
-        null or "TargetedController" or "ThisTargetedController" or "Targeted" => x.Targets.Select(t => t.Player ?? State[t.CardId!.Value].Controller).Cast<int?>().FirstOrDefault(),
+        null or "TargetedController" or "ThisTargetedController" or "Targeted" => x.OwnOrParentTargets.Select(t => t.Player ?? State[t.CardId!.Value].Controller).Cast<int?>().FirstOrDefault(),
         "TriggeredActivator" or "TriggeredPlayer" => x.Item.TriggeredPlayer,
         "TriggeredCardController" => x.Item.TriggeredCardId is { } tc ? State[tc].Controller : null,
         "Remembered" or "Player.IsRemembered" => x.Item.IteratedPlayer,
@@ -1621,7 +1633,8 @@ public sealed partial class Game
     private bool PaysUnlessCost(EffectContext x, Cost cost)
     {
         if (PlayerFor(x, x.Ability["UnlessPayer"]) is not { } p) return false;
-        if (State.Players[p].IsGoldfish) return GoldfishPaysToSurvive(x, cost, p);
+        // Paying to make something happen ("may sacrifice a land; if they do, copy this"): a goldfish never does.
+        if (State.Players[p].IsGoldfish) return x.Ability["UnlessSwitched"] != "True" && GoldfishPaysToSurvive(x, cost, p);
         if (!CanPayCost(cost, x.Host, p, x.X, excludeSourceFromMana: false)) return false;
         var what = x.Ability["UnlessResolveSubs"] == "WhenPaid" ? "to go on"
             : x.Ability["UnlessSwitched"] == "True" ? "to " + x.Ability.Description : "to avoid " + x.Ability.Description;
@@ -1765,6 +1778,16 @@ public sealed partial class Game
         }
         MoveTo(c, Zone.Graveyard);
         return true;
+    }
+
+    /// <summary>Removes up to <paramref name="n"/> counters of a kind, each one a "counter removed" event.</summary>
+    public int RemoveCounters(Card c, string kind, int n)
+    {
+        var removed = Math.Min(n, c.CounterCount(kind));
+        if (removed <= 0) return 0;
+        c.Counters![kind] -= removed;
+        for (var i = 0; i < removed; i++) Fire(new TriggerEvent(TriggerMode.CounterRemoved, CardId: c.Id, Player: c.Controller, CounterType: kind, Amount: 1));
+        return removed;
     }
 
     public static void AddCounters(Card c, string kind, int n)

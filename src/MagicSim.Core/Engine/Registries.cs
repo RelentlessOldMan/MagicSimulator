@@ -48,7 +48,10 @@ public static class Triggers
     private static readonly Dictionary<string, HashSet<string>> ModeParams = new()
     {
         ["ChangesZone"] = new(StringComparer.Ordinal) { "Origin", "Destination" },
-        ["Phase"] = new(StringComparer.Ordinal) { "Phase", "ValidPlayer" },
+        // "At the beginning of enchanted player's first upkeep each turn" (Paradox Haze): FirstUpkeep$ True.
+        ["Phase"] = new(StringComparer.Ordinal) { "Phase", "ValidPlayer", "FirstUpkeep" },
+        // "Whenever a time counter is removed from this while it's exiled" (Aeon Chronicler).
+        ["CounterRemoved"] = new(StringComparer.Ordinal) { "CounterType" },
         // "Whenever you cast a spell that targets only [this]" (Zada): IsSingleTarget$, TargetsValid$.
         ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ActivatorThisTurnCast", "IsSingleTarget", "TargetsValid" },
         ["CounterAddedOnce"] = new(StringComparer.Ordinal) { "CounterType", "ValidSource" },
@@ -87,7 +90,9 @@ public static class Triggers
     /// opponent controls destroys …" (Karmic Justice). What it would do never matters.
     /// </summary>
     public static bool NeverFires(Forge.ForgeParams t) =>
-        NeverInGoldfish.Contains(t["Mode"] ?? "") || t["Mode"] == "Destroyed" && t["ValidCauser"] == "Player.Opponent";
+        NeverInGoldfish.Contains(t["Mode"] ?? "") || t["Mode"] == "Destroyed" && t["ValidCauser"] == "Player.Opponent"
+        // "Whenever an opponent casts a spell": goldfish opponents cast nothing.
+        || t["Mode"] is "SpellCast" or "AbilityCast" or "SpellCastOrCopy" && t["ValidActivatingPlayer"] == "Opponent";
 
     public static void Validate(TriggerDef t, CompileContext ctx)
     {
@@ -129,7 +134,7 @@ public static class Triggers
         if (t["ActivatorThisTurnCast"] is { } atc && (atc.Length < 3 || !int.TryParse(atc[2..], out _))) ctx.Need("ActivatorThisTurnCast:" + atc);
         if (t["ValidSource"] is { } vsr && t.Mode == "CounterAddedOnce" && vsr != "You") ctx.Need("CounterAddedOnce.ValidSource:" + vsr);
         // Graveyard triggers ("whenever …, return this from your graveyard") fire from Game.Fire's graveyard sources.
-        if (t["TriggerZones"] is { } tz && tz is not ("Battlefield" or "Command") && !(tz == "Stack" && t.Mode == "SpellCast")
+        if (t["TriggerZones"] is { } tz && tz is not ("Battlefield" or "Command" or "Exile") && !(tz == "Stack" && t.Mode == "SpellCast")
             && !(tz == "Graveyard" && t.Mode is not ("ChangesZoneAll" or "DamageDoneOnce" or "CounterAddedOnce")))
             ctx.Need("TriggerZones:" + tz);
         if (t["CheckDefinedPlayer"] is { } cdp) Filter.Parse(cdp, ctx);
@@ -179,6 +184,7 @@ public static class Triggers
         };
         // A graveyard trigger works only from the graveyard.
         if (t["TriggerZones"] == "Graveyard") return source.Zone == Zone.Graveyard && ModeMatches(g, t, source, e, x) && Presence.Hold(t.P, x);
+        if (t["TriggerZones"] == "Exile") return source.Zone == Zone.Exile && ModeMatches(g, t, source, e, x) && Presence.Hold(t.P, x);
         // Triggers work from the battlefield, except the moved card's own "look back" triggers.
         // Effects and emblems (and "eminence" commanders) trigger from the command zone.
         var sourceActive = source.Zone == Zone.Battlefield
@@ -229,8 +235,11 @@ public static class Triggers
             case "ChangesZone" when e.Mode == TriggerMode.ChangesZone:
                 if (!ZoneMatches(t["Origin"], e.From) || !ZoneMatches(t["Destination"], e.To)) return false;
                 return CardMatches(g, t, e.CardId, x, source);
+            case "CounterRemoved" when e.Mode == TriggerMode.CounterRemoved:
+                return (t["CounterType"] is not { } removedKind || removedKind == e.CounterType) && CardMatches(g, t, e.CardId, x, source);
             case "Phase" when e.Mode == TriggerMode.Phase:
-                if (!PhaseMatches(t["Phase"], e.Phase)) return false;
+                if (t["FirstUpkeep"] == "True" && (e.Phase != "Upkeep" || g.State.ThisTurn.Upkeeps != 1)) return false;
+                if (!PhaseMatches(t["Phase"] ?? (t["FirstUpkeep"] == "True" ? "Upkeep" : null), e.Phase)) return false;
                 return PlayerMatches(t["ValidPlayer"], e.Player, source.Controller, x, t.Face);
             case "TurnFaceUp" when e.Mode == TriggerMode.TurnFaceUp:
                 return CardMatches(g, t, e.CardId, x, source);

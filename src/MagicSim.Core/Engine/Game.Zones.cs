@@ -620,7 +620,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch, AbilityCast, BecomesTarget }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch, AbilityCast, BecomesTarget, CounterRemoved }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null,
@@ -644,6 +644,10 @@ public sealed partial class Game
         foreach (var p in State.Players)
             foreach (var id in p.Graveyard)
                 if (State[id].Triggers is { Count: > 0 } ts && ts.Any(t => t["TriggerZones"] == "Graveyard") && !sources.Contains(id)) sources.Add(id);
+        // … and from exile (Aeon Chronicler while it's suspended).
+        foreach (var p in State.Players)
+            foreach (var id in p.Exile)
+                if (State[id].CurrentFace.HasExileTrigger && !sources.Contains(id)) sources.Add(id);
         foreach (var id in sources)
         {
             var src = State[id];
@@ -1210,14 +1214,17 @@ public sealed partial class Game
                     break;
                 case CostPartKind.ExileFromHand:
                     foreach (var id in Decider.ChooseCards(this, player, Choice.ExileFromGraveyard, source, CostCandidates(part, source, player), n, n))
+                    {
+                        LastExiled.Add(id);
                         MoveTo(State[id], Zone.Exile);
+                    }
                     break;
                 case CostPartKind.ReturnToHand:
                     foreach (var id in Decider.ChooseCards(this, player, Choice.Sacrifice, source, CostCandidates(part, source, player), n, n))
                         MoveTo(State[id], Zone.Hand);
                     break;
                 case CostPartKind.RemoveCounter:
-                    source.Counters![part.Valid] -= n;
+                    RemoveCounters(source, part.Valid, n);
                     break;
                 case CostPartKind.Reveal:
                     break;   // revealing changes nothing in a goldfish game

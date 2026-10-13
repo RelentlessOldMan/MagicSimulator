@@ -208,14 +208,41 @@ sealed class RemoveCounterEffect : CardsEffect
             foreach (var k in kinds)
             {
                 var n = x.Ability["CounterNum"] == "All" ? c.CounterCount(k) : Amount(x, x.Ability["CounterNum"], 1);
-                var removed = Math.Min(Math.Min(n, budget), c.CounterCount(k));
+                var removed = x.Game.RemoveCounters(c, k, Math.Min(n, budget));
                 if (removed <= 0) continue;
-                c.Counters[k] -= removed;
                 budget -= removed;
                 // RememberRemoved$: "for each counter removed this way" counts what's remembered.
                 if (remember)
                     for (var i = 0; i < removed; i++) (x.Host.Remembered ??= new()).Add(c.Id);
             }
+        }
+    }
+}
+
+/// <summary>
+/// "Choose a counter on target permanent or suspended card. Remove that counter from it or put another of those counters on
+/// it" (Clockspinning, Jhoira's Timebug).
+/// </summary>
+sealed class AddOrRemoveCounterEffect : Effect
+{
+    public override string Api => "AddOrRemoveCounter";
+    public override IReadOnlySet<string> Params { get; } = P("CounterNum", "CounterType");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx) => ValidateAmount(ab, "CounterNum", ctx);
+
+    public override void Resolve(EffectContext x)
+    {
+        var n = Amount(x, x.Ability["CounterNum"], 1);
+        foreach (var id in Defined.Cards("Targeted", x))
+        {
+            var c = x.S[id];
+            var kinds = c.Counters?.Where(kv => kv.Value > 0 && (x.Ability["CounterType"] is not { } only || kv.Key == only)).Select(kv => kv.Key).ToList() ?? new();
+            if (kinds.Count == 0) continue;
+            var options = kinds.SelectMany(k => new[] { "remove " + k, "add " + k }).ToList();
+            var pick = options[x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, options)];
+            var kind = pick[(pick.IndexOf(' ') + 1)..];
+            if (pick.StartsWith("remove", StringComparison.Ordinal)) x.Game.RemoveCounters(c, kind, n);
+            else x.Game.PutCounters(c, kind, n);
         }
     }
 }
@@ -603,6 +630,14 @@ sealed class BecomeMonarchEffect : Effect
 sealed class AddPhaseEffect : Effect
 {
     public override string Api => "AddPhase";
+
+    /// <summary>The steps of an additional phase or step: a combat, an upkeep step, or a whole beginning phase.</summary>
+    private static readonly Dictionary<string, Step[]> Phases = new()
+    {
+        ["Combat"] = new[] { Step.BeginCombat, Step.DeclareAttackers, Step.CombatDamage, Step.EndCombat },
+        ["Upkeep"] = new[] { Step.Upkeep },
+        ["Beginning"] = new[] { Step.Untap, Step.Upkeep, Step.Draw },
+    };
     public override IReadOnlySet<string> Params { get; } = P("ExtraPhase", "AfterPhase", "FollowedBy",
         // "At the beginning of that combat, …" (Moraug); Forge spells it both ways.
         "ExtraPhaseDelayedTrigger", "ExtraPhaseDelayedTriggerExcute", "ExtraPhaseDelayedTriggerExecute");
@@ -615,14 +650,17 @@ sealed class AddPhaseEffect : Effect
             if (exec is null || !ctx.Face.SVars.TryGetValue(del, out var body)) ctx.Need("AddPhase.ExtraPhaseDelayedTrigger:" + del);
             else ab.Delayed = CardCompiler.CompileTrigger(new Forge.ForgeParams(body + " | Execute$ " + exec), ctx);
         }
-        if (ab["ExtraPhase"] != "Combat") ctx.Need("AddPhase.ExtraPhase:" + ab["ExtraPhase"]);
+        if (ab["ExtraPhase"] is not { } phase || !Phases.ContainsKey(phase)) ctx.Need("AddPhase.ExtraPhase:" + ab["ExtraPhase"]);
+        else if (phase != "Combat" && (ab["AfterPhase"] ?? ab["FollowedBy"]) is not null) ctx.Need("AddPhase.After+" + phase);
         if (ab["AfterPhase"] is { } a && a != "EndCombat") ctx.Need("AddPhase.AfterPhase:" + a);
         if (ab["FollowedBy"] is { } f && f != "Main2") ctx.Need("AddPhase.FollowedBy:" + f);
     }
 
     public override void Resolve(EffectContext x)
     {
-        var steps = new List<Step> { Step.BeginCombat, Step.DeclareAttackers, Step.CombatDamage, Step.EndCombat };
+        var steps = Phases[x.Ability["ExtraPhase"]!].ToList();
+        // An extra upkeep or beginning phase comes right after this step or phase.
+        if (x.Ability["ExtraPhase"] != "Combat") { x.S.ThisTurn.ExtraPhases.Add((x.S.Step, steps.ToArray())); return; }
         if (x.Ability["FollowedBy"] == "Main2") steps.Add(Step.Main2);
         // "After this phase": the main phase it was used in, or this combat's end.
         var after = x.Ability["AfterPhase"] == "EndCombat" || x.S.Step is Step.BeginCombat or Step.DeclareAttackers or Step.CombatDamage

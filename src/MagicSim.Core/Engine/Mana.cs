@@ -73,6 +73,8 @@ public sealed class ManaCost
             var tok = raw.Replace("/", "");
             if (int.TryParse(tok, out var n)) { generic += n; continue; }
             if (tok == "X") { x++; continue; }
+            // "X can't be 0": the choice of X isn't held to it here.
+            if (tok == "XMin1") continue;
             if (tok.Length == 1 && ManaColors.FromLetter(tok[0]) is { } c) { shards.Add(new Shard(c.Mask())); continue; }
             // Phyrexian: "BP", "PB", or hybrid phyrexian "RWP".
             if (tok.Contains('P'))

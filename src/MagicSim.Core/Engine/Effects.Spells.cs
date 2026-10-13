@@ -14,7 +14,8 @@ sealed class CopySpellAbilityEffect : Effect
         if (ab["Defined"] is null && ab.TargetFilter is null) ctx.Need("CopySpellAbility:NothingToCopy");
         if (ab["TargetType"] is { } tt && tt is not ("Spell" or "Triggered.YouCtrl")) ctx.Need("CopySpellAbility.TargetType:" + tt);
         // "That player copies it" (Bonus Round): the copied spell's controller.
-        if (ab["Controller"] is { } c && c is not ("You" or "TriggeredCardController")) ctx.Need("CopySpellAbility.Controller:" + c);
+        // "That permanent's controller may copy this spell" (Chain of Vapor): TargetedController.
+        if (ab["Controller"] is { } c && c is not ("You" or "TriggeredCardController" or "TargetedController")) ctx.Need("CopySpellAbility.Controller:" + c);
         ValidateAmount(ab, "Amount", ctx);
         if (ab["CopyForEachCanTarget"] is { } each) Filter.Parse(each, ctx);
     }
@@ -37,18 +38,32 @@ sealed class CopySpellAbilityEffect : Effect
         }
     }
 
+    /// <summary>Who copies it: you, the copied spell's controller, or the controller of what the spell targeted.</summary>
+    private static int Copier(EffectContext x, StackItem original) => x.Ability["Controller"] switch
+    {
+        "TriggeredCardController" => original.Controller,
+        "TargetedController" => Defined.Players("TargetedController", x).FirstOrDefault(x.Controller),
+        _ => x.Controller,
+    };
+
     public override void Resolve(EffectContext x)
     {
         var ab = x.Ability;
         if (ab["Optional"] == "True" && !x.Game.Decider.ChooseYesNo(x.Game, x.Controller, x.Host, "copy the spell?")) return;
-        // The spells: the one that triggered this, the parent's target, or this ability's targets.
+        // The spells: the one that triggered this, or this ability's targets.
         var ids = ab["Defined"] switch
         {
             "TriggeredSpellAbility" => x.Item.TriggeredCardId is { } tc ? new List<int> { tc } : new(),
-            "Parent" => Defined.Cards("ParentTarget", x),
             _ => Defined.Cards("Targeted", x),
         };
         var n = Amount(x, ab["Amount"], 1);
+        // "Copy this spell" (the Chain of … cycle): the spell or copy resolving now.
+        if (ab["Defined"] == "Parent")
+        {
+            var self = Copier(x, x.Item);
+            for (var i = 0; i < n; i++) x.Game.CopySpell(x.Item, self, ab["MayChooseTarget"] == "True");
+            return;
+        }
         // "Copy that ability" (Rings of Brighthearth): the activated ability, if it's still on the stack.
         if (ab["Defined"] == "TriggeredSpellAbility" && x.Item.TriggeredAbilityId is { } activatedId)
         {
@@ -62,7 +77,7 @@ sealed class CopySpellAbilityEffect : Effect
                 ? x.S.Stack.LastOrDefault(s => s.IsTriggered && s.SourceId == id && s != x.Item)
                 : x.S.Stack.LastOrDefault(s => s.IsSpell && s.SourceId == id);
             if (original is null || original.IsSpell && x.S[id].Types.IsPermanent) continue;   // copies of permanent spells (tokens) aren't supported
-            var copier = ab["Controller"] == "TriggeredCardController" ? original.Controller : x.Controller;
+            var copier = Copier(x, original);
             if (ab["CopyForEachCanTarget"] is { } each) { CopyForEach(x, original, copier, FilterFor(x.SVarFace, each)); continue; }
             for (var i = 0; i < n; i++) x.Game.CopySpell(original, copier, ab["MayChooseTarget"] == "True");
         }

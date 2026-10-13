@@ -64,6 +64,8 @@ public sealed class Card
     public int AttachedTo { get; set; } = -1;
     /// <summary>Activated abilities with a per-turn limit (ActivationLimit$): the turn and times each was last activated.</summary>
     public Dictionary<AbilityDef, (int Turn, int Count)>? ActivationUses { get; set; }
+    /// <summary>Its static abilities that work a limited number of times each turn (MayPlayLimit$): the turn and times used.</summary>
+    public Dictionary<StaticDef, (int Turn, int Count)>? StaticUses { get; set; }
     /// <summary>Its controller before a static "you control enchanted creature" took it (Control Magic), while that applies.</summary>
     public int? StaticControlBase { get; set; }
     /// <summary>The player this Aura enchants (curses), or -1.</summary>
@@ -219,7 +221,7 @@ public sealed class Card
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
         NamedCard = NamedCard, StaticControlBase = StaticControlBase, EnchantedPlayer = EnchantedPlayer, ChosenNumber = ChosenNumber, ManaSpentToCast = ManaSpentToCast, TreasureManaSpent = TreasureManaSpent, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
-        TriggerUses = TriggerUses is null ? null : new(TriggerUses), ActivationUses = ActivationUses is null ? null : new(ActivationUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
+        TriggerUses = TriggerUses is null ? null : new(TriggerUses), ActivationUses = ActivationUses is null ? null : new(ActivationUses), StaticUses = StaticUses is null ? null : new(StaticUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
@@ -387,6 +389,8 @@ public sealed class TurnInfo
     public int? DefendingPlayer { get; set; }
     /// <summary>Combat phases so far this turn.</summary>
     public int Combats { get; set; }
+    /// <summary>Upkeep steps so far this turn (Paradox Haze: "first upkeep each turn").</summary>
+    public int Upkeeps { get; set; }
     /// <summary>"Prevent all combat damage that would be dealt this turn" (Fog).</summary>
     public bool NoCombatDamage { get; set; }
     /// <summary>Life each player gained this turn.</summary>
@@ -416,7 +420,7 @@ public sealed class TurnInfo
     public TurnInfo Clone() => new()
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, Ended = Ended, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
-        ExtraPhases = new(ExtraPhases), Combats = Combats, NoCombatDamage = NoCombatDamage, AttackersDeclared = AttackersDeclared, Attacks = new(Attacks), DefendingPlayer = DefendingPlayer,
+        ExtraPhases = new(ExtraPhases), Combats = Combats, Upkeeps = Upkeeps, NoCombatDamage = NoCombatDamage, AttackersDeclared = AttackersDeclared, Attacks = new(Attacks), DefendingPlayer = DefendingPlayer,
         Drawn = new(Drawn), Cast = new(Cast), DamageTaken = new(DamageTaken), CombatDamageTypes = new(CombatDamageTypes, StringComparer.OrdinalIgnoreCase), CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), CombatDamagedBy = new(CombatDamagedBy), Moves = new(Moves),
     };
 }

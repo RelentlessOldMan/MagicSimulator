@@ -153,6 +153,9 @@ public sealed class FaceDef
     private bool? _exileStatic;
     /// <summary>"You may cast this card from exile" (Misthollow Griffin): a static that works while the card is exiled.</summary>
     public bool HasExileStatic => _exileStatic ??= Statics.Any(st => st["EffectZone"] == "Exile");
+    private bool? _exileTrigger;
+    /// <summary>A triggered ability that works while the card is exiled (TriggerZones$ Exile).</summary>
+    public bool HasExileTrigger => _exileTrigger ??= Triggers.Any(t => t["TriggerZones"] == "Exile");
     private bool? _graveyardStatic;
     /// <summary>An Aura's spell: targets what it will enchant (rule 303.4a).</summary>
     public AbilityDef? AuraSpell { get; set; }
@@ -641,7 +644,8 @@ public static partial class CardCompiler
                 return true;
             case "Suspend":
                 // Exile it from your hand with N time counters; remove one each upkeep; cast it free when the last is removed.
-                if (!int.TryParse(Part(1), out _)) { ctx.Need("Keyword:Suspend+" + Part(1)); return true; }
+                // "Suspend X—{X}{3}{U}" (Aeon Chronicler): X time counters, X paid as it's suspended.
+                if (!int.TryParse(Part(1), out _) && Part(1) != "X") { ctx.Need("Keyword:Suspend+" + Part(1)); return true; }
                 AddGenerated(face, ctx, $"AB$ Suspend | Cost$ {Part(2)} | ActivationZone$ Hand | TimeCounters$ {Part(1)}"
                     + (face.Types.Is(CardType.Instant) || face.KeywordNames.Contains("Flash") ? "" : " | SorcerySpeed$ True") + " | SpellDescription$ Suspend");
                 return true;

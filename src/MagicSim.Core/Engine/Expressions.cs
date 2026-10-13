@@ -159,6 +159,8 @@ public sealed class Filter
             "PairedWith" => (c, pl, x) => c is not null && c.PairedWith == x.Host.Id,
             "prowled" => (c, pl, x) => c is not null && (c.PaidOptional?.Contains("Prowl") ?? false),
             "surged" => (c, pl, x) => c is not null && (c.PaidOptional?.Contains("Surge") ?? false),
+            "suspended" => (c, pl, x) => c is not null && c.Zone == Zone.Exile && c.Suspended,
+            "withoutSuspend" => (c, pl, x) => c is not null && !c.HasKeyword("Suspend"),
             // Echo: "if this came under your control since the beginning of your last upkeep".
             "cameUnderControlSinceLastUpkeep" => (c, pl, x) => c is not null && c.ControlledSinceTurn >= x.S.Players[c.Controller].PrevUpkeepTurn,
             // The creature an "attacks" trigger is about (Shared Animosity).
@@ -815,7 +817,7 @@ public static class Defined
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
         "Enchanted", "Equipped", "Imprinted", "ExiledWith", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards",
         "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
-        "ReplacedCard", "ReplacedNewCard", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard", "Parent", "DirectRemembered",
+        "ReplacedCard", "ReplacedNewCard", "ExiledCards", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard", "Parent", "DirectRemembered",
     };
 
     /// <summary>Whether a Defined$ names players ("You", "Player.Opponent") rather than cards.</summary>
@@ -845,6 +847,7 @@ public static class Defined
         // "Valid Creature.YouCtrl": every permanent matching the filter.
         if (text is not null && text.StartsWith("Valid ", StringComparison.Ordinal)) { Filter.Parse(text[6..], ctx); return; }
         if (text is not null && text.StartsWith("ReplacedNewCard.", StringComparison.Ordinal)) { Filter.Parse(text[16..], ctx); return; }
+        if (text is not null && text.StartsWith("ExiledCards.", StringComparison.Ordinal)) { Filter.Parse("Card." + text[12..], ctx); return; }
         if (text is not null && !CardRefs.Contains(text)) ctx.Need("DefinedCard:" + text);
     }
 
@@ -890,6 +893,12 @@ public static class Defined
             var filter = Effect.FilterFor(x.SVarFace, text[6..]);
             return x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
         }
+        // "ExiledCards.withoutSuspend": the cards exiled to pay the cost that fit (Jhoira of the Ghitu).
+        if (text is not null && text.StartsWith("ExiledCards.", StringComparison.Ordinal))
+        {
+            var which = Effect.FilterFor(x.SVarFace, "Card." + text[12..]);
+            return (x.Item.Exiled ?? new()).Where(id => which.MatchesCard(x.S[id], x)).ToList();
+        }
         // "ReplacedNewCard.Creature": the card entering, if it's a creature (Spark Double).
         if (text is not null && text.StartsWith("ReplacedNewCard.", StringComparison.Ordinal))
         {
@@ -917,6 +926,7 @@ public static class Defined
             "Sacrificed" or "SacrificedCards" => x.Item.Sacrificed?.ToList() ?? new(),
             // The card a replacement effect is replacing the event of: its own "as this enters" (Mox Diamond).
             "ReplacedCard" or "ReplacedNewCard" => new() { x.Item.ReplacedCardId ?? x.Item.SourceId },
+            "ExiledCards" => x.Item.Exiled?.ToList() ?? new(),
             "TopOfLibrary" => x.S.Players[x.Controller].Library.Take(1).ToList(),
             _ => new(),
         };

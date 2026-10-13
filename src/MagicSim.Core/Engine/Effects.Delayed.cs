@@ -199,12 +199,14 @@ sealed class SuspendEffect : Effect
     public override string Api => "Suspend";
     public override IReadOnlySet<string> Params { get; } = P("TimeCounters");
 
+    public override void Validate(AbilityDef ab, CompileContext ctx) => ValidateAmount(ab, "TimeCounters", ctx);
+
     public override void Resolve(EffectContext x)
     {
         var c = x.Host;
         if (c.Zone != Zone.Hand) return;
         x.Game.MoveTo(c, Zone.Exile);
-        Game.AddCounters(c, "TIME", int.Parse(x.Ability["TimeCounters"]!));
+        Game.AddCounters(c, "TIME", Amount(x, x.Ability["TimeCounters"], 1));
         c.Suspended = true;
         x.Game.Note($"  suspend {c.Name} ({c.CounterCount("TIME")} time counters)");
     }

@@ -64,7 +64,7 @@ public static class Effects
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
         new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
-        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new DamageResolveEffect(), new FogEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
+        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new DamageResolveEffect(), new FogEffect(), new AddOrRemoveCounterEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -825,7 +825,8 @@ sealed class PumpEffect : CardsEffect
         // A player gaining a keyword ("you gain protection from everything", hexproof): nothing a goldfish opponent tests.
         if (ab["Defined"] is { } who && Defined.IsPlayerRef(who)) return;
         // "That land doesn't untap during its controller's next untap step": lasts until it has skipped one.
-        if (ab["Duration"] is { } dur && !(dur == "Permanent" && ab["KW"] == SkipNextUntapKeyword && ab["NumAtt"] is null && ab["NumDef"] is null))
+        // "It gains suspend" (in exile) lasts too.
+        if (ab["Duration"] is { } dur && !(dur == "Permanent" && ab["KW"] is SkipNextUntapKeyword or "Suspend" && ab["NumAtt"] is null && ab["NumDef"] is null))
             ctx.Need("Pump.Duration:" + dur);
         base.Validate(ab, ctx);
         if (ab["NumAtt"] != "Double") ValidateAmount(ab, "NumAtt", ctx);
@@ -834,7 +835,9 @@ sealed class PumpEffect : CardsEffect
         Defined.ValidateCards(ab["RememberObjects"], ctx);
         Defined.ValidateCards(ab["ForgetImprinted"], ctx);
         // "Target card in your graveyard gains flashback until end of turn."
-        if (ab["PumpZone"] is { } pz && (pz != "Graveyard" || ab["KW"] != "Flashback")) ctx.Need("Pump.PumpZone:" + pz);
+        // "It gains suspend" (Jhoira): an exiled card with time counters becomes suspended.
+        if (ab["PumpZone"] is { } pz && !(pz == "Graveyard" && ab["KW"] == "Flashback" || pz == "Exile" && ab["KW"] == "Suspend"))
+            ctx.Need("Pump.PumpZone:" + pz);
     }
 
     public const string SkipNextUntapKeyword = "HIDDEN This card doesn't untap during your next untap step.";
@@ -868,6 +871,11 @@ sealed class PumpEffect : CardsEffect
         if (x.Ability["RememberObjects"] is { } ro) (x.Host.Remembered ??= new()).AddRange(Defined.Cards(ro, x));
         if (x.Ability["ForgetImprinted"] is { } fi) foreach (var id in Defined.Cards(fi, x)) x.Host.Imprinted?.Remove(id);
         if (x.Ability["Defined"] is null && x.Ability.TargetFilter is null && (x.Ability["RememberObjects"] ?? x.Ability["ForgetImprinted"]) is not null) return;
+        if (x.Ability["PumpZone"] == "Exile")
+        {
+            foreach (var c in Cards(x, Zone.Exile).Where(c => c.CounterCount("TIME") > 0)) c.Suspended = true;
+            return;
+        }
         foreach (var c in Cards(x, x.Ability["PumpZone"] == "Graveyard" ? Zone.Graveyard : Zone.Battlefield)) Apply(c, doubleAtt ? Math.Max(0, c.Power) : att, doubleDef ? Math.Max(0, c.Toughness) : def, x.Ability["KW"]);
     }
 }
@@ -941,6 +949,8 @@ sealed class PutCounterEffect : CardsEffect
             return;
         }
         var cards = Cards(x).ToList();
+        // "Put four time counters on the exiled card" (Jhoira of the Ghitu): the card exiled to pay the cost.
+        if (x.Ability["Defined"] is { } exiled && exiled.StartsWith("ExiledCards", StringComparison.Ordinal)) cards.AddRange(Cards(x, Zone.Exile));
         // "Distribute four +1/+1 counters among any number of target creatures": one each, the rest on the first.
         if (x.Ability["DividedAsYouChoose"] is not null)
         {

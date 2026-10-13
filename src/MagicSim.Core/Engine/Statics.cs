@@ -133,6 +133,8 @@ public static class Statics
         "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize", "RaiseMaxHandSize", "MayPlay", "MayPlayWithoutManaCost",
         "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "RemoveLandTypes", "GainControl", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
         "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost", "MayPlayIgnoreType",
+        // "Once each turn, you may pay {0} rather than pay the mana cost for a spell you cast" (As Foretold).
+        "MayPlayDontGrantZonePermissions", "MayPlayLimit",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
         "AddSVar", "GainsAbilitiesOf", "GainsAbilitiesOfZones",
         // Goaded creatures must attack someone else: only opponents' creatures get goaded, and they never attack.
@@ -296,7 +298,13 @@ public static class Statics
         {
             // "You may play/cast [cards] from [zone]": impulse draw, Future Sight, Bolas's Citadel-style.
             if (mp != "True") ctx.Need("MayPlay:" + mp);
-            if (s["AffectedZone"] is not ("Exile" or "Graveyard" or "Library" or "Command")) ctx.Need("MayPlay.AffectedZone:" + s["AffectedZone"]);
+            // Without zone permissions it only changes the cost of spells cast from wherever they can be cast anyway.
+            if (s["MayPlayDontGrantZonePermissions"] == "True")
+            {
+                if (s["MayPlayAltManaCost"] is null) ctx.Need("MayPlayDontGrantZonePermissions+NoAltCost");
+            }
+            else if (s["AffectedZone"] is not ("Exile" or "Graveyard" or "Library" or "Command")) ctx.Need("MayPlay.AffectedZone:" + s["AffectedZone"]);
+            if (s["MayPlayLimit"] is { } mpl && !int.TryParse(mpl, out _)) ctx.Need("MayPlayLimit:" + mpl);
             if (s.P.Values.Keys.Any(k => k is "AddPower" or "AddToughness" or "AddKeyword" or "SetPower" or "SetToughness")) ctx.Need("MayPlay+Modify");
             // "If you cast a spell this way, pay life equal to its mana value rather than pay its mana cost" (Bolas's Citadel).
             if (s["MayPlayAltManaCost"] is { } alt) CardCompiler.ParseCost(alt.Replace("ConvertedManaCost", "1"), ctx);
@@ -661,7 +669,7 @@ public static class Statics
         foreach (var (source, st) in Pairs(g))
         {
             if (source.Controller != player) continue;
-            if (st.Mode != "Continuous" || st["MayPlay"] != "True" || !WorksFrom(source, st)) continue;
+            if (st.Mode != "Continuous" || st["MayPlay"] != "True" || st["MayPlayDontGrantZonePermissions"] == "True" || !WorksFrom(source, st)) continue;
             var x = ContextFor(g, source, st);
             if (!Presence.Hold(st.P, x)) continue;
             var zone = Enum.Parse<Zone>(st["AffectedZone"]!);
@@ -675,6 +683,32 @@ public static class Statics
                 }
         }
         return result;
+    }
+
+    /// <summary>
+    /// "Once each turn, you may pay {0} rather than pay the mana cost for a spell you cast with mana value X or less" (As
+    /// Foretold): the static that offers <paramref name="spell"/> another cost, if one does now.
+    /// </summary>
+    public static (Card Source, StaticDef Static)? AltCostFor(Game g, Card spell)
+    {
+        foreach (var (source, st) in Pairs(g))
+        {
+            if (st.Mode != "Continuous" || st["MayPlayDontGrantZonePermissions"] != "True" || source.Controller != spell.Controller || !WorksFrom(source, st)) continue;
+            if (st["AffectedZone"] is { } zones && !zones.Split(',').Any(z => z.Trim() == spell.Zone.ToString())) continue;
+            if (st["MayPlayLimit"] is { } lim && source.StaticUses?.GetValueOrDefault(st) is var (turn, used) && turn == g.State.Turn && used >= int.Parse(lim)) continue;
+            var x = ContextFor(g, source, st);
+            if (!Presence.Hold(st.P, x) || st["Affected"] is { } a && !Effect.FilterFor(source.CurrentFace, a).MatchesCard(spell, x)) continue;
+            return (source, st);
+        }
+        return null;
+    }
+
+    /// <summary>Counts a use of a once-each-turn static.</summary>
+    public static void UseOnce(Game g, Card source, StaticDef st)
+    {
+        source.StaticUses ??= new();
+        var (turn, used) = source.StaticUses.GetValueOrDefault(st);
+        source.StaticUses[st] = (g.State.Turn, turn == g.State.Turn ? used + 1 : 1);
     }
 
     /// <summary>The cost of a card played with a "may play … rather than pay its mana cost" grant (e.g. PayLife&lt;ConvertedManaCost&gt;).</summary>
