@@ -202,13 +202,14 @@ public static class Program
         var (deck, path) = LoadDeck(o);
         var total = opts.Games * opts.Tables.Count * opts.Mulligans.Count * opts.Seats.Count;
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        var tableSeconds = new Dictionary<string, double>();
         var games = Runner.Run(deck, opts, progress: new Progress<int>(n =>
-            Console.Error.Write($"\r{n}/{total} games ({sw.Elapsed.TotalSeconds:F0}s)")));
+            Console.Error.Write($"\r{n}/{total} games ({sw.Elapsed.TotalSeconds:F0}s)")), tableSeconds: tableSeconds);
         var cpu = System.Diagnostics.Process.GetCurrentProcess().TotalProcessorTime;
         Console.Error.WriteLine($"\r{total}/{total} games in {sw.Elapsed.TotalSeconds:F1}s (CPU {cpu.TotalSeconds:F1}s, allocated {GC.GetTotalAllocatedBytes() / 1e9:F1} GB)");
         if (o.Get("--per-game") is { } perGame)
             File.WriteAllLines(perGame, games.Select(Report.GameLine), new System.Text.UTF8Encoding(false));
-        Emit(o, JsonSerializer.Serialize(Report.RunDocument(deck, path, opts, games), Report.Json));
+        Emit(o, JsonSerializer.Serialize(Report.RunDocument(deck, path, opts, games, tableSeconds), Report.Json));
         return Ok;
     }
 

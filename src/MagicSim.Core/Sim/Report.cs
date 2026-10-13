@@ -22,7 +22,9 @@ public static class Report
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
-    public static object RunDocument(Runner.PreparedDeck deck, string deckPath, RunOptions o, IReadOnlyList<GameResult> games)
+    /// <param name="tableSeconds">Each table size's wall-clock time, for the <c>timing</c> block; left out without it.</param>
+    public static object RunDocument(Runner.PreparedDeck deck, string deckPath, RunOptions o, IReadOnlyList<GameResult> games,
+        IReadOnlyDictionary<string, double>? tableSeconds = null)
     {
         var rows = new List<object>();
         foreach (var table in games.GroupBy(g => g.Table))
@@ -54,6 +56,12 @@ public static class Report
             settings = new { games = o.Games, seed = o.Seed, max_turn = o.MaxTurn, rollouts = o.Rollouts },
             results = rows,
             cards = CardStats(deck, games),
+            timing = tableSeconds is null ? null : new
+            {
+                threads = o.Threads,
+                elapsed_s = Math.Round(tableSeconds.Values.Sum(), 1),
+                by_table_s = tableSeconds.ToDictionary(kv => kv.Key, kv => Math.Round(kv.Value, 1)),
+            },
         };
     }
 

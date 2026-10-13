@@ -110,19 +110,30 @@ public static class Runner
         };
     }
 
-    /// <summary>All games for every (table, mulligan, seat), in contract row order.</summary>
-    public static List<GameResult> Run(PreparedDeck deck, RunOptions o, string variant = "base", IProgress<int>? progress = null)
+    /// <summary>
+    /// All games for every (table, mulligan, seat), in contract row order. Table sizes are played one after another, so
+    /// <paramref name="tableSeconds"/>, when given, gets each one's wall-clock time.
+    /// </summary>
+    public static List<GameResult> Run(PreparedDeck deck, RunOptions o, string variant = "base", IProgress<int>? progress = null,
+        Dictionary<string, double>? tableSeconds = null)
     {
-        var combos = o.Tables.SelectMany(t => o.Mulligans.SelectMany(m => o.Seats.Select(seat => (t, m, seat)))).ToList();
-        var results = new GameResult[combos.Count * o.Games];
+        var results = new List<GameResult>();
         var done = 0;
-        Parallel.For(0, results.Length, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, o.Threads) }, i =>
+        foreach (var t in o.Tables)
         {
-            var (t, m, seat) = combos[i / o.Games];
-            results[i] = PlayOne(deck, o, i % o.Games, m, seat, t, variant);
-            var n = Interlocked.Increment(ref done);
-            if (n % 100 == 0) progress?.Report(n);
-        });
-        return results.ToList();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var combos = o.Mulligans.SelectMany(m => o.Seats.Select(seat => (m, seat))).ToList();
+            var table = new GameResult[combos.Count * o.Games];
+            Parallel.For(0, table.Length, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, o.Threads) }, i =>
+            {
+                var (m, seat) = combos[i / o.Games];
+                table[i] = PlayOne(deck, o, i % o.Games, m, seat, t, variant);
+                var n = Interlocked.Increment(ref done);
+                if (n % 100 == 0) progress?.Report(n);
+            });
+            results.AddRange(table);
+            if (tableSeconds is not null) tableSeconds[t] = sw.Elapsed.TotalSeconds;
+        }
+        return results;
     }
 }

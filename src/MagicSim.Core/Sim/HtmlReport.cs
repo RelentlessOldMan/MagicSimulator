@@ -83,6 +83,7 @@ public static class HtmlReport
             """);
         if (series.Count > 0) Goldfish(h, series, labels, color, maxTurn);
         if (forge.Count > 0) Forge(h, forge);
+        RunTimes(h, runs, forge);
         h.Append("</main></body></html>\n");
         return h.ToString();
     }
@@ -172,6 +173,57 @@ public static class HtmlReport
             h.Append("</tbody></table></div>");
         }
     }
+
+    /// <summary>How long each deck's goldfish games (per table size) and Forge playtest took, with totals.</summary>
+    private static void RunTimes(StringBuilder h, IReadOnlyList<JsonElement> runs, IReadOnlyList<JsonElement> forge)
+    {
+        var rows = new List<(string Deck, double?[] Seconds)>();   // 1v1, 1v1v1, Forge
+        (string, double?[]) Row(string deck)
+        {
+            var i = rows.FindIndex(r => r.Deck == deck);
+            if (i < 0) { rows.Add((deck, new double?[3])); i = rows.Count - 1; }
+            return rows[i];
+        }
+        foreach (var run in runs)
+        {
+            if (!run.TryGetProperty("timing", out var timing) || timing.ValueKind != JsonValueKind.Object) continue;
+            var (_, s) = Row(run.GetProperty("deck").GetProperty("name").GetString() ?? "?");
+            foreach (var t in timing.GetProperty("by_table_s").EnumerateObject())
+                if (Array.IndexOf(Tables, t.Name) is var k and >= 0) s[k] = (s[k] ?? 0) + t.Value.GetDouble();
+        }
+        foreach (var doc in forge)
+        {
+            var (_, s) = Row(doc.GetProperty("deck").GetProperty("name").GetString() ?? "?");
+            s[2] = (s[2] ?? 0) + doc.GetProperty("elapsed_s").GetDouble();
+        }
+        if (rows.Count == 0) return;
+
+        static double? Sum(IEnumerable<double?> xs) => xs.Any(x => x is not null) ? xs.Sum(x => x ?? 0) : null;
+        var totals = Enumerable.Range(0, 3).Select(k => Sum(rows.Select(r => r.Seconds[k]))).ToArray();
+        h.Append("""
+            <h2>Run time</h2>
+            <div class="card tablewrap"><table>
+            <thead><tr><th>Deck</th><th></th><th>1v1</th><th>1v1v1</th><th>Forge</th><th>Total</th></tr></thead><tbody>
+            """);
+        string Cells(double?[] s) => string.Concat(s.Select(x => $"<td>{Duration(x)}</td>")) + $"<td>{Duration(Sum(s))}</td>";
+        foreach (var (deck, s) in rows)
+            h.Append($"<tr><td>{Esc(deck)}</td><td></td>{Cells(s)}</tr>");
+        h.Append($"<tr><th>Total</th><th></th>{Cells(totals)}</tr>");
+        h.Append("""
+            </tbody></table>
+            <p class="muted">Wall-clock time on the machine that ran them, with whatever else it was doing at the time. Runs that went
+            side by side overlap, so the total is the work done, not the time from start to finish.</p>
+            </div>
+            """);
+    }
+
+    private static string Duration(double? seconds) => seconds switch
+    {
+        null => "–",
+        < 60 => $"{seconds.Value:0}s",
+        < 3600 => $"{(int)(seconds.Value / 60)}m {(int)(seconds.Value % 60):00}s",
+        _ => $"{(int)(seconds.Value / 3600)}h {(int)(seconds.Value % 3600 / 60):00}m",
+    };
 
     private static string Rate(JsonElement e) => NullableDouble(e, "win_rate") is { } r ? Pct(r) : "–";
 

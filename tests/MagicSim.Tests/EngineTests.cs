@@ -240,6 +240,19 @@ public class EngineTests
         Assert.Contains("<h3>1v1v1</h3>", html);
         Assert.Contains("</span>Bears</td>", html);
         Assert.DoesNotContain("Forge playtest", html);
+        Assert.DoesNotContain("Run time", html);
+
+        var seconds = new Dictionary<string, double>();
+        Runner.Run(deck, o, tableSeconds: seconds);
+        Assert.Equal(new[] { "1v1", "1v1v1" }, seconds.Keys);
+        seconds["1v1"] = 75;
+        seconds["1v1v1"] = 3700;
+        var timed = System.Text.Json.JsonSerializer.SerializeToElement(Report.RunDocument(deck, "bears.txt", o, games, seconds), Report.Json);
+        Assert.Equal(3775, timed.GetProperty("timing").GetProperty("elapsed_s").GetDouble());
+        Assert.Equal(1, timed.GetProperty("timing").GetProperty("threads").GetInt32());
+        html = HtmlReport.Build(new[] { timed }, new DateTime(2026, 1, 1));
+        Assert.Contains("<h2>Run time</h2>", html);
+        Assert.Contains("<td>1m 15s</td><td>1h 01m</td><td>–</td><td>1h 02m</td>", html);
     }
 
     [Fact]

@@ -2,7 +2,7 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.8.4** (2026-10-12).
+Status: **draft v0.8.5** (2026-10-12).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
@@ -17,6 +17,7 @@ Status: **draft v0.8.4** (2026-10-12).
 - v0.8.2: three more goldfish rules (§3): your attackers all attack the opponent with the least life, chosen as you declare them; effects on an opponent's library ("exiles the top twenty cards") take cards off their library count; and when an opponent separates cards into two piles (Fact or Fiction), they put the card with the highest mana value in a pile by itself. No field changes.
 - v0.8.3: one more goldfish rule (§3): when everyone votes (Expropriate, "will of the council"), each opponent votes for the first choice you didn't. At `1v1` that ties; at `1v1v1` they outvote you. No field changes.
 - v0.8.4: one more goldfish rule (§3): an opponent facing "loses life unless they discard" (Court of Ambition) takes the life loss unless it would kill them, and then discards if they can. No field changes.
+- v0.8.5: `run` output gains a `timing` block: wall-clock seconds for the whole run and for each table size, and the thread count (§3). It's the only part of the document that varies between identical runs. `sim report` shows run times, Forge's included. Nothing else changes.
 - v0.8.1: goldfish opponents take a turn that does nothing, and their hand is a count that discard can empty (§3). "Each opponent's upkeep" and "each end step" now trigger in their turns, and they draw a card in each, so mill decks get a little faster. No field changes.
 - Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
 - Spec only, not built yet: `run`, `compare`, `cards` and profiles.
@@ -142,7 +143,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
 **Defaults:** `--games 10000`, `--seed 1`, `--mull all`, `--seat both`, `--table both`, `--max-turn 20`. `replay` defaults to `--mull C --seat play --table 1v1v1`.
 
 **Determinism:**
-- The same deck, seed, options and simulator version always give the same JSON.
+- The same deck, seed, options and simulator version always give the same JSON, apart from `timing`.
 - Game *i* uses a shuffle that depends only on (seed, *i*). So in `compare`, the base deck and each variant play the same shuffles, and a difference in results comes from the card change, not from luck.
 
 **Play or draw:**
@@ -207,7 +208,8 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
   ],
   "cards": [
     {"name": "Demonic Consultation", "drawn": 0.21, "cast": 0.17, "in_win": 0.15}
-  ]
+  ],
+  "timing": {"threads": 12, "elapsed_s": 812.4, "by_table_s": {"1v1": 340.2, "1v1v1": 472.2}}
 }
 ```
 
@@ -218,6 +220,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
 - **`mean_turn_capped`:** counted over all games, with each game that wasn't won counted as `max_turn + 1`. Use this to rank variants: a deck that wins less often but faster can't look better than it is.
 - **`win_lines`:** fractions of the wins. The keys come from the deck profile.
 - **`results`:** one row per (table, mulligan, seat), plus `seat: "weighted"` rows when `--seat both`. `table` is `1v1` or `1v1v1`.
+- **`timing`:** how long the run took, in wall-clock seconds, with each table size played in turn on `threads` threads. It depends on the machine and what else was running, so it isn't covered by determinism and `compare` ignores it.
 - **`cards`:** per-game fractions, across all games in the run (both table sizes together):
   - `drawn`: the card was seen in hand.
   - `cast`: it was cast or played.
