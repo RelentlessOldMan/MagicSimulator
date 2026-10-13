@@ -205,6 +205,9 @@ public sealed class Filter
             "hasABasicLandType" => (c, pl, x) => c is not null && TypeLine.BasicLandTypes.Any(c.Types.HasSubtype),
             "enchanted" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Aura")),
             "equipped" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Equipment")),
+            "IsGoaded" => (c, pl, x) => c is not null && c.GoadedTurn == x.S.Turn,
+            // "Player.TriggeredTarget": the player the trigger is about.
+            "TriggeredTarget" => (c, pl, x) => c is null && pl is not null && pl == x.Item.TriggeredPlayer,
             "faceUp" => (c, pl, x) => c is not null && !c.FaceDown,
             "wasCastFromGraveyard" => (c, pl, x) => c is not null && c.CastFrom == Zone.Graveyard,
             "wasCastFromExile" => (c, pl, x) => c is not null && c.CastFrom == Zone.Exile,
@@ -843,7 +846,7 @@ public static class Defined
     {
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
         "Enchanted", "Equipped", "Imprinted", "ExiledWith", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards",
-        "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
+        "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredAttackers", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
         "ReplacedCard", "ReplacedNewCard", "ExiledCards", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard", "Parent", "DirectRemembered",
     };
 
@@ -954,6 +957,8 @@ public static class Defined
             // The card a replacement effect is replacing the event of: its own "as this enters" (Mox Diamond).
             "ReplacedCard" or "ReplacedNewCard" => new() { x.Item.ReplacedCardId ?? x.Item.SourceId },
             "ExiledCards" => x.Item.Exiled?.ToList() ?? new(),
+            // "Those creatures" (attacking that player): every attacker attacks the same player here.
+            "TriggeredAttackers" => x.S.Attackers.ToList(),
             "TopOfLibrary" => x.S.Players[x.Controller].Library.Take(1).ToList(),
             _ => new(),
         };

@@ -506,6 +506,9 @@ public sealed partial class Game
             .Where(c => c.Controller == Me && c.Types.Is(CardType.Creature) && !c.Tapped && !IsSick(c) && !c.HasKeyword("Defender") && !Statics.CantAttack(this, c))
             .Select(c => c.Id).ToList();
         var attackers = candidates.Count == 0 ? new List<int>() : Decider.ChooseAttackers(this, Me, candidates);
+        // A goaded creature attacks if able.
+        foreach (var id in candidates)
+            if (State[id].GoadedTurn == State.Turn && !attackers.Contains(id)) attackers.Add(id);
         // "No more than one creature can attack each combat" (Silent Arbiter): the strongest of those chosen.
         if (Statics.MaxAttackers(this) is { } most && attackers.Count > most)
             attackers = attackers.OrderByDescending(id => State[id].Power).Take(most).ToList();
@@ -1423,6 +1426,12 @@ public sealed partial class Game
         {
             if (ab.TargetFilter is null) { result.Add(new()); continue; }
             var candidates = TargetCandidates(source, ab, controller, trigger);
+            // "Target creature that player controls" (TargetsWithDefinedController$ TriggeredTarget).
+            if (ab["TargetsWithDefinedController"] is { } owners)
+            {
+                var whose = Defined.Players(owners, new EffectContext { Game = this, Ability = ab, Item = trigger ?? new StackItem { SourceId = source.Id, Ability = ab, Controller = controller } });
+                candidates = candidates.Where(t => t.CardId is { } id ? whose.Contains(State[id].Controller) : t.Player is { } p && whose.Contains(p)).ToList();
+            }
             // "With an equal or lesser mana value" than the target chosen before it (Puca's Mischief).
             if (ab["TargetsWithRelatedProperty"] == "LECMC" && result.LastOrDefault(r => r.Count > 0)?.FirstOrDefault().CardId is { } related)
                 candidates = candidates.Where(t => t.CardId is { } id && State[id].ManaValue <= State[related].ManaValue).ToList();

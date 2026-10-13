@@ -134,7 +134,7 @@ public static class Statics
         "Affected", "AffectedDefined", "AddPower", "AddToughness", "AddKeyword", "SetPower", "SetToughness",
         "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize", "RaiseMaxHandSize", "MayPlay", "MayPlayWithoutManaCost",
         "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "RemoveLandTypes", "GainControl", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
-        "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost", "MayPlayIgnoreType",
+        "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost", "MayPlayIgnoreType", "MayPlayIgnoreColor",
         // "Once each turn, you may pay {0} rather than pay the mana cost for a spell you cast" (As Foretold).
         "MayPlayDontGrantZonePermissions", "MayPlayLimit",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
@@ -189,7 +189,7 @@ public static class Statics
     {
         if (NoEffectInGoldfish.Contains(s.Mode)) return;
         // "Your opponents can't cast spells / activate abilities": goldfish opponents never do anyway.
-        if (s.Mode is "CantBeCast" or "CantBeActivated" && (s["Caster"] ?? s["Activator"]) == "Opponent") return;
+        if (s.Mode is "CantBeCast" or "CantBeActivated" && (s["Caster"] ?? s["Activator"]) is "Opponent" or "Player.Opponent") return;
         // "Creatures can't attack you unless …" (Ghostly Prison), "can't attack you": goldfish opponents never attack.
         if (s.Mode is "CantAttackUnless" or "CantAttack" && s["Target"] is "You" or "You,Planeswalker.YouCtrl") return;
         // "Creatures you control can boast twice" (Birgi): boast isn't supported, so no card has a boast ability to use twice.
@@ -689,7 +689,8 @@ public static class Statics
             foreach (var c in g.CardsIn(zone))
                 if (c.Owner == player && !c.IsEffect && (filter is null || filter.MatchesCard(c, x)))
                 {
-                    var grant = new MayPlayGrant(st["MayPlayWithoutManaCost"] == "True", st["MayPlayAltManaCost"], st["MayPlayIgnoreType"] == "True");
+                    // "Spend mana as though it were mana of any color": like any type, as far as paying goes here.
+                    var grant = new MayPlayGrant(st["MayPlayWithoutManaCost"] == "True", st["MayPlayAltManaCost"], st["MayPlayIgnoreType"] == "True" || st["MayPlayIgnoreColor"] == "True");
                     // The cheapest way wins: free, then an alternative cost, then the normal cost.
                     result[c.Id] = result.TryGetValue(c.Id, out var had) && (had.Free || had.AltManaCost is not null && !grant.Free) ? had : grant;
                 }

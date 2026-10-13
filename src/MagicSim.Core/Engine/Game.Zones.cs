@@ -63,6 +63,7 @@ public sealed partial class Game
             c.AttachedTo = -1;
             c.EnchantedPlayer = -1;
             c.StaticControlBase = null;
+            c.GoadedTurn = -1;
             c.Face = 0;
             c.CopyDef = null;
             c.CopyUntilCleanup = false;

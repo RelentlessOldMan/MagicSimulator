@@ -380,6 +380,25 @@ sealed class ExchangeControlEffect : Effect
     }
 }
 
+/// <summary>
+/// Goad (rule 701.38): until your next turn the creature attacks each combat if able, and a player other than you. Goldfish
+/// opponents' creatures never attack anyway; one of yours must attack this turn.
+/// </summary>
+sealed class GoadEffect : CardsEffect
+{
+    public override string Api => "Goad";
+    public override IReadOnlySet<string> Params { get; } = P("Defined");
+
+    public override void Resolve(EffectContext x)
+    {
+        foreach (var c in Cards(x).Where(c => c.Types.Is(CardType.Creature)))
+        {
+            c.GoadedTurn = x.S.Turn;
+            x.Game.Note($"  goad {c.Name}");
+        }
+    }
+}
+
 /// <summary>"Remove target attacking creature from combat" (Reconnaissance).</summary>
 sealed class RemoveFromCombatEffect : CardsEffect
 {
@@ -433,7 +452,9 @@ sealed class ChooseCardEffect : Effect
 {
     public override string Api => "ChooseCard";
     public override IReadOnlySet<string> Params { get; } = P(
-        "Choices", "Defined", "ChoiceZone", "Amount", "MinAmount", "Mandatory", "RememberChosen", "ImprintChosen", "AtRandom", "Reveal", "ChoiceDesc");
+        "Choices", "Defined", "ChoiceZone", "Amount", "MinAmount", "Mandatory", "RememberChosen", "ImprintChosen", "AtRandom", "Reveal", "ChoiceDesc",
+        // "Each player … a creature they control": ControlledByPlayer$ Chooser.
+        "ControlledByPlayer");
 
     private static readonly HashSet<string> Zones = new(StringComparer.Ordinal) { "Battlefield", "Hand", "Graveyard", "Exile", "Library" };
 
@@ -444,6 +465,7 @@ sealed class ChooseCardEffect : Effect
         if (ab["ChoiceZone"] is { } z && !z.Split(',').All(w => Zones.Contains(w.Trim()))) ctx.Need("ChooseCard.ChoiceZone:" + z);
         ValidateAmount(ab, "Amount", ctx);
         ValidateAmount(ab, "MinAmount", ctx);
+        if (ab["ControlledByPlayer"] is { } cbp && cbp != "Chooser") ctx.Need("ChooseCard.ControlledByPlayer:" + cbp);
     }
 
     public override void Resolve(EffectContext x)
@@ -457,7 +479,7 @@ sealed class ChooseCardEffect : Effect
         x.Host.ChosenCards = new List<int>();
         foreach (var p in Defined.Players(ab["Defined"], x))
         {
-            var left = candidates.Where(id => !x.Host.ChosenCards.Contains(id)).ToList();
+            var left = candidates.Where(id => !x.Host.ChosenCards.Contains(id) && (ab["ControlledByPlayer"] is null || x.S[id].Controller == p)).ToList();
             List<int> chosen;
             if (ab["AtRandom"] == "True") { x.S.Rng.Shuffle(left); chosen = left.Take(n).ToList(); }
             else if (x.S.Players[p].IsGoldfish) chosen = left.Take(min).ToList();
@@ -583,7 +605,8 @@ sealed class PumpAllEffect : Effect
 sealed class PutCounterAllEffect : Effect
 {
     public override string Api => "PutCounterAll";
-    public override IReadOnlySet<string> Params { get; } = P("ValidCards", "CounterType", "CounterNum");
+    // Placer$: who puts them, which only matters to "whenever you put counters" triggers, none of which apply here.
+    public override IReadOnlySet<string> Params { get; } = P("ValidCards", "CounterType", "CounterNum", "Placer", "RememberPut");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -597,7 +620,11 @@ sealed class PutCounterAllEffect : Effect
         var filter = FilterFor(x.SVarFace, x.Ability["ValidCards"] ?? "Card");
         var n = Amount(x, x.Ability["CounterNum"], 1);
         var kind = x.Ability["CounterType"]!;
-        foreach (var c in x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).ToList()) x.Game.PutCounters(c, kind, n);
+        foreach (var c in x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).ToList())
+        {
+            x.Game.PutCounters(c, kind, n);
+            if (x.Ability["RememberPut"] == "True") (x.Host.Remembered ??= new()).Add(c.Id);
+        }
     }
 }
 

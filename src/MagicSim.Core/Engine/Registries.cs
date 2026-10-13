@@ -8,7 +8,7 @@ public static class Keywords
         // Implemented in combat / timing / casting.
         "Haste", "Vigilance", "Double Strike", "Lifelink", "Defender", "Flash", "Storm", "Indestructible",
         // No effect in goldfish: nobody blocks, targets your stuff, or deals you combat damage.
-        "Flying", "Trample", "First Strike", "Menace", "Reach", "Deathtouch", "Hexproof", "Shroud", "Ward", "Afflict",
+        "Flying", "Trample", "First Strike", "Menace", "Reach", "Deathtouch", "Hexproof", "Shroud", "Ward", "Afflict", "Bushido",
         "Protection", "Landwalk", "Intimidate", "Fear", "Shadow", "Horsemanship", "Skulk",
         // Deck-building only.
         "Partner", "Partner with", "Friends forever", "Choose a Background", "Doctor's companion",
@@ -68,6 +68,8 @@ public static class Triggers
         ["AbilityCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ValidSA" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
         ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer", "ValidAttackers", "AttackedTarget" },
+        // "Whenever one or more creatures attack one of your opponents" (Frontier Warmonger): per player attacked.
+        ["AttackersDeclaredOneTarget"] = new(StringComparer.Ordinal) { "AttackingPlayer", "AttackedTarget" },
         ["Drawn"] = new(StringComparer.Ordinal) { "Number", "FirstCardInDrawStep" },
         ["LandPlayed"] = new(StringComparer.Ordinal) { "Origin" },
         ["Discarded"] = new(StringComparer.Ordinal) { },
@@ -318,6 +320,9 @@ public static class Triggers
                     if (e.Player is { } p ? !f.MatchesPlayer(p, x) : e.TargetCardId is not { } tc || !f.MatchesCard(g.State[tc], x)) return false;
                 }
                 return true;
+            case "AttackersDeclaredOneTarget" when e.Mode == TriggerMode.AttackersDeclared:
+                if (t["AttackingPlayer"] == "You" && e.Player != source.Controller) return false;
+                return t["AttackedTarget"] is not { } oneTarget || g.State.ThisTurn.DefendingPlayer is { } attackedPlayer && FilterOf(x, oneTarget).MatchesPlayer(attackedPlayer, x);
             case "AttackersDeclared" when e.Mode == TriggerMode.AttackersDeclared:
                 if (e.Player != source.Controller) return false;
                 // "Whenever enchanted player is attacked": everything attacks one player here.
