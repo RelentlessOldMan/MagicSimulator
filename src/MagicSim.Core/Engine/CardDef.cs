@@ -307,7 +307,7 @@ public static partial class CardCompiler
     /// <summary>Parameters any ability may have, handled by the engine rather than the effect.</summary>
     private static readonly HashSet<string> GenericParams = new(StringComparer.Ordinal)
     {
-        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "UnlessSwitched", "ActivationPhases", "ActivationFirstCombat", "TargetUnique", "TargetsForEachPlayer", "ETB", "ActivationZone", "OptionalDecider", "Activation", "ActivationGameTypes", "ReduceCost",
+        "UnlessCost", "UnlessPayer", "UnlessResolveSubs", "UnlessSwitched", "ActivationPhases", "ActivationFirstCombat", "TargetUnique", "TargetsForEachPlayer", "ActivationLimit", "ETB", "ActivationZone", "OptionalDecider", "Activation", "ActivationGameTypes", "ReduceCost",
     };
 
     public static CardDef Compile(ForgeCard source, Func<string, CardDef?>? tokens = null)
@@ -712,6 +712,18 @@ public static partial class CardCompiler
             case "Strive":
                 if (ManaCost.Parse(Part(1)) is not { } strive) { ctx.Need("Keyword:Strive+" + Part(1)); return true; }
                 face.Strive = strive;
+                return true;
+            case "Bloodthirst":
+                // "If an opponent was dealt damage this turn, this creature enters with N +1/+1 counters on it."
+                face.SVars["__Bloodthirst"] = "Count$DamageOppsThisTurn";
+                face.EtbCounters.Add(("P1P1", Part(1), new ForgeParams("CheckSVar$ __Bloodthirst | SVarCompare$ GE1")));
+                return true;
+            case "Riot":
+                // "This creature enters with your choice of a +1/+1 counter or haste."
+                face.SVars["__RiotCounter"] = "DB$ PutCounter | Defined$ Self | CounterType$ P1P1 | CounterNum$ 1 | ETB$ True | SpellDescription$ a +1/+1 counter";
+                face.SVars["__RiotHaste"] = "DB$ Animate | Defined$ Self | Keywords$ Haste | Duration$ Permanent | SpellDescription$ haste";
+                if (CompileAbility(new ForgeParams("DB$ GenericChoice | Choices$ __RiotCounter,__RiotHaste"), ctx, AbilityKind.Sub, 0) is { } riot)
+                    face.EtbReplacements.Add(riot);
                 return true;
             case "Tribute":
                 // "As this enters, an opponent may put N +1/+1 counters on it. When it enters, if tribute wasn't paid, …":

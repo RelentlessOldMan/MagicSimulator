@@ -172,7 +172,8 @@ sealed class ChangeZoneAllEffect : Effect
 sealed class DestroyAllEffect : Effect
 {
     public override string Api => "DestroyAll";
-    public override IReadOnlySet<string> Params { get; } = P("ValidCards", "NoRegen", "RememberDestroyed");
+    // Hidden$ only says the choice of what's destroyed isn't shown.
+    public override IReadOnlySet<string> Params { get; } = P("ValidCards", "NoRegen", "RememberDestroyed", "Hidden");
     public override void Validate(AbilityDef ab, CompileContext ctx) => Filter.Parse(ab["ValidCards"] ?? "Card", ctx);
 
     public override void Resolve(EffectContext x)

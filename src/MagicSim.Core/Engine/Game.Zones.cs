@@ -530,6 +530,7 @@ public sealed partial class Game
     private void NoteDamageTo(int player, int amount, Card? source, bool combat)
     {
         State.ThisTurn.DamageTaken[player] = State.ThisTurn.DamageTaken.GetValueOrDefault(player) + amount;
+        if (combat && source is not null) State.ThisTurn.CombatDamagedBy.Add((source.Id, player));
         if (!combat || source is null || source.Controller == player) return;
         if (source.Types.AllCreatureTypes) State.ThisTurn.CombatDamageTypes.Add("*");
         foreach (var t in source.Types.Subtypes)

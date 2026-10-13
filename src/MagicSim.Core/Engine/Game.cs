@@ -451,7 +451,9 @@ public sealed partial class Game
             var c = State[id];
             if (c.Zone != Zone.Battlefield) continue;
             Note($"{action.ToLowerInvariant()} {c.Name} (end of turn)");
-            if (action == "Exile") MoveTo(c, Zone.Exile); else Sacrifice(c);
+            if (action == "Exile") MoveTo(c, Zone.Exile);
+            else if (action == "Hand") MoveTo(c, Zone.Hand);
+            else Sacrifice(c);
         }
         State.ThisTurn.AtEndStep.Clear();
     }
@@ -930,6 +932,9 @@ public sealed partial class Game
         if (ab["SorcerySpeed"] == "True" && !sorcerySpeed) return false;
         if (!TimingAllows(ab)) return false;
         if (Statics.CantBeActivated(this, c, ab)) return false;
+        // "Activate only once each turn".
+        if (ab["ActivationLimit"] is { } limit && int.TryParse(limit, out var most) && c.ActivationUses?.GetValueOrDefault(ab) is var (turn, times)
+            && turn == State.Turn && times >= most) return false;
         if (ab.Kind == AbilityKind.Activated && ab.P.Values.Keys.Any(Presence.Params.Contains) && !Presence.Hold(ab.P, ContextFor(c))) return false;
         if (ab["Activation"] is { } activation && !Presence.ConditionHolds(activation, ContextFor(c))) return false;
         // "Commander only" abilities (War Room): this is a Commander game if the player has a commander.
@@ -1260,6 +1265,12 @@ public sealed partial class Game
         if (HasX(cost)) x = Decider.ChooseX(this, player, c, MaxAffordableX(cost, c, player));
         var targets = ChooseChainTargets(c, ab, player, x);
         if (ab["Planeswalker"] == "True") c.LoyaltyActivatedTurn = State.Turn;
+        if (ab["ActivationLimit"] is not null)
+        {
+            c.ActivationUses ??= new();
+            var (usedTurn, used) = c.ActivationUses.GetValueOrDefault(ab);
+            c.ActivationUses[ab] = (State.Turn, usedTurn == State.Turn ? used + 1 : 1);
+        }
         if (ab.IsCycling) Fire(new TriggerEvent(TriggerMode.Cycled, CardId: c.Id, Player: player));
         if (!PayCost(cost, c, player, x, excludeSourceFromMana: ab.Cost.Tap))
             throw new InvalidOperationException($"could not pay for {c.Name}'s ability after checking it was activatable");

@@ -237,8 +237,10 @@ sealed class ChangeZoneEffect : Effect
         "WithTotalCMC",
         // Who chooses from another player's hand: you; a goldfish opponent's hand is unknown, so nothing is found.
         "Chooser",
-        // Brought back for a while: exiled or sacrificed at the next end step, exiled if it would leave.
+        // Brought back for a while: exiled or sacrificed (or returned to hand) at the next end step, exiled if it would leave.
         "AtEOT", "LeaveBattlefield",
+        // "Onto the battlefield tapped and attacking" (Ilharg); "remember only that creature" (Sneak Attack).
+        "Attacking", "ForgetOtherRemembered",
         // Face down only hides it from opponents, which goldfish opponents don't care about.
         "ExileFaceDown");
 
@@ -258,7 +260,7 @@ sealed class ChangeZoneEffect : Effect
         ValidateAmount(ab, "WithCountersAmount", ctx);
         if (ab["Duration"] is { } dur && dur != "UntilHostLeavesPlay") ctx.Need("ChangeZone.Duration:" + dur);
         if (ab["Destination"] is null) ctx.Need("ChangeZone.Destination:none");
-        if (ab["AtEOT"] is { } eot && eot is not ("Exile" or "Sacrifice")) ctx.Need("ChangeZone.AtEOT:" + eot);
+        if (ab["AtEOT"] is { } eot && eot is not ("Exile" or "Sacrifice" or "Hand")) ctx.Need("ChangeZone.AtEOT:" + eot);
         if (ab["LeaveBattlefield"] is { } lb && lb != "Exile") ctx.Need("ChangeZone.LeaveBattlefield:" + lb);
         // "Search your library for a Forest card and a Plains card": EACH Forest & Plains, one of each.
         if (ab["ChangeType"] is { } each && each.StartsWith("EACH ", StringComparison.Ordinal))
@@ -300,6 +302,8 @@ sealed class ChangeZoneEffect : Effect
         {
             if (ab["AtEOT"] is { } eot) x.S.ThisTurn.AtEndStep.Add((c.Id, eot));
             if (ab["LeaveBattlefield"] == "Exile") c.ExileIfLeaves = true;
+            // Attacking without having been declared as an attacker (it doesn't trigger "whenever … attacks").
+            if (ab["Attacking"] == "True" && x.S.Step == Step.DeclareAttackers) x.S.Attackers.Add(c.Id);
         }
     }
 
@@ -320,6 +324,7 @@ sealed class ChangeZoneEffect : Effect
         if (ab["OriginAlternative"] is { } alt) origins.AddRange(alt.Split(',').Select(s => Enum.Parse<Zone>(s.Trim())).Where(z => !origins.Contains(z)));
         var position = ab["LibraryPosition"] is { } lp ? int.Parse(lp) : 0;
         var tapped = ab["Tapped"] == "True";
+        if (ab["ForgetOtherRemembered"] == "True") { x.Host.Remembered = null; x.Host.RememberedUnknown = 0; }
 
         // Known cards (Defined$ or targets): just move them. From the stack with neither, the spell itself.
         var self = ab["Origin"] == "Stack" && ab["Defined"] is null && ab.TargetFilter is null;

@@ -62,6 +62,8 @@ public sealed class Card
     public int ManaSpentToCast { get; set; }
     public int TreasureManaSpent { get; set; }
     public int AttachedTo { get; set; } = -1;
+    /// <summary>Activated abilities with a per-turn limit (ActivationLimit$): the turn and times each was last activated.</summary>
+    public Dictionary<AbilityDef, (int Turn, int Count)>? ActivationUses { get; set; }
     /// <summary>The player this Aura enchants (curses), or -1.</summary>
     public int EnchantedPlayer { get; set; } = -1;
     /// <summary>The permanent entered or was cast this turn with X = this value.</summary>
@@ -215,7 +217,7 @@ public sealed class Card
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
         NamedCard = NamedCard, EnchantedPlayer = EnchantedPlayer, ChosenNumber = ChosenNumber, ManaSpentToCast = ManaSpentToCast, TreasureManaSpent = TreasureManaSpent, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
-        TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
+        TriggerUses = TriggerUses is null ? null : new(TriggerUses), ActivationUses = ActivationUses is null ? null : new(ActivationUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
         StaticKeywords = StaticKeywords is null ? null : new HashSet<string>(StaticKeywords),
@@ -400,13 +402,15 @@ public sealed class TurnInfo
     public Dictionary<int, int> LifeLost { get; set; } = new();
     /// <summary>Damage each source dealt this turn.</summary>
     public Dictionary<int, int> DamageDealtBy { get; set; } = new();
+    /// <summary>Which sources dealt combat damage to which players this turn (Steel Hellkite).</summary>
+    public HashSet<(int Source, int Player)> CombatDamagedBy { get; set; } = new();
     /// <summary>Players who controlled a permanent that left the battlefield this turn (revolt).</summary>
     public HashSet<int> PermanentLeft { get; set; } = new();
     public TurnInfo Clone() => new()
     {
         SpellsCast = SpellsCast, MaxManaSeen = MaxManaSeen, Ended = Ended, AtEndStep = new(AtEndStep), ControlUntilEot = new(ControlUntilEot), LifeGained = new(LifeGained),
         ExtraPhases = new(ExtraPhases), Combats = Combats, NoCombatDamage = NoCombatDamage, AttackersDeclared = AttackersDeclared, Attacks = new(Attacks), DefendingPlayer = DefendingPlayer,
-        Drawn = new(Drawn), Cast = new(Cast), DamageTaken = new(DamageTaken), CombatDamageTypes = new(CombatDamageTypes, StringComparer.OrdinalIgnoreCase), CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), Moves = new(Moves),
+        Drawn = new(Drawn), Cast = new(Cast), DamageTaken = new(DamageTaken), CombatDamageTypes = new(CombatDamageTypes, StringComparer.OrdinalIgnoreCase), CardsDrawn = new(CardsDrawn), CardsDiscarded = new(CardsDiscarded), PermanentLeft = new(PermanentLeft), LifeLost = new(LifeLost), DamageDealtBy = new(DamageDealtBy), CombatDamagedBy = new(CombatDamagedBy), Moves = new(Moves),
     };
 }
 

@@ -201,6 +201,7 @@ public sealed class Filter
             "IsCommander" => (c, pl, x) => c is not null && c.IsCommander,
             "NamedCard" => (c, pl, x) => c is not null && x.Host.NamedCard is { } n && string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase),
             "isMonarch" => (c, pl, x) => pl is not null && x.S.Monarch == pl,
+            "wasDealtCombatDamageThisTurnBySource" => (c, pl, x) => pl is { } dealt && x.S.ThisTurn.CombatDamagedBy.Contains((x.Host.Id, dealt)),
             "IsRemembered" => (c, pl, x) => c is not null ? x.Host.Remembered?.Contains(c.Id) ?? false : pl is not null && pl == x.Item.IteratedPlayer,
             "IsTriggerRemembered" => (c, pl, x) => c is not null && (x.Item.DelayRemembered?.Contains(c.Id) ?? false),
             "ThisTurnEntered" => (c, pl, x) => c is not null && c.Zone == Zone.Battlefield && c.EnteredTurn == x.S.Turn,
@@ -237,6 +238,12 @@ public sealed class Filter
             test = byWhom == "ControlledBy"
                 ? (c, pl, x) => c is not null && x.Item.TriggeredPlayer is { } tp && c.Controller == tp
                 : (c, pl, x) => c is not null && x.Item.TriggeredPlayer is { } tp && c.Owner == tp;
+        // "Permanent.ControlledBy Player.wasDealtCombatDamageThisTurnBySource": whose controller fits a player filter.
+        if (test is null && p.StartsWith("ControlledBy Player", StringComparison.Ordinal))
+        {
+            var controllers = Parse(p["ControlledBy ".Length..], ctx);
+            test = (c, pl, x) => c is not null && controllers.MatchesPlayer(c.Controller, x);
+        }
         // "namedRite of Flame": cards with that name.
         if (test is null && p.StartsWith("named", StringComparison.Ordinal) && p.Length > 5)
         {
@@ -558,6 +565,8 @@ public sealed class Amount
             // "Base power and toughness each equal to its mana value" (Starfield of Nyx's AffectedX).
             case "CardManaCost": return new(core, x => x.Host.ManaValue);
             case "LifeYouLostThisTurn": return new(core, x => x.S.ThisTurn.LifeLost.GetValueOrDefault(x.Controller));
+            // Damage opponents were dealt this turn (bloodthirst).
+            case "DamageOppsThisTurn": return new(core, x => x.S.ThisTurn.DamageTaken.Where(kv => kv.Key != x.Controller).Sum(kv => kv.Value));
             case "CastTotalManaSpent": return new(core, x => x.Host.ManaSpentToCast);
             // "If an opponent lost life this turn" (Theater of Horrors): how much they lost in all.
             case "LifeOppsLostThisTurn": return new(core, x => x.S.ThisTurn.LifeLost.Where(kv => kv.Key != x.Controller).Sum(kv => kv.Value));
