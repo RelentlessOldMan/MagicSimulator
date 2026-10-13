@@ -174,7 +174,8 @@ public static class Replacements
                 kind = ReplacementKind.EntersWithCounters;
                 instead = CardCompiler.CompileAbility(w, ctx, AbilityKind.Sub, 0);
                 break;
-            case "Moved" when r["Destination"] == "Graveyard" && w.Api == "ChangeZone" && w["Destination"] == "Exile"
+            // "Would die … exile it instead" (Rest in Peace), "would enter … exile it instead" (Containment Priest).
+            case "Moved" when r["Destination"] is "Graveyard" or "Battlefield" && w.Api == "ChangeZone" && w["Destination"] == "Exile"
                               && w["Defined"] == "ReplacedCard" && OnlyKeys(w, "Destination", "Defined", "Origin", "Hidden"):
                 kind = ReplacementKind.ExileInstead;
                 break;
@@ -406,6 +407,16 @@ public static class Replacements
     {
         shuffle = false;
         if (from == Zone.Battlefield && moving.ExileIfLeaves && to != Zone.Exile) return Zone.Exile;
+        if (to == Zone.Battlefield)
+        {
+            foreach (var (host, r) in Active(g, "Moved"))
+            {
+                if (r.Kind != ReplacementKind.ExileInstead || r["Destination"] != "Battlefield") continue;
+                var x = ContextFor(g, host, r, 0);
+                if (CardOk(r, "ValidCard", moving, x) && Presence.Hold(r.P, x)) return Zone.Exile;
+            }
+            return to;
+        }
         if (to != Zone.Graveyard) return to;
         // A card's own "shuffle it into its owner's library instead" works from anywhere.
         if (!moving.IsBlank)
@@ -417,7 +428,7 @@ public static class Replacements
                 }
         foreach (var (host, r) in Active(g, "Moved"))
         {
-            if (r.Kind != ReplacementKind.ExileInstead) continue;
+            if (r.Kind != ReplacementKind.ExileInstead || r["Destination"] == "Battlefield") continue;
             var x = ContextFor(g, host, r, 0);
             if (r["Origin"] is { } o && !o.Split(',').Any(z => z.Trim() == from.ToString())) continue;
             if (!CardOk(r, "ValidCard", moving, x) || !CardOk(r, "ValidLKI", moving, x) || !Presence.Hold(r.P, x)) continue;

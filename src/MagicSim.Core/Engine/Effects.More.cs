@@ -314,7 +314,6 @@ sealed class ChooseNumberEffect : Effect
         }
         if (ab["Defined"] is { } d && d != "You") ctx.Need("ChooseNumber.Defined:" + d);
         ValidateAmount(ab, "Min", ctx);
-        if (ab["Max"] is null) ctx.Need("ChooseNumber:NoMax");
         ValidateAmount(ab, "Max", ctx);
     }
 
@@ -322,7 +321,8 @@ sealed class ChooseNumberEffect : Effect
     {
         if (x.Ability["Defined"] == "Player") { EachPlayerChooses(x); return; }
         var min = Amount(x, x.Ability["Min"], 0);
-        var max = Math.Max(min, Amount(x, x.Ability["Max"], 0));
+        // "Choose a number" with no upper bound: up to 20 is room enough.
+        var max = Math.Max(min, x.Ability["Max"] is null ? 20 : Amount(x, x.Ability["Max"], 0));
         x.Host.ChosenNumber = Math.Max(min, x.Game.Decider.ChooseX(x.Game, x.Controller, x.Host, max));
         x.Game.Note($"  chose {x.Host.ChosenNumber}");
     }
@@ -453,8 +453,10 @@ sealed class ChooseCardEffect : Effect
     public override string Api => "ChooseCard";
     public override IReadOnlySet<string> Params { get; } = P(
         "Choices", "Defined", "ChoiceZone", "Amount", "MinAmount", "Mandatory", "RememberChosen", "ImprintChosen", "AtRandom", "Reveal", "ChoiceDesc",
-        // "Each player … a creature they control": ControlledByPlayer$ Chooser.
-        "ControlledByPlayer");
+        // "Each player … a creature they control": ControlledByPlayer$ Chooser (or another player).
+        "ControlledByPlayer",
+        // "An artifact, a creature, an enchantment, and a planeswalker" (Tragic Arrogance): one of each.
+        "ChooseEach");
 
     private static readonly HashSet<string> Zones = new(StringComparer.Ordinal) { "Battlefield", "Hand", "Graveyard", "Exile", "Library" };
 
@@ -465,7 +467,8 @@ sealed class ChooseCardEffect : Effect
         if (ab["ChoiceZone"] is { } z && !z.Split(',').All(w => Zones.Contains(w.Trim()))) ctx.Need("ChooseCard.ChoiceZone:" + z);
         ValidateAmount(ab, "Amount", ctx);
         ValidateAmount(ab, "MinAmount", ctx);
-        if (ab["ControlledByPlayer"] is { } cbp && cbp != "Chooser") ctx.Need("ChooseCard.ControlledByPlayer:" + cbp);
+        if (ab["ControlledByPlayer"] is { } cbp && cbp != "Chooser") Defined.ValidatePlayers(cbp, ctx);
+        if (ab["ChooseEach"] is { } each) foreach (var kind in each.Split('&', StringSplitOptions.TrimEntries)) Filter.Parse(kind, ctx);
     }
 
     public override void Resolve(EffectContext x)
@@ -479,7 +482,20 @@ sealed class ChooseCardEffect : Effect
         x.Host.ChosenCards = new List<int>();
         foreach (var p in Defined.Players(ab["Defined"], x))
         {
-            var left = candidates.Where(id => !x.Host.ChosenCards.Contains(id) && (ab["ControlledByPlayer"] is null || x.S[id].Controller == p)).ToList();
+            var owners = ab["ControlledByPlayer"] is { } cbp && cbp != "Chooser" ? Defined.Players(cbp, x) : new List<int> { p };
+            var left = candidates.Where(id => !x.Host.ChosenCards.Contains(id) && (ab["ControlledByPlayer"] is null || owners.Contains(x.S[id].Controller))).ToList();
+            if (ab["ChooseEach"] is { } each)
+            {
+                // One of each kind, a different card for each.
+                foreach (var kind in each.Split('&', StringSplitOptions.TrimEntries))
+                {
+                    var ofKind = FilterFor(x.SVarFace, kind);
+                    var options = left.Where(id => ofKind.MatchesCard(x.S[id], x) && !x.Host.ChosenCards.Contains(id)).ToList();
+                    if (options.Count == 0) continue;
+                    x.Host.ChosenCards.AddRange(x.S.Players[p].IsGoldfish ? options.Take(1) : x.Game.Decider.ChooseCards(x.Game, p, Choice.Generic, x.Host, options, 1, 1));
+                }
+                continue;
+            }
             List<int> chosen;
             if (ab["AtRandom"] == "True") { x.S.Rng.Shuffle(left); chosen = left.Take(n).ToList(); }
             else if (x.S.Players[p].IsGoldfish) chosen = left.Take(min).ToList();

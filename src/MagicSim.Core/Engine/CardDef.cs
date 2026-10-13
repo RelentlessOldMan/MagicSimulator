@@ -3,7 +3,7 @@ using MagicSim.Core.Forge;
 
 namespace MagicSim.Core.Engine;
 
-public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower, ExileSource, Draw, ExileFromBattlefield }
+public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower, ExileSource, Draw, ExileFromBattlefield, ExileAnyGraveyard }
 
 /// <summary>A non-mana cost component: "Sac&lt;1/CARDNAME&gt;", "Discard&lt;0/Hand&gt;", "PayLife&lt;2&gt;", …</summary>
 public sealed record CostPart(CostPartKind Kind, string Amount, string Valid, string Raw);
@@ -1204,6 +1204,8 @@ public static partial class CardCompiler
                 "Discard" => CostPartKind.Discard,
                 "PayLife" => CostPartKind.PayLife,
                 "ExileFromGrave" => CostPartKind.ExileFromGraveyard,
+                // "Exile [it] from a graveyard" (Academy Rector exiling itself).
+                "ExileAnyGrave" => CostPartKind.ExileAnyGraveyard,
                 "tapXType" => CostPartKind.TapUntapped,
                 "SubCounter" => CostPartKind.RemoveCounter,
                 "AddCounter" => CostPartKind.AddCounter,
@@ -1219,7 +1221,7 @@ public static partial class CardCompiler
                 _ => null,
             };
             if (kind is null) { ctx.Need("Cost:" + m.Groups[1].Value); continue; }
-            if (kind is CostPartKind.Sacrifice or CostPartKind.Discard or CostPartKind.ExileFromGraveyard or CostPartKind.TapUntapped
+            if (kind is CostPartKind.Sacrifice or CostPartKind.Discard or CostPartKind.ExileFromGraveyard or CostPartKind.ExileAnyGraveyard or CostPartKind.TapUntapped
                     or CostPartKind.ExileFromHand or CostPartKind.ReturnToHand or CostPartKind.Reveal or CostPartKind.ExileFromBattlefield
                 && valid is not ("CARDNAME" or "Hand" or "Random" or "Card" or ""))
                 Filter.Parse(valid, ctx);

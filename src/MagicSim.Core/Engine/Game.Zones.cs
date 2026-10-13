@@ -253,7 +253,8 @@ public sealed partial class Game
                 };
                 var filter = t["ValidCards"] is { } vc ? Effect.FilterFor(x.SVarFace, vc) : null;
                 var n = batch.Count(m => Triggers.ZoneMatches(t["Origin"], m.From) && Triggers.ZoneMatches(t["Destination"], m.To)
-                                         && (filter is null || filter.MatchesCard(State[m.CardId], x)));
+                                         && (filter is null || filter.MatchesCard(State[m.CardId], x))
+                                         && !Statics.TriggersDisabled(this, "ChangesZoneAll", State[m.CardId], m.From, m.To));
                 if (n == 0 || !Presence.Hold(t.P, x) || !Triggers.UnderLimit(this, src, t)) continue;
                 var times = 1 + ExtraZoneTriggers(src, "ChangesZoneAll", batch.Select(m => (State[m.CardId], m.From, m.To)));
                 for (var i = 0; i < times; i++)
@@ -427,8 +428,11 @@ public sealed partial class Game
     public void Draw(int player, int n, bool record = true)
     {
         var p = State.Players[player];
+        // "Each player can't draw more than one card each turn" (Spirit of the Labyrinth).
+        var limit = Statics.DrawLimit(this, player);
         for (var i = 0; i < n; i++)
         {
+            if (limit is { } most && State.ThisTurn.CardsDrawn.GetValueOrDefault(player) >= most) break;
             if (p.IsGoldfish)
             {
                 p.AbstractLibrary = Math.Max(0, p.AbstractLibrary - 1);
@@ -657,6 +661,8 @@ public sealed partial class Game
             foreach (var t in triggers)
             {
                 if (src.IsBlank || !Triggers.Matches(this, t, src, e) || !Triggers.UnderLimit(this, src, t)) continue;
+                // "Creatures entering or dying don't cause abilities to trigger" (Hushbringer).
+                if (e.Mode == TriggerMode.ChangesZone && e.CardId is { } movedId && Statics.TriggersDisabled(this, t.Mode, State[movedId], e.From, e.To)) continue;
                 var times = 1 + (e.Mode == TriggerMode.ChangesZone && e.CardId is { } changed ? ExtraZoneTriggers(src, "ChangesZone", new[] { (State[changed], e.From, e.To) })
                     : e.Mode is TriggerMode.SpellCast or TriggerMode.SpellCopied ? ExtraSpellTriggers(src, t.Mode, e) : 0);
                 // TriggerController$ TriggeredCardController: the creature's controller, not the granter's.
@@ -1031,6 +1037,7 @@ public sealed partial class Game
                     if (CostCandidates(part, source, player).Count < AmountOf(part, x)) return false;
                     break;
                 case CostPartKind.ExileFromGraveyard:
+                case CostPartKind.ExileAnyGraveyard:
                 case CostPartKind.ExileFromBattlefield:
                 case CostPartKind.TapUntapped:
                 case CostPartKind.ExileFromHand:
@@ -1096,6 +1103,7 @@ public sealed partial class Game
             CostPartKind.TapUntapped => State.BattlefieldCards.Where(c => c.Controller == player && !c.Tapped && c.Id != source.Id),
             CostPartKind.Discard => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
             CostPartKind.ExileFromGraveyard => State.Players[player].Graveyard.Select(id => State[id]).Where(c => c.Id != source.Id),
+            CostPartKind.ExileAnyGraveyard => State.Players.SelectMany(p => p.Graveyard).Select(id => State[id]),
             CostPartKind.ExileFromHand => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
             CostPartKind.ReturnToHand or CostPartKind.ExileFromBattlefield => State.BattlefieldCards.Where(c => c.Controller == player),
             CostPartKind.Reveal => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
@@ -1192,7 +1200,7 @@ public sealed partial class Game
                         foreach (var id in Decider.ChooseCards(this, player, Choice.Discard, source, CostCandidates(part, source, player), n, n))
                             Discard(State[id]);
                     break;
-                case CostPartKind.ExileFromGraveyard:
+                case CostPartKind.ExileFromGraveyard or CostPartKind.ExileAnyGraveyard:
                     foreach (var id in Decider.ChooseCards(this, player, Choice.ExileFromGraveyard, source, CostCandidates(part, source, player), n, n))
                     {
                         LastExiled.Add(id);

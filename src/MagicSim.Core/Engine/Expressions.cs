@@ -206,6 +206,8 @@ public sealed class Filter
             "enchanted" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Aura")),
             "equipped" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Equipment")),
             "IsGoaded" => (c, pl, x) => c is not null && c.GoadedTurn == x.S.Turn,
+            // The card a "dies" trigger is about, or else the source itself (Academy Rector's "exile it" cost).
+            "TriggeredNewCard" => (c, pl, x) => c is not null && c.Id == (x.Item.TriggeredCardId ?? x.Item.SourceId),
             // "Player.TriggeredTarget": the player the trigger is about.
             "TriggeredTarget" => (c, pl, x) => c is null && pl is not null && pl == x.Item.TriggeredPlayer,
             "faceUp" => (c, pl, x) => c is not null && !c.FaceDown,
@@ -468,6 +470,8 @@ public sealed class Amount
             });
         }
         if (name == "X") return new(text, x => negate ? -x.X : x.X);   // bare X with no SVar: the paid X
+        // "cmcEQChosen": the number chosen for the card (Sanctum Prelate).
+        if (name == "Chosen") return new(text, x => negate ? -x.Host.ChosenNumber : x.Host.ChosenNumber);
         return ParseExpression(text, ctx, depth);
     }
 
@@ -692,6 +696,7 @@ public sealed class Amount
                 case "CardPower": return new(core, x => Matching(x).Sum(card => card.Power));
                 case "CardToughness": return new(core, x => Matching(x).Sum(card => card.Toughness));
                 case "SumCMC": return new(core, x => Matching(x).Sum(card => card.ManaValue));
+                case "Colors": return new(core, x => System.Numerics.BitOperations.PopCount((uint)Matching(x).Aggregate((ColorMask)0, (all, card) => all | card.Colors)));
                 case "DifferentCardNames": return new(core, x => Matching(x).Select(card => card.Name).Distinct(StringComparer.Ordinal).Count());
                 // "For each card type among cards in your graveyard" (Emrakul, the Promised End).
                 case "CardTypes": return new(core, x => System.Numerics.BitOperations.PopCount((uint)Matching(x).Aggregate(CardType.None, (all, card) => all | card.Types.Types)));

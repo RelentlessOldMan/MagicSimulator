@@ -154,6 +154,8 @@ public static class Statics
     private static readonly HashSet<string> CantBeActivatedParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Activator" };
     private static readonly HashSet<string> PlayerParams = new(StringComparer.Ordinal) { "Player", "EffectZone" };
     private static readonly HashSet<string> AttackRestrictParams = new(StringComparer.Ordinal) { "MaxAttackers", "EffectZone" };
+    private static readonly HashSet<string> CantDrawParams = new(StringComparer.Ordinal) { "ValidPlayer", "DrawLimit", "EffectZone" };
+    private static readonly HashSet<string> DisableTriggersParams = new(StringComparer.Ordinal) { "ValidCause", "ValidMode", "Origin", "Destination", "EffectZone" };
     private static readonly HashSet<string> ValidPlayerParams = new(StringComparer.Ordinal) { "ValidPlayer", "EffectZone" };
     private static readonly HashSet<string> CastWithFlashParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Caster" };
     private static readonly HashSet<string> OptionalAttackCostParams = new(StringComparer.Ordinal) { "ValidCard", "Trigger", "Cost" };
@@ -214,6 +216,16 @@ public static class Statics
                 if (s["ValidSA"] is { } bsa) Triggers.ValidateActivated(bsa, ctx);
                 // "Enchanted player can't activate abilities" (Overwhelming Splendor): whoever activates fits the filter.
                 if (s["Activator"] is { } activator && activator is not ("You" or "Player")) Filter.Parse(activator, ctx);
+                break;
+            case "CantDraw":
+                own = CantDrawParams;
+                if (s["ValidPlayer"] is { } dp) Filter.Parse(dp, ctx);
+                if (s["DrawLimit"] is { } dl && !int.TryParse(dl, out _)) ctx.Need("CantDraw.DrawLimit:" + dl);
+                break;
+            case "DisableTriggers":
+                own = DisableTriggersParams;
+                if (s["ValidCause"] is { } cause) Filter.Parse(cause, ctx);
+                if (s["ValidMode"] is not { } vm || vm.Split(',').Any(m => m.Trim() is not ("ChangesZone" or "ChangesZoneAll"))) ctx.Need("DisableTriggers.ValidMode:" + s["ValidMode"]);
                 break;
             case "AttackRestrict":
                 own = AttackRestrictParams;
@@ -342,7 +354,9 @@ public static class Statics
             else Filter.Parse(parts[1], ctx);
         }
         List<TriggerDef>? keywordTriggers = null;
-        if (s["AddKeyword"] is { } kws && !kws.StartsWith("UntapAdjust:", StringComparison.Ordinal))
+        // "If an opponent would search a library, that player searches the top four cards instead": goldfish don't search.
+        if (s["AddKeyword"] is "LimitSearchLibrary" && s["Affected"] == "Player.Opponent") { }
+        else if (s["AddKeyword"] is { } kws && !kws.StartsWith("UntapAdjust:", StringComparison.Ordinal))
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
             {
                 if (Keywords.Supported.Contains(ForgeRequirements.KeywordName(k))) continue;
@@ -844,6 +858,34 @@ public static class Statics
                 if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(card, x))
                     && (st["ValidSA"] is not { } sa || Triggers.ActivatedMatches(sa, ability)) && Presence.Hold(st.P, x)) return true;
             }
+        return false;
+    }
+
+    /// <summary>How many cards <paramref name="player"/> may draw each turn: "can't draw cards" (0), "no more than one" (1), or null.</summary>
+    public static int? DrawLimit(Game g, int player)
+    {
+        int? most = null;
+        foreach (var (source, st) in Pairs(g))
+        {
+            if (st.Mode != "CantDraw" || !WorksFrom(source, st)) continue;
+            var x = ContextFor(g, source, st);
+            if (st["ValidPlayer"] is { } who && !Effect.FilterFor(x.SVarFace, who).MatchesPlayer(player, x) || !Presence.Hold(st.P, x)) continue;
+            most = Math.Min(most ?? int.MaxValue, st["DrawLimit"] is { } dl ? int.Parse(dl) : 0);
+        }
+        return most;
+    }
+
+    /// <summary>"Creatures entering or dying don't cause abilities to trigger" (Hushbringer): whether this move triggers nothing of that mode.</summary>
+    public static bool TriggersDisabled(Game g, string triggerMode, Card moved, Zone from, Zone to)
+    {
+        foreach (var (source, st) in Pairs(g))
+        {
+            if (st.Mode != "DisableTriggers" || !WorksFrom(source, st)) continue;
+            if (!st["ValidMode"]!.Split(',').Any(m => m.Trim() == triggerMode)) continue;
+            if (!Triggers.ZoneMatches(st["Origin"], from) || !Triggers.ZoneMatches(st["Destination"], to)) continue;
+            var x = ContextFor(g, source, st);
+            if ((st["ValidCause"] is not { } cause || Effect.FilterFor(x.SVarFace, cause).MatchesCard(moved, x)) && Presence.Hold(st.P, x)) return true;
+        }
         return false;
     }
 

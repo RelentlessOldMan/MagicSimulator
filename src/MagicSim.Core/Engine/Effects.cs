@@ -110,6 +110,8 @@ sealed class ManaEffect : Effect
             "AddsKeywords", "AddsKeywordsValid",
             // "… it gains haste until end of turn": keywords given this way already last until the turn ends.
             "AddsKeywordsUntil",
+            // "That spell can't be countered" (Cavern of Souls): goldfish opponents counter nothing.
+            "AddsNoCounter",
             // "When that mana is spent to cast a creature spell …, scry 1": also when paying.
             "TriggersWhenSpent" }.Concat(Presence.Params).ToArray());
 
