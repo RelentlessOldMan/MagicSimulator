@@ -59,8 +59,25 @@ public static class TypeChange
                 ctx.Need($"{what}:{w}");
     }
 
+    /// <summary>
+    /// A type line after a change. The same line changed the same way is always the same (type lines never change), and
+    /// statics are worked out again after nearly every action, so each result is made once and shared.
+    /// </summary>
     public static TypeLine Apply(TypeLine t, string? addWords, bool removeCardTypes, bool removeCreatureTypes, bool removeSupertypes, bool allCreatureTypes,
         string? removeWords = null, bool removeLandTypes = false)
+    {
+        var flags = (removeCardTypes ? 1 : 0) | (removeCreatureTypes ? 2 : 0) | (removeSupertypes ? 4 : 0) | (allCreatureTypes ? 8 : 0) | (removeLandTypes ? 16 : 0);
+        var memo = Changed.GetValue(t, static _ => new());
+        if (memo.TryGetValue((addWords, removeWords, flags), out var done)) return done;
+        return memo.GetOrAdd((addWords, removeWords, flags),
+            Compute(t, addWords, removeCardTypes, removeCreatureTypes, removeSupertypes, allCreatureTypes, removeWords, removeLandTypes));
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TypeLine,
+        System.Collections.Concurrent.ConcurrentDictionary<(string?, string?, int), TypeLine>> Changed = new();
+
+    private static TypeLine Compute(TypeLine t, string? addWords, bool removeCardTypes, bool removeCreatureTypes, bool removeSupertypes, bool allCreatureTypes,
+        string? removeWords, bool removeLandTypes)
     {
         var added = addWords is null ? null : TypeLine.Parse(addWords);
         var removed = removeWords is null ? null : TypeLine.Parse(removeWords.Replace('&', ' ').Replace(',', ' '));

@@ -143,7 +143,18 @@ public sealed class Card
     public int TimesMutated { get; set; }
 
     /// <summary>A copy effect on this permanent (Clone): its copiable values, replacing the printed card's.</summary>
-    public CardDef? CopyDef { get; set; }
+    public CardDef? CopyDef
+    {
+        get => _copyDef;
+        set
+        {
+            _copyDef = value;
+            if (value is { HasZoneStatics: true }) Interlocked.Increment(ref ZoneStaticCopies);
+        }
+    }
+    private CardDef? _copyDef;
+    /// <summary>Counts copies made of cards with graveyard or exile statics (see <see cref="GameState.MayHaveZoneStatics"/>).</summary>
+    internal static long ZoneStaticCopies;
     /// <summary>The copy effect ends at cleanup ("until end of turn").</summary>
     public bool CopyUntilCleanup { get; set; }
 
@@ -163,7 +174,7 @@ public sealed class Card
     public IReadOnlyList<AbilityDef> Activated => StaticActivated ?? CurrentFace.Activated;
     public IReadOnlyList<TriggerDef> Triggers => StaticTriggers ?? CurrentFace.Triggers;
     /// <summary>Static abilities: the card's own plus any its animations give.</summary>
-    public IEnumerable<StaticDef> Statics
+    public IReadOnlyList<StaticDef> Statics
     {
         get
         {
@@ -171,7 +182,8 @@ public sealed class Card
             var own = Animations?.Any(a => a.Ability["RemoveAllAbilities"] == "True") ?? false ? Enumerable.Empty<StaticDef>() : CurrentFace.Statics;
             return own
                 .Concat(CurrentFace.ClassLevels.Where(l => l.Level <= ClassLevel).SelectMany(l => l.Grants.Statics))
-                .Concat(Animations?.SelectMany(a => a.Ability.Grants?.Statics ?? Enumerable.Empty<StaticDef>()) ?? Enumerable.Empty<StaticDef>());
+                .Concat(Animations?.SelectMany(a => a.Ability.Grants?.Statics ?? Enumerable.Empty<StaticDef>()) ?? Enumerable.Empty<StaticDef>())
+                .ToList();
         }
     }
 
@@ -507,6 +519,27 @@ public sealed class GameState
     public GameRecord Record { get; set; } = new();
 
     public Card this[int id] => Cards[id];
+
+    /// <summary>
+    /// Whether any card in this game could have a static ability that works from the graveyard or exile. If none can,
+    /// those zones (looked at for every static check) needn't be. Worked out again when cards are added or such a card is copied.
+    /// </summary>
+    public bool MayHaveZoneStatics
+    {
+        get
+        {
+            var copies = Interlocked.Read(ref Card.ZoneStaticCopies);
+            if (Cards.Count == _zoneStaticsCards && copies == _zoneStaticsCopies) return _zoneStatics;
+            _zoneStatics = false;
+            foreach (var c in Cards)
+                if (c.Def.HasZoneStatics || c.CopyDef is { HasZoneStatics: true }) { _zoneStatics = true; break; }
+            (_zoneStaticsCards, _zoneStaticsCopies) = (Cards.Count, copies);
+            return _zoneStatics;
+        }
+    }
+    private int _zoneStaticsCards = -1;
+    private long _zoneStaticsCopies;
+    private bool _zoneStatics;
 
     public CardView BattlefieldCards => new(Battlefield, Cards);
     /// <summary>Permanents phased out (Teferi's Protection): kept, but outside the battlefield until they phase in.</summary>

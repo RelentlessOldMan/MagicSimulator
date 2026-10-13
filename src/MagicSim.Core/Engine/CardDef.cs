@@ -128,6 +128,9 @@ public sealed class StaticDef
     public FaceDef? Face { get; init; }
     /// <summary>Abilities a Continuous static gives (AddAbility$/AddTrigger$).</summary>
     public Grants? Grants { get; set; }
+    private string[]? _modes;
+    /// <summary>Whether Mode$ lists this mode (it can list several: "CantAttack,CantBlock").</summary>
+    public bool HasMode(string mode) => Array.IndexOf(_modes ??= Mode.Split(','), mode) >= 0;
     /// <summary>OptionalAttackCost: "when you do" — what happens once the cost is paid as it attacks.</summary>
     public TriggerDef? Reflexive { get; set; }
     public string? this[string key] => P[key];
@@ -249,6 +252,10 @@ public sealed class CardDef
     public required string Name { get; init; }
     public required ForgeCard Source { get; init; }
     public List<FaceDef> Faces { get; } = new();
+    private bool? _zoneStatics;
+    /// <summary>Whether any face (face-down ones too) has a static ability that works from the graveyard or exile.</summary>
+    public bool HasZoneStatics => _zoneStatics ??= Faces.Any(f => f.HasGraveyardStatic || f.HasExileStatic
+        || f.FaceDownFace is { } down && (down.HasGraveyardStatic || down.HasExileStatic));
     public string? Layout => Source.AlternateMode;
     public SortedSet<string> Missing { get; } = new(StringComparer.Ordinal);
     public bool Supported => Missing.Count == 0;

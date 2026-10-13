@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using MagicSim.Core.Forge;
 
 namespace MagicSim.Core.Engine;
@@ -439,10 +441,27 @@ public static class Statics
     public static void Apply(Game g)
     {
         var s = g.State;
-        var active = new List<(Card Source, StaticDef Static, EffectContext X)>();
-        foreach (var c in Sources(g))
-            foreach (var st in c.Statics)
+        // Kept between calls (worked out after nearly every action), unless this is somehow worked out while it's being worked out.
+        var active = g.ApplyingStatics ? new() : g.ActiveStatics ??= new();
+        active.Clear();
+        var outer = g.ApplyingStatics;
+        g.ApplyingStatics = true;
+        g.ApplyingStaticsNested = outer;
+        try { Apply(g, active); }
+        finally { g.ApplyingStatics = outer; g.ApplyingStaticsNested = false; active.Clear(); }
+    }
+
+    private static void Apply(Game g, List<(Card Source, StaticDef Static, EffectContext X)> active)
+    {
+        var s = g.State;
+        var sources = g.ApplyingStaticsNested ? new List<Card>() : g.StaticSources ??= new();
+        CollectSources(g, sources);
+        foreach (var c in sources)
+        {
+            var statics = c.Statics;
+            for (var si = 0; si < statics.Count; si++)
             {
+                var st = statics[si];
                 if (st.Mode != "Continuous" || !WorksFrom(c, st)) continue;
                 // "You may look at the top card of your library any time": that card is known.
                 if (st["MayLookAt"] is not null && c.Zone == Zone.Battlefield && s.Players[c.Controller] is { IsGoldfish: false } looker && looker.Library.Count > 0)
@@ -450,6 +469,7 @@ public static class Statics
                 // Effects on cards in other zones (may play, escape) are looked up where they matter.
                 if (st["MayPlay"] is null && st["MayLookAt"] is null && st["AffectedZone"] is null or "Battlefield" || IsColorEverywhere(st)) active.Add((c, st, ContextFor(g, c, st)));
             }
+        }
         var animated = new List<Card>();
         var leveled = new List<Card>();
         foreach (var c in s.BattlefieldCards)
@@ -575,9 +595,10 @@ public static class Statics
             if (gained.Count == 0) continue;
             foreach (var card in Affected(i))
             {
-                var list = card.StaticActivated ??= new(card.CurrentFace.Activated);
+                var list = new List<AbilityDef>(card.Activated);   // a copy: granted lists are shared (see Combine)
                 foreach (var ab in gained)
                     if (!list.Contains(ab)) list.Add(ab);
+                card.StaticActivated = list;
             }
         }
         // A land that gains a basic land type gains its mana ability (rule 305.7).
@@ -585,7 +606,7 @@ public static class Statics
             if (card.StaticTypes is { } t && t.Is(CardType.Land))
                 foreach (var sub in t.Subtypes)
                     if (CardCompiler.BasicLandMana.TryGetValue(sub, out var mana) && !card.Activated.Contains(mana))
-                        (card.StaticActivated ??= new(card.CurrentFace.Activated)).Add(mana);
+                        card.StaticActivated = Combine(card.Activated, BasicLandManaList.GetOrAdd(mana, static m => new List<AbilityDef> { m }));
 
         // Layer 7a/7b: characteristic-defining abilities and effects that set power/toughness.
         for (var i = 0; i < holding.Count; i++)
@@ -663,9 +684,27 @@ public static class Statics
     private static void Grant(Card card, Grants? grants)
     {
         if (grants is null) return;
-        if (grants.Activated.Count > 0) (card.StaticActivated ??= new(card.CurrentFace.Activated)).AddRange(grants.Activated);
-        if (grants.Triggers.Count > 0) (card.StaticTriggers ??= new(card.CurrentFace.Triggers)).AddRange(grants.Triggers);
+        if (grants.Activated.Count > 0) card.StaticActivated = Combine(card.StaticActivated ?? card.CurrentFace.Activated, grants.Activated);
+        if (grants.Triggers.Count > 0) card.StaticTriggers = Combine(card.StaticTriggers ?? card.CurrentFace.Triggers, grants.Triggers);
     }
+
+    /// <summary>
+    /// Abilities a card has plus abilities granted to it. The same lists always combine the same way, and statics are
+    /// worked out again after nearly every action, so each combination is made once and shared. A combined list is
+    /// never changed: whoever adds to a card's abilities copies the list first.
+    /// </summary>
+    private static List<T> Combine<T>(IReadOnlyList<T> abilities, List<T> granted)
+    {
+        var byGrant = CombinedLists.GetValue(abilities, static _ => new ConcurrentDictionary<object, object>(ReferenceEqualityComparer.Instance));
+        if (byGrant.TryGetValue(granted, out var made)) return (List<T>)made;
+        var list = new List<T>(abilities.Count + granted.Count);
+        list.AddRange(abilities);
+        list.AddRange(granted);
+        return (List<T>)byGrant.GetOrAdd(granted, list);
+    }
+
+    private static readonly ConditionalWeakTable<object, ConcurrentDictionary<object, object>> CombinedLists = new();
+    private static readonly ConcurrentDictionary<AbilityDef, List<AbilityDef>> BasicLandManaList = new();
 
     /// <summary>Whether a static ability works from where its card is: the battlefield, or its EffectZone$.</summary>
     private static bool WorksFrom(Card c, StaticDef st) => c.Zone switch
@@ -684,9 +723,13 @@ public static class Statics
     {
         if (g.StaticPairs is { } cached) return cached;
         var pairs = new List<(Card, StaticDef)>();
-        foreach (var source in Sources(g))
-            foreach (var st in source.Statics)
-                pairs.Add((source, st));
+        var sources = new List<Card>();
+        CollectSources(g, sources);
+        foreach (var source in sources)
+        {
+            var statics = source.Statics;
+            for (var i = 0; i < statics.Count; i++) pairs.Add((source, statics[i]));
+        }
         if (g.CachesStaticPairs) g.StaticPairs = pairs;
         return pairs;
     }
@@ -694,17 +737,29 @@ public static class Statics
     /// <summary>Where static abilities work from: the battlefield, effects and emblems in command zones, and cards whose statics work from the graveyard.</summary>
     public static IEnumerable<Card> Sources(Game g)
     {
-        foreach (var p in g.State.Players)
-            foreach (var id in p.Graveyard)
-                if (g.State[id] is { IsBlank: false } gc && gc.CurrentFace.HasGraveyardStatic) yield return gc;
-        foreach (var p in g.State.Players)
-            foreach (var id in p.Exile)
-                if (g.State[id] is { IsBlank: false } ec && ec.CurrentFace.HasExileStatic) yield return ec;
+        var sources = new List<Card>();
+        CollectSources(g, sources);
+        return sources;
+    }
+
+    /// <summary>The <see cref="Sources"/> cards, into a list (cleared first) the caller may keep for this.</summary>
+    internal static void CollectSources(Game g, List<Card> into)
+    {
+        into.Clear();
+        if (g.State.MayHaveZoneStatics)
+        {
+            foreach (var p in g.State.Players)
+                foreach (var id in p.Graveyard)
+                    if (g.State[id] is { IsBlank: false } gc && gc.CurrentFace.HasGraveyardStatic) into.Add(gc);
+            foreach (var p in g.State.Players)
+                foreach (var id in p.Exile)
+                    if (g.State[id] is { IsBlank: false } ec && ec.CurrentFace.HasExileStatic) into.Add(ec);
+        }
         foreach (var c in g.State.BattlefieldCards)
-            if (!c.IsBlank && (c.CurrentFace.Statics.Count > 0 || c.Animations is not null || c.ClassLevel > 1)) yield return c;
+            if (!c.IsBlank && (c.CurrentFace.Statics.Count > 0 || c.Animations is not null || c.ClassLevel > 1)) into.Add(c);
         foreach (var p in g.State.Players)
             foreach (var id in p.Command)
-                if (g.State[id].IsEffect) yield return g.State[id];
+                if (g.State[id].IsEffect) into.Add(g.State[id]);
     }
 
     /// <summary>How a card outside the hand may be played: free, or for another cost instead of its mana cost.</summary>
@@ -877,15 +932,14 @@ public static class Statics
     /// <summary>"Its activated abilities can't be activated [unless they're mana abilities]".</summary>
     public static bool CantBeActivated(Game g, Card card, AbilityDef ability)
     {
-        foreach (var source in Sources(g))
-            foreach (var st in source.Statics)
-            {
-                if (!st.Mode.Split(',').Contains("CantBeActivated") || st["Activator"] == "Opponent" || !WorksFrom(source, st)) continue;
-                var x = ContextFor(g, source, st);
-                if (st["Activator"] is { } who && who is not ("You" or "Player") && !Effect.FilterFor(x.SVarFace, who).MatchesPlayer(card.Controller, x)) continue;
-                if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(card, x))
-                    && (st["ValidSA"] is not { } sa || Triggers.ActivatedMatches(sa, ability)) && Presence.Hold(st.P, x)) return true;
-            }
+        foreach (var (source, st) in Pairs(g))
+        {
+            if (!st.HasMode("CantBeActivated") || st["Activator"] == "Opponent" || !WorksFrom(source, st)) continue;
+            var x = ContextFor(g, source, st);
+            if (st["Activator"] is { } who && who is not ("You" or "Player") && !Effect.FilterFor(x.SVarFace, who).MatchesPlayer(card.Controller, x)) continue;
+            if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(card, x))
+                && (st["ValidSA"] is not { } sa || Triggers.ActivatedMatches(sa, ability)) && Presence.Hold(st.P, x)) return true;
+        }
         return false;
     }
 
@@ -956,7 +1010,7 @@ public static class Statics
         foreach (var source in Sources(g))
             foreach (var st in source.Statics)
             {
-                if (!st.Mode.Split(',').Contains("CantAttack") || st["Target"] is not null || !WorksFrom(source, st)) continue;
+                if (!st.HasMode("CantAttack") || st["Target"] is not null || !WorksFrom(source, st)) continue;
                 var x = ContextFor(g, source, st);
                 if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(creature, x)) && Presence.Hold(st.P, x)) return true;
             }

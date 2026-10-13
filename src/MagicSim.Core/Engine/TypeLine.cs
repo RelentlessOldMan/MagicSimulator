@@ -21,7 +21,12 @@ public sealed class TypeLine
 
     public bool Is(CardType t) => (Types & t) != 0;
     public bool Has(SuperType s) => (Supers & s) != 0;
-    public bool HasSubtype(string s) => Subtypes.Contains(s, StringComparer.OrdinalIgnoreCase) || AllCreatureTypes && IsCreatureType(s);
+    public bool HasSubtype(string s)
+    {
+        for (var i = 0; i < Subtypes.Count; i++)
+            if (string.Equals(Subtypes[i], s, StringComparison.OrdinalIgnoreCase)) return true;
+        return AllCreatureTypes && IsCreatureType(s);
+    }
     public bool IsPermanent => (Types & (CardType.Artifact | CardType.Creature | CardType.Enchantment | CardType.Land | CardType.Planeswalker | CardType.Battle)) != 0;
 
     public static readonly string[] BasicLandTypes = { "Plains", "Island", "Swamp", "Mountain", "Forest" };

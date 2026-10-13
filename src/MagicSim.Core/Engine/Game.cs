@@ -46,6 +46,10 @@ public sealed partial class Game
     private int _actionsThisTurn;
     /// <summary>Whether continuous effects were in force at the last <see cref="Statics.Apply"/> (lets it skip work when there are none).</summary>
     public bool StaticsApplied { get; set; }
+    /// <summary>Statics in force, reused by each <see cref="Statics.Apply"/> while it works.</summary>
+    internal List<(Card Source, StaticDef Static, EffectContext X)>? ActiveStatics;
+    internal bool ApplyingStatics, ApplyingStaticsNested;
+    internal List<Card>? StaticSources;
     /// <summary>A static gave cards off the battlefield a color (Painter's Servant): cleared when statics are applied again.</summary>
     public bool OffFieldColors { get; set; }
 
@@ -880,8 +884,9 @@ public sealed partial class Game
 
     private static bool HasAbility(Card c, Func<AbilityDef, bool> pred)
     {
-        foreach (var ab in c.Activated)
-            if (pred(ab)) return true;
+        var abilities = c.Activated;
+        for (var i = 0; i < abilities.Count; i++)
+            if (pred(abilities[i])) return true;
         return false;
     }
 
@@ -1608,8 +1613,11 @@ public sealed partial class Game
     private void CheckAscend()
     {
         foreach (var p in State.Players)
-            if (!p.CityBlessing && State.BattlefieldCards.Any(c => c.Controller == p.Index && c.HasKeyword("Ascend")))
-                GrantBlessingIfTen(p.Index);
+        {
+            if (p.CityBlessing) continue;
+            foreach (var c in State.BattlefieldCards)
+                if (c.Controller == p.Index && c.HasKeyword("Ascend")) { GrantBlessingIfTen(p.Index); break; }
+        }
     }
 
     private void GrantBlessingIfTen(int player)
@@ -1625,16 +1633,20 @@ public sealed partial class Game
     /// </summary>
     private void CheckStateTriggers()
     {
-        foreach (var c in State.BattlefieldCards.ToList())
+        List<(Card, TriggerDef)>? state = null;
+        foreach (var c in State.BattlefieldCards)
         {
             if (c.IsBlank) continue;
-            foreach (var t in c.Triggers)
-            {
-                if (t.Mode != "Always" || t.Execute is null) continue;
-                if (_pending.Any(p => p.SourceId == c.Id && p.Trigger == t) || State.Stack.Any(i => i.SourceId == c.Id && i.Ability == t.Execute)) continue;
-                var x = new EffectContext { Game = this, Ability = t.Execute, FaceOverride = t.Face, Item = new StackItem { SourceId = c.Id, Ability = t.Execute, Controller = c.Controller } };
-                if (Presence.Hold(t.P, x)) _pending.Add(new PendingTrigger(c.Id, t, new TriggerEvent(TriggerMode.Always, CardId: c.Id), c.Controller));
-            }
+            var triggers = c.Triggers;
+            for (var i = 0; i < triggers.Count; i++)
+                if (triggers[i].Mode == "Always" && triggers[i].Execute is not null) (state ??= new()).Add((c, triggers[i]));
+        }
+        if (state is null) return;
+        foreach (var (c, t) in state)
+        {
+            if (_pending.Any(p => p.SourceId == c.Id && p.Trigger == t) || State.Stack.Any(i => i.SourceId == c.Id && i.Ability == t.Execute)) continue;
+            var x = new EffectContext { Game = this, Ability = t.Execute!, FaceOverride = t.Face, Item = new StackItem { SourceId = c.Id, Ability = t.Execute!, Controller = c.Controller } };
+            if (Presence.Hold(t.P, x)) _pending.Add(new PendingTrigger(c.Id, t, new TriggerEvent(TriggerMode.Always, CardId: c.Id), c.Controller));
         }
     }
 
@@ -1779,8 +1791,65 @@ public sealed partial class Game
             else if (p.CommanderDamageTaken.Values.Any(d => d >= 21)) Lose(p, "commander damage");
             else if (p.IsGoldfish && p.AbstractLibrary <= 0) Lose(p, "decked (loses at their next draw)");
         }
-        foreach (var c in State.BattlefieldCards.ToList())
+        // A snapshot (cards leave as this goes), in a list kept for it unless a check runs inside a check.
+        var ids = _sbaChecking ? new List<int>() : _sbaIds;
+        ids.Clear();
+        ids.AddRange(State.Battlefield);
+        var outer = _sbaChecking;
+        _sbaChecking = true;
+        try { CheckPermanents(ids); }
+        finally { _sbaChecking = outer; }
+        CheckEffectLinks();
+        CheckStateTriggers();
+        CheckAscend();
+        FireZoneBatch();
+        FireDamageBatch();
+        // A Saga with all its chapters done and none still waiting to resolve is sacrificed (rule 714.4).
+        List<Card>? sagas = null;
+        var legendaries = 0;
+        foreach (var c in State.BattlefieldCards)
         {
+            if (c.CurrentFace.Chapters.Count > 0) (sagas ??= new()).Add(c);
+            if (c.Types.Has(SuperType.Legendary)) legendaries++;
+        }
+        if (sagas is not null)
+            foreach (var saga in sagas)
+                if (saga.CounterCount("LORE") >= saga.CurrentFace.Chapters.Count && !_pending.Any(t => t.SourceId == saga.Id)
+                    && !State.Stack.Any(i => i.SourceId == saga.Id && saga.CurrentFace.Chapters.Any(t => t.Execute == i.Ability || (t.Modes?.Contains(i.Ability) ?? false))))
+                    Sacrifice(saga);
+        // Legend rule (704.5j): the controller keeps one (offered newest first; a copy may be the one worth keeping).
+        if (legendaries > 1) ApplyLegendRule();
+
+        if (State.GameOver) return;
+        foreach (var p in State.Players)
+            if (p.Index != Me && !p.Lost) return;
+        Win(Me, State.Record.LastHitBy ?? "opponents eliminated");
+    }
+
+    private readonly List<int> _sbaIds = new();
+    private bool _sbaChecking;
+
+    private void ApplyLegendRule()
+    {
+        var legends = State.BattlefieldCards.Where(c => c.Types.Has(SuperType.Legendary)).GroupBy(c => (c.Controller, c.Name)).Where(g => g.Count() > 1)
+            .Where(g => !g.Any(c => Statics.IgnoresLegendRule(this, c)));
+        foreach (var grp in legends.ToList())
+        {
+            var ordered = grp.OrderByDescending(c => c.ControlledSinceTurn).ThenByDescending(c => c.Id).ToList();
+            var keep = ordered.Count == 1 || State.Players[grp.Key.Controller].IsGoldfish ? 0
+                : Decider.ChooseOption(this, grp.Key.Controller, ordered[0], ordered.Select(c => "keep " + c.Name + (c.CopyDef is not null ? $" (copy: {c.Def.Name})" : "")).ToList());
+            foreach (var old in ordered.Where((_, i) => i != keep).ToList())
+                MoveTo(old, Zone.Graveyard);
+        }
+    }
+
+    /// <summary>Creatures with lethal damage or no toughness, planeswalkers with no loyalty, Auras and Equipment attached illegally.</summary>
+    private void CheckPermanents(List<int> ids)
+    {
+        foreach (var id in ids)
+        {
+            var c = State[id];
+            if (c.Zone != Zone.Battlefield) continue;
             if (c.Types.Is(CardType.Creature))
             {
                 if (c.Toughness <= 0) MoveTo(c, Zone.Graveyard);
@@ -1801,30 +1870,6 @@ public sealed partial class Game
                 c.AttachedTo = -1;
             }
         }
-        CheckEffectLinks();
-        CheckStateTriggers();
-        CheckAscend();
-        FireZoneBatch();
-        FireDamageBatch();
-        // A Saga with all its chapters done and none still waiting to resolve is sacrificed (rule 714.4).
-        foreach (var saga in State.BattlefieldCards.Where(c => c.CurrentFace.Chapters.Count > 0).ToList())
-            if (saga.CounterCount("LORE") >= saga.CurrentFace.Chapters.Count && !_pending.Any(t => t.SourceId == saga.Id)
-                && !State.Stack.Any(i => i.SourceId == saga.Id && saga.CurrentFace.Chapters.Any(t => t.Execute == i.Ability || (t.Modes?.Contains(i.Ability) ?? false))))
-                Sacrifice(saga);
-        // Legend rule (704.5j): the controller keeps one (offered newest first; a copy may be the one worth keeping).
-        var legends = State.BattlefieldCards.Where(c => c.Types.Has(SuperType.Legendary)).GroupBy(c => (c.Controller, c.Name)).Where(g => g.Count() > 1)
-            .Where(g => !g.Any(c => Statics.IgnoresLegendRule(this, c)));
-        foreach (var grp in legends.ToList())
-        {
-            var ordered = grp.OrderByDescending(c => c.ControlledSinceTurn).ThenByDescending(c => c.Id).ToList();
-            var keep = ordered.Count == 1 || State.Players[grp.Key.Controller].IsGoldfish ? 0
-                : Decider.ChooseOption(this, grp.Key.Controller, ordered[0], ordered.Select(c => "keep " + c.Name + (c.CopyDef is not null ? $" (copy: {c.Def.Name})" : "")).ToList());
-            foreach (var old in ordered.Where((_, i) => i != keep).ToList())
-                MoveTo(old, Zone.Graveyard);
-        }
-
-        if (!State.GameOver && State.Players.Where(p => p.Index != Me).All(p => p.Lost))
-            Win(Me, State.Record.LastHitBy ?? "opponents eliminated");
     }
 
     private void Lose(Player p, string reason)

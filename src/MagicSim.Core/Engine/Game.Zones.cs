@@ -366,6 +366,7 @@ public sealed partial class Game
     {
         foreach (var c in State.BattlefieldCards) EndAnimations(c, "links");
         // Earthbent lands come back tapped when they die or are exiled.
+        if (State.ReturnWhenDies.Count > 0)
         foreach (var id in State.ReturnWhenDies.ToList())
         {
             var c = State[id];
@@ -374,6 +375,7 @@ public sealed partial class Game
             if (c.Zone is Zone.Graveyard or Zone.Exile) MoveTo(c, Zone.Battlefield, tapped: true);
         }
         // "For as long as [this] remains on the battlefield / remains tapped / you control it": control goes back.
+        if (State.ControlLinks.Count > 0)
         foreach (var link in State.ControlLinks.ToList())
         {
             var (card, host) = (State[link.CardId], State[link.HostId]);
@@ -392,6 +394,7 @@ public sealed partial class Game
             }
         }
         // Cards exiled until a permanent leaves come back when it does.
+        if (State.UntilHostLeaves.Count > 0)
         foreach (var (card, host) in State.UntilHostLeaves.ToList())
         {
             if (State[host].Zone == Zone.Battlefield) continue;
@@ -399,20 +402,27 @@ public sealed partial class Game
             if (State[card].Zone == Zone.Exile) MoveTo(State[card], Zone.Battlefield);
         }
         foreach (var p in State.Players)
+        {
+            var effects = 0;
+            foreach (var id in p.Command)
+                if (State[id].IsEffect) effects++;
+            if (effects == 0) continue;
             foreach (var id in p.Command.ToList())
-            {
-                var e = State[id];
-                if (!e.IsEffect) continue;
-                if (e.EffectDuration is "UntilHostLeavesPlay" or "UntilHostLeavesPlayOrEOT" && State[e.EffectHost].Zone != Zone.Battlefield)
-                {
-                    EndEffect(e);
-                    continue;
-                }
-                if (e.ForgetOnMoved is { } fz && e.Remembered is { } rem)
-                    rem.RemoveAll(r => State[r].Zone.ToString() != fz);
-                if (e.ExileOnMoved is { } ez && e.Remembered is { } rem2 && rem2.Any(r => State[r].Zone.ToString() != ez))
-                    EndEffect(e);
-            }
+                if (State[id].IsEffect) CheckEffectLink(State[id]);
+        }
+    }
+
+    private void CheckEffectLink(Card e)
+    {
+        if (e.EffectDuration is "UntilHostLeavesPlay" or "UntilHostLeavesPlayOrEOT" && State[e.EffectHost].Zone != Zone.Battlefield)
+        {
+            EndEffect(e);
+            return;
+        }
+        if (e.ForgetOnMoved is { } fz && e.Remembered is { } rem)
+            rem.RemoveAll(r => State[r].Zone.ToString() != fz);
+        if (e.ExileOnMoved is { } ez && e.Remembered is { } rem2 && rem2.Any(r => State[r].Zone.ToString() != ez))
+            EndEffect(e);
     }
 
     /// <summary>Taps a permanent, firing "whenever this becomes tapped" triggers.</summary>
@@ -657,34 +667,24 @@ public sealed partial class Game
     {
         // Sources: permanents on the battlefield, plus the moved card itself (it "looks back"
         // for leaves-the-battlefield and "when this is put into a graveyard" triggers).
-        var sources = State.Battlefield.ToList();
+        // A list kept for this (an event happens on nearly every action), unless an event fires while one is being looked at.
+        var sources = _firing ? new List<int>() : _fireSources;
+        sources.Clear();
+        sources.AddRange(State.Battlefield);
         foreach (var p in State.Players) sources.AddRange(p.Command);
         if (e.CardId is { } moved && !sources.Contains(moved)) sources.Add(moved);
         // Cards whose triggers work from the graveyard (Nether Traitor).
         foreach (var p in State.Players)
             foreach (var id in p.Graveyard)
-                if (State[id].Triggers is { Count: > 0 } ts && ts.Any(t => t["TriggerZones"] == "Graveyard") && !sources.Contains(id)) sources.Add(id);
+                if (WorksFromGraveyard(State[id].Triggers) && !sources.Contains(id)) sources.Add(id);
         // … and from exile (Aeon Chronicler while it's suspended).
         foreach (var p in State.Players)
             foreach (var id in p.Exile)
                 if (State[id].CurrentFace.HasExileTrigger && !sources.Contains(id)) sources.Add(id);
-        foreach (var id in sources)
-        {
-            var src = State[id];
-            // A card that just left the battlefield has the triggers it had there ("when this creature dies" given by a spell).
-            var triggers = e.CardId == id && e.From == Zone.Battlefield && src.Zone != Zone.Battlefield && src.LeftTriggers is { } left ? left : src.Triggers;
-            foreach (var t in triggers)
-            {
-                if (src.IsBlank || !Triggers.Matches(this, t, src, e) || !Triggers.UnderLimit(this, src, t)) continue;
-                // "Creatures entering or dying don't cause abilities to trigger" (Hushbringer).
-                if (e.Mode == TriggerMode.ChangesZone && e.CardId is { } movedId && Statics.TriggersDisabled(this, t.Mode, State[movedId], e.From, e.To)) continue;
-                var times = 1 + (e.Mode == TriggerMode.ChangesZone && e.CardId is { } changed ? ExtraZoneTriggers(src, "ChangesZone", new[] { (State[changed], e.From, e.To) })
-                    : e.Mode is TriggerMode.SpellCast or TriggerMode.SpellCopied ? ExtraSpellTriggers(src, t.Mode, e) : 0);
-                // TriggerController$ TriggeredCardController: the creature's controller, not the granter's.
-                var controller = t["TriggerController"] is not null && e.CardId is { } tcard ? State[tcard].Controller : src.Controller;
-                for (var i = 0; i < times; i++) _pending.Add(new PendingTrigger(id, t, e, controller));
-            }
-        }
+        var outer = _firing;
+        _firing = true;
+        try { FireFrom(sources, e); }
+        finally { _firing = outer; }
         // Delayed triggers trigger once, then are gone (rule 603.7c).
         for (var i = 0; i < State.Delayed.Count; i++)
         {
@@ -694,6 +694,39 @@ public sealed partial class Game
             if (!Triggers.MatchesDelayed(this, d, e)) continue;
             State.Delayed.RemoveAt(i--);
             _pending.Add(new PendingTrigger(d.HostId, d.Trigger, e, d.Controller, d.Remembered, d.Players, d.Number));
+        }
+    }
+
+    private readonly List<int> _fireSources = new();
+    private bool _firing;
+
+    private static bool WorksFromGraveyard(IReadOnlyList<TriggerDef> triggers)
+    {
+        for (var i = 0; i < triggers.Count; i++)
+            if (triggers[i]["TriggerZones"] == "Graveyard") return true;
+        return false;
+    }
+
+    private void FireFrom(List<int> sources, TriggerEvent e)
+    {
+        foreach (var id in sources)
+        {
+            var src = State[id];
+            if (src.IsBlank) continue;
+            // A card that just left the battlefield has the triggers it had there ("when this creature dies" given by a spell).
+            var triggers = e.CardId == id && e.From == Zone.Battlefield && src.Zone != Zone.Battlefield && src.LeftTriggers is { } left ? left : src.Triggers;
+            for (var ti = 0; ti < triggers.Count; ti++)
+            {
+                var t = triggers[ti];
+                if (!Triggers.Matches(this, t, src, e) || !Triggers.UnderLimit(this, src, t)) continue;
+                // "Creatures entering or dying don't cause abilities to trigger" (Hushbringer).
+                if (e.Mode == TriggerMode.ChangesZone && e.CardId is { } movedId && Statics.TriggersDisabled(this, t.Mode, State[movedId], e.From, e.To)) continue;
+                var times = 1 + (e.Mode == TriggerMode.ChangesZone && e.CardId is { } changed ? ExtraZoneTriggers(src, "ChangesZone", new[] { (State[changed], e.From, e.To) })
+                    : e.Mode is TriggerMode.SpellCast or TriggerMode.SpellCopied ? ExtraSpellTriggers(src, t.Mode, e) : 0);
+                // TriggerController$ TriggeredCardController: the creature's controller, not the granter's.
+                var controller = t["TriggerController"] is not null && e.CardId is { } tcard ? State[tcard].Controller : src.Controller;
+                for (var i = 0; i < times; i++) _pending.Add(new PendingTrigger(id, t, e, controller));
+            }
         }
     }
 
@@ -843,7 +876,9 @@ public sealed partial class Game
         IEnumerable<Card> candidates = State.BattlefieldCards.Where(c => c.Controller == player)
             .Concat(p.Hand.Select(id => State[id]));
         // "Activated abilities of artifacts can't be activated" (Stony Silence) stops mana abilities too.
-        var anyCantActivate = Statics.Sources(this).Any(s => s.Statics.Any(st => st.Mode.Contains("CantBeActivated", StringComparison.Ordinal)));
+        var anyCantActivate = false;
+        foreach (var (_, st) in Statics.Pairs(this))
+            if (st.HasMode("CantBeActivated")) { anyCantActivate = true; break; }
         var multiplied = Replacements.AnyActive(this, "ProduceMana");
         foreach (var c in candidates)
         {
