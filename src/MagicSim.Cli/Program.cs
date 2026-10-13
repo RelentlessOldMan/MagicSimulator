@@ -191,10 +191,19 @@ public static class Program
         };
     }
 
+    /// <summary>A deck file to play: it must name a commander, so notes and lists sitting next to decks aren't played as empty decks.</summary>
+    private static Deck ReadPlayableDeck(string path)
+    {
+        var deck = DeckReader.ReadFile(path);
+        if (deck.Commanders.Count == 0)
+            throw new UsageException($"{path} has no commander (a \"1 Name *CMDR*\" line), so it isn't a deck");
+        return deck;
+    }
+
     private static (Runner.PreparedDeck Deck, string Path) LoadDeck(Options o)
     {
         var path = o.RequirePositional(1)[0];
-        var deck = DeckReader.ReadFile(path);
+        var deck = ReadPlayableDeck(path);
         var pool = new CardPool(ForgeLibrary.Load(o.Get("--forge")), CardIndex.Load(o.Get("--cards")));
         return (Runner.Prepare(deck, pool), path);
     }
@@ -209,7 +218,7 @@ public static class Program
         if (o.Positional.Count == 0) throw new UsageException("compare needs a base deck");
         var pool = new CardPool(ForgeLibrary.Load(o.Get("--forge")), CardIndex.Load(o.Get("--cards")));
         var basePath = o.Positional[0];
-        var baseDeck = DeckReader.ReadFile(basePath);
+        var baseDeck = ReadPlayableDeck(basePath);
         var variants = new List<Variant>();
         try
         {
@@ -223,7 +232,7 @@ public static class Program
             throw new UsageException(e.Message);
         }
         foreach (var path in o.Positional.Skip(1))
-            variants.Add(Core.Sim.Compare.FromDeck(baseDeck, DeckReader.ReadFile(path)));
+            variants.Add(Core.Sim.Compare.FromDeck(baseDeck, ReadPlayableDeck(path)));
         if (variants.Count == 0) throw new UsageException("compare needs --swap \"Out=>In\", --variant \"Out=>In\" or a second deck file");
 
         var basePrepared = Runner.Prepare(baseDeck, pool);

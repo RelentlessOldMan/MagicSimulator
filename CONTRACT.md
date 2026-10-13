@@ -2,7 +2,7 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.10** (2026-10-12).
+Status: **draft v0.10.1** (2026-10-12).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
@@ -17,6 +17,7 @@ Status: **draft v0.10** (2026-10-12).
 - v0.8.2: three more goldfish rules (§3): your attackers all attack the opponent with the least life, chosen as you declare them; effects on an opponent's library ("exiles the top twenty cards") take cards off their library count; and when an opponent separates cards into two piles (Fact or Fiction), they put the card with the highest mana value in a pile by itself. No field changes.
 - v0.8.3: one more goldfish rule (§3): when everyone votes (Expropriate, "will of the council"), each opponent votes for the first choice you didn't. At `1v1` that ties; at `1v1v1` they outvote you. No field changes.
 - v0.8.4: one more goldfish rule (§3): an opponent facing "loses life unless they discard" (Court of Ambition) takes the life loss unless it would kill them, and then discards if they can. No field changes.
+- v0.10.1: `run`, `replay` and `compare` refuse a file with no `*CMDR*` line (exit 2) instead of playing it as an empty deck. The search no longer picks an option whose later rollouts fell below one it dropped earlier, so results change slightly for every deck (§3). No field changes.
 - v0.10: per-game rows gain `cast_turns`, the turn of each `cast` entry (§3). `sim report` also writes a page per deck (`decks/<Deck>.html`), with its fastest and worst games, hands and plays when it finds `<Deck>.games.jsonl` next to the run JSON. New `sim batch` runs a whole folder of decks, with an optional Forge playtest, and writes the report. All additive.
 - v0.9: `compare` is built (§3). Beyond the spec it takes `--variant "Out=>In[;Out=>In]"` (repeatable, one variant each) so one call can test several variants, and each result row adds `p_value_by_turn`, `delta_cumulative_by_turn_ci95` and `p_value_mean_turn_capped`. Weighted rows use a z-test on the paired differences instead of McNemar. The document carries `sim_version`.
 - v0.8.6: every command takes `--low` (or the environment variable `MAGICSIM_LOW=1`): idle priority on a single core, one thread, and Forge games one at a time (§3). Use it for long runs on a machine someone is using. Nothing else changes.

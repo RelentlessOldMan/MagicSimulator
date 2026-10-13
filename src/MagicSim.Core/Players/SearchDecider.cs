@@ -71,12 +71,33 @@ public sealed class SearchDecider : ChoiceDecider
         var seeds = new (ulong Policy, ulong World)[_settings.Rollouts];
         for (var k = 0; k < seeds.Length; k++) seeds[k] = (_rng.NextULong(), _rng.NextULong());
         var n = d.Options.Count;
+        var bias = d.Options.Select(Bias).ToArray();
+        var (best, total, count) = Choose(n, seeds.Length, (i, k) => Rollout(i, seeds[k].Policy, seeds[k].World), bias);
+        double Score(int i) => count[i] == 0 ? double.NegativeInfinity : total[i] / count[i] + bias[i];
+        if (g.Log is not null)
+            g.Note("  search " + d.Kind + ": " + string.Join(" | ", Enumerable.Range(0, n).Where(i => count[i] > 0)
+                .OrderByDescending(i => i == best).ThenByDescending(Score).Take(6).Select(i => $"{Describe(g, d.Options[i])} {Score(i):F1}")));
+        return best;
+    }
+
+    /// <summary>
+    /// Picks one of <paramref name="n"/> options, each scored by up to <paramref name="rollouts"/> rollouts
+    /// (<paramref name="rollout"/>(option, k) is option's k-th), plus its <paramref name="bias"/>.
+    ///
+    /// Successive halving: every option gets one rollout, then only the better half goes on to the next, so the
+    /// rollouts go to the close calls rather than to options that are clearly behind. An option that wins a rollout
+    /// gets the rest at once, and one that wins them all is chosen. At the end the best-scoring option must have had
+    /// every rollout: one dropped early gets the rest when the survivors' later rollouts bring them below it, so a
+    /// survivor that loses its second rollout can't be chosen over an option that was never that bad.
+    /// </summary>
+    public static (int Best, double[] Total, int[] Count) Choose(int n, int rollouts, Func<int, int, double> rollout, double[]? bias = null)
+    {
         var total = new double[n];
         var count = new int[n];
-        double Score(int i) => count[i] == 0 ? double.NegativeInfinity : total[i] / count[i] + Bias(d.Options[i]);
+        double Score(int i) => count[i] == 0 ? double.NegativeInfinity : total[i] / count[i] + (bias?[i] ?? 0);
         bool Won(int i)
         {
-            var r = Rollout(i, seeds[count[i]].Policy, seeds[count[i]].World);
+            var r = rollout(i, count[i]);
             total[i] += r;
             count[i]++;
             return r >= WinScore;
@@ -84,27 +105,25 @@ public sealed class SearchDecider : ChoiceDecider
         // Nothing beats winning in every future tried: an option that wins its first rollout gets the rest at once.
         bool SureWin(int i)
         {
-            while (count[i] < seeds.Length)
+            while (count[i] < rollouts)
                 if (!Won(i)) return false;
             return true;
         }
 
-        // Successive halving: every option gets one rollout, then only the better half goes on to the next,
-        // so the rollouts go to the close calls rather than to options that are clearly behind.
         var alive = Enumerable.Range(0, n).ToList();
-        var best = -1;
-        for (var k = 0; k < seeds.Length && best < 0; k++)
+        for (var k = 0; k < rollouts; k++)
         {
             foreach (var i in alive)
-                if (count[i] == k && Won(i) && SureWin(i)) { best = i; break; }
-            if (best < 0 && k < seeds.Length - 1)
+                if (count[i] == k && Won(i) && SureWin(i)) return (i, total, count);
+            if (k < rollouts - 1)
                 alive = alive.OrderByDescending(Score).ThenBy(i => i).Take(Math.Max(2, (alive.Count + 1) / 2)).ToList();
         }
-        if (best < 0) best = alive.OrderByDescending(Score).ThenBy(i => i).First();
-        if (g.Log is not null)
-            g.Note("  search " + d.Kind + ": " + string.Join(" | ", Enumerable.Range(0, n).Where(i => count[i] > 0)
-                .OrderByDescending(i => i == best).ThenByDescending(Score).Take(6).Select(i => $"{Describe(g, d.Options[i])} {Score(i):F1}")));
-        return best;
+        while (true)
+        {
+            var top = Enumerable.Range(0, n).Where(i => count[i] > 0).OrderByDescending(Score).ThenBy(i => i).First();
+            if (count[top] >= rollouts) return (top, total, count);
+            if (Won(top) && SureWin(top)) return (top, total, count);
+        }
     }
 
     public static string Describe(Game g, object? option) => option switch
@@ -143,7 +162,7 @@ public sealed class SearchDecider : ChoiceDecider
         return Math.Max(best, Evaluate(sim));
     }
 
-    private const double WinScore = 1e6;
+    public const double WinScore = 1e6;
 
     /// <summary>
     /// How many actions a rollout may take. Random play that runs this long is almost always going round a loop
