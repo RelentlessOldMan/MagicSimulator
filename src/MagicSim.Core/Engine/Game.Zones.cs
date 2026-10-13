@@ -61,6 +61,7 @@ public sealed partial class Game
             c.Counters = null;
             c.TempKeywords = null;
             c.AttachedTo = -1;
+            c.EnchantedPlayer = -1;
             c.Face = 0;
             c.CopyDef = null;
             c.CopyUntilCleanup = false;
@@ -268,6 +269,8 @@ public sealed partial class Game
         var face = c.CurrentFace;
         if (face.Loyalty is { } loyalty && c.Types.Is(CardType.Planeswalker))
             AddCounters(c, "LOYALTY", Replacements.Amount(this, "AddCounter", loyalty, targetCard: c, counterType: "LOYALTY"));
+        foreach (var counters in Replacements.EntersWithCounters(this, c).ToList())
+            RunChain(new StackItem { SourceId = c.Id, Ability = counters, Controller = c.Controller, Description = c.Name + " enters" });
         if (face.EtbCounters.Count == 0 && face.EtbReplacements.Count == 0) return;
         foreach (var (kind, amount, condition) in face.EtbCounters)
         {
@@ -1074,6 +1077,9 @@ public sealed partial class Game
 
     /// <summary>How many colors of mana paid the last cost (converge).</summary>
     public int LastColorsSpent { get; private set; }
+    /// <summary>How much mana paid the last cost, and how much of it Treasures made.</summary>
+    public int LastManaSpent { get; private set; }
+    public int LastTreasureManaSpent { get; private set; }
 
     /// <summary>Permanents sacrificed to pay the last cost paid ("Sacrificed$CardPower").</summary>
     public List<int> LastSacrificed { get; } = new();
@@ -1089,6 +1095,7 @@ public sealed partial class Game
         var plan = PlanManaPayment(player, cost.Mana, x, excludeSourceFromMana ? source.Id : -1, Math.Max(0, p.Life - lifeNeeded));
         if (plan is null) return false;
 
+        LastTreasureManaSpent = plan.Count(s => State[s.Source.CardId].Types.HasSubtype("Treasure"));
         foreach (var (src, color) in plan) UseManaSource(src, color, player);
         var usable = UsableRestrictedMana(player);
         var before = p.Pool;
@@ -1096,6 +1103,7 @@ public sealed partial class Game
         var after = before;
         if (!ManaPayment.TryPay(ref after, cost.Mana, x, out var phyrexianLife)) return false;
         LastColorsSpent = ManaColors.All.Count(k => k != ManaColor.C && after[k] < before[k]);
+        LastManaSpent = before.Total - after.Total;
         SpendPools(p, usable, before, after);
         if (phyrexianLife > 0) PayLife(player, phyrexianLife);
 

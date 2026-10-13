@@ -52,7 +52,7 @@ public class ManifestAndSplitTests
         {
             var name = s[5..s.IndexOf('\n')];
             if (name == "Fire") name = "Fire // Ice";
-            Assert.Equal(name + ": ", name + ": " + string.Join("; ", Pool.Resolve(name)!.Missing));
+            Assert.Equal(name + ": ", name + ": " + string.Join("; ", Pool.Compile(name)!.Missing));
         }
     }
 

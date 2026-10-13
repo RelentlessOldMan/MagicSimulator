@@ -178,6 +178,9 @@ public sealed class Filter
             "Other" or "StrictlyOther" => (c, pl, x) => c is null || c.Id != x.Item.SourceId,
             "token" => (c, pl, x) => c is not null && c.IsToken,
             "tapped" => (c, pl, x) => c is not null && c.Tapped,
+            "faceUp" => (c, pl, x) => c is not null && !c.FaceDown,
+            "wasCastFromGraveyard" => (c, pl, x) => c is not null && c.CastFrom == Zone.Graveyard,
+            "wasCastFromExile" => (c, pl, x) => c is not null && c.CastFrom == Zone.Exile,
             "exertedThisTurn" => (c, pl, x) => c is not null && c.ExertedTurn == x.S.Turn,
             "notExertedThisTurn" => (c, pl, x) => c is not null && c.ExertedTurn != x.S.Turn,
             "attacking" => (c, pl, x) => c is not null && x.S.Attackers.Contains(c.Id),
@@ -205,7 +208,8 @@ public sealed class Filter
             _ when p.StartsWith("greatestCMC_", StringComparison.Ordinal) => GreatestManaValue(p[12..], ctx),
             "sharesNameWith Remembered" => (c, pl, x) => c is not null && x.Host.Remembered is { } rem
                 && rem.Any(id => id != c.Id && x.S[id].Name == c.Name),
-            "EquippedBy" or "EnchantedBy" or "AttachedBy" => (c, pl, x) => c is not null && x.Host.AttachedTo == c.Id,
+            "EquippedBy" or "EnchantedBy" or "AttachedBy" => (c, pl, x) => c is not null ? x.Host.AttachedTo == c.Id : pl is not null && pl == x.Host.EnchantedPlayer,
+            "EnchantedPlayerCtrl" => (c, pl, x) => c is not null && c.Controller == x.Host.EnchantedPlayer,
             "TopLibrary" => (c, pl, x) => c is not null && c.Zone == Zone.Library && x.S.Players[c.Owner].Library.FirstOrDefault(-1) == c.Id,
             "Basic" => (c, pl, x) => c is not null && c.Types.Has(SuperType.Basic),
             "Legendary" => (c, pl, x) => c is not null && c.Types.Has(SuperType.Legendary),
@@ -540,6 +544,10 @@ public sealed class Amount
         {
             case "xPaid": return new(core, x => x.X);
             case "CardPower": return new(core, x => x.Host.LastKnownPower);
+            case "ChosenNumber": return new(core, x => x.Host.ChosenNumber);
+            case "CastTotalManaSpent": return new(core, x => x.Host.ManaSpentToCast);
+            // "If an opponent lost life this turn" (Theater of Horrors): how much they lost in all.
+            case "LifeOppsLostThisTurn": return new(core, x => x.S.ThisTurn.LifeLost.Where(kv => kv.Key != x.Controller).Sum(kv => kv.Value));
             case "CardNumAttacksThisTurn": return new(core, x => x.S.ThisTurn.Attacks.GetValueOrDefault(x.Host.Id));
             case var cc when cc.StartsWith("CardCounters.", StringComparison.Ordinal):
                 var counterKind = cc[13..];
@@ -693,7 +701,7 @@ public sealed class Amount
         return null;
     }
 
-    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TargetedObjects|TriggeredCard|TriggeredSpellAbility|TriggeredSource|Remembered|RememberedLKI|Imprinted|Sacrificed|Exiled)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+)(?: (.+))?$", RegexOptions.Compiled);
+    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|TargetedObjects|TriggeredCard|TriggeredSpellAbility|TriggeredSource|Remembered|RememberedLKI|Imprinted|Sacrificed|Exiled|ReplacedCard|ReplacedCardLKI)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+|CastTotalManaSpent)(?: (.+))?$", RegexOptions.Compiled);
 
     /// <summary>"Targeted$CardPower", "Remembered$CardManaCost", "Imprinted$Valid Card.X": a property of defined cards (summed), or how many there are.</summary>
     private static Amount DefinedCardsAmount(string core, Match m, CompileContext ctx)
@@ -701,7 +709,9 @@ public sealed class Amount
         var which = m.Groups[1].Value;
         var prop = m.Groups[2].Value;
         var filter = prop == "Valid" ? Filter.Parse(m.Groups[3].Value, ctx) : null;
-        if (prop != "Valid" && m.Groups[3].Success) ctx.Need("Amount:" + core);
+        // "CastTotalManaSpent Treasure": only the mana from Treasures (Kalain).
+        var treasure = prop == "CastTotalManaSpent" && m.Groups[3].Value == "Treasure";
+        if (prop != "Valid" && m.Groups[3].Success && !treasure) ctx.Need("Amount:" + core);
         // "TargetedObjects$Amount": how many targets, players included.
         if (which == "TargetedObjects")
         {
@@ -718,6 +728,7 @@ public sealed class Amount
                 "Remembered" or "RememberedLKI" => x.Host.Remembered ?? new List<int>(),
                 "Sacrificed" => x.Item.Sacrificed ?? new List<int>(),
                 "Exiled" => x.Item.Exiled ?? new List<int>(),
+                "ReplacedCard" or "ReplacedCardLKI" => new[] { x.Item.SourceId },
                 _ => x.Host.Imprinted ?? new List<int>(),
             };
             return ids.Select(id => x.S[id]).ToList();
@@ -726,6 +737,7 @@ public sealed class Amount
         {
             _ when prop.StartsWith("CardCounters.", StringComparison.Ordinal) => new(core, x => Cards(x).Sum(c => c.CounterCount(prop[13..]))),
             "CardPower" => new(core, x => Cards(x).Sum(c => c.LastKnownPower)),
+            "CastTotalManaSpent" => new(core, x => Cards(x).Sum(c => treasure ? c.TreasureManaSpent : c.ManaSpentToCast)),
             "CardToughness" => new(core, x => Cards(x).Sum(c => c.LastKnownToughness)),
             "CardManaCost" or "CardManaCostLKI" => new(core, x => Cards(x).Sum(c => c.ManaValue)),
             "Amount" => new(core, x => Cards(x).Count + (which is "Remembered" or "RememberedLKI" ? x.Host.RememberedUnknown : 0)),
@@ -758,7 +770,11 @@ public static class Defined
         "TriggeredCardController", "TriggeredTarget", "TriggeredPlayer", "TargetedOwner", "ChosenPlayer", "Remembered", "TriggeredActivator",
         "TriggeredCardOwner", "TriggeredSourceController", "TriggeredDefendingPlayer", "Spawner>TriggeredTarget",
         "RememberedOwner", "RememberedController", "DelayTriggerRemembered", "OppNonRememberedOwner", "TriggeredAttackerController",
+        "EnchantedPlayer", AttackingOpponents,
     };
+
+    /// <summary>"Each opponent attacking that player" (Curse of Opulence): opponents of the attacker with attacking creatures.</summary>
+    private const string AttackingOpponents = "TriggeredAttackingPlayer.Opponent+controlsCreature.attacking Player.EnchantedBy";
 
     private static readonly HashSet<string> CardRefs = new(StringComparer.Ordinal)
     {
@@ -812,6 +828,8 @@ public static class Defined
             "TriggeredCardOwner" => x.Item.TriggeredCardId is { } tco ? new() { x.S[tco].Owner } : new(),
             "TriggeredSourceController" => x.Item.TriggeredSourceId is { } ts ? new() { x.S[ts].Controller } : new(),
             "ChosenPlayer" => x.Host.ChosenPlayer is { } cp ? new() { cp } : new(),
+            "EnchantedPlayer" => x.Host.EnchantedPlayer >= 0 ? new() { x.Host.EnchantedPlayer } : new(),
+            AttackingOpponents => x.S.Attackers.Select(id => x.S[id].Controller).Where(p => p != x.Controller).Distinct().ToList(),
             "Remembered" => x.Item.IteratedPlayer is { } ip ? new() { ip } : x.Host.RememberedPlayers is { } rp ? new(rp) : new(),
             "RememberedOwner" => (x.Host.Remembered ?? new()).Select(id => x.S[id].Owner).Distinct().ToList(),
             // "Each opponent who didn't [put a land onto the battlefield]": opponents who own none of the remembered cards.

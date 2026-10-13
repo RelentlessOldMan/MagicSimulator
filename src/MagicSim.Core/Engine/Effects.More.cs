@@ -293,6 +293,29 @@ sealed class ForetellEffect : Effect
     }
 }
 
+/// <summary>"Choose a number from Min to Max" (Well of Lost Dreams: how much to pay and draw).</summary>
+sealed class ChooseNumberEffect : Effect
+{
+    public override string Api => "ChooseNumber";
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "Min", "Max", "ListTitle");
+
+    public override void Validate(AbilityDef ab, CompileContext ctx)
+    {
+        if (ab["Defined"] is { } d && d != "You") ctx.Need("ChooseNumber.Defined:" + d);
+        ValidateAmount(ab, "Min", ctx);
+        if (ab["Max"] is null) ctx.Need("ChooseNumber:NoMax");
+        ValidateAmount(ab, "Max", ctx);
+    }
+
+    public override void Resolve(EffectContext x)
+    {
+        var min = Amount(x, x.Ability["Min"], 0);
+        var max = Math.Max(min, Amount(x, x.Ability["Max"], 0));
+        x.Host.ChosenNumber = Math.Max(min, x.Game.Decider.ChooseX(x.Game, x.Controller, x.Host, max));
+        x.Game.Note($"  chose {x.Host.ChosenNumber}");
+    }
+}
+
 /// <summary>"Choose a source": a card on the battlefield or the stack (prevention shields name it).</summary>
 sealed class ChooseSourceEffect : Effect
 {

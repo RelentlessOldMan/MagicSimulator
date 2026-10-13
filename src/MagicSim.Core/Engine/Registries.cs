@@ -38,6 +38,8 @@ public static class Triggers
         "NoResolvingCheck", "AILogic",
         // "If it's your main phase" on a trigger of another kind (Moraug's landfall).
         "PlayerTurn", "Phase",
+        // "If you have 40 or more life" (Felidar Sovereign): LifeTotal$ You | LifeAmount$ GE40.
+        "LifeTotal", "LifeAmount",
     };
 
     private static readonly Dictionary<string, HashSet<string>> ModeParams = new()
@@ -58,9 +60,9 @@ public static class Triggers
         ["SpellCopy"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer" },
         ["AbilityCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ValidSA" },
         ["DamageDone"] = new(StringComparer.Ordinal) { "ValidSource", "ValidTarget", "CombatDamage" },
-        ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer", "ValidAttackers" },
+        ["AttackersDeclared"] = new(StringComparer.Ordinal) { "AttackingPlayer", "ValidAttackers", "AttackedTarget" },
         ["Drawn"] = new(StringComparer.Ordinal) { "Number", "FirstCardInDrawStep" },
-        ["LandPlayed"] = new(StringComparer.Ordinal) { },
+        ["LandPlayed"] = new(StringComparer.Ordinal) { "Origin" },
         ["Discarded"] = new(StringComparer.Ordinal) { },
         ["LifeGained"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         ["Taps"] = new(StringComparer.Ordinal) { },
@@ -109,6 +111,13 @@ public static class Triggers
             && !(tz == "Graveyard" && t.Mode is not ("ChangesZoneAll" or "DamageDoneOnce" or "CounterAddedOnce")))
             ctx.Need("TriggerZones:" + tz);
         if (t["CheckDefinedPlayer"] is { } cdp) Filter.Parse(cdp, ctx);
+        if (t["AttackedTarget"] is { } atg) Filter.Parse(atg, ctx);
+        if (t["LifeTotal"] is { } lt)
+        {
+            Defined.ValidatePlayers(lt, ctx);
+            if (t["LifeAmount"] is not { Length: > 2 } la) ctx.Need("LifeAmount:" + t["LifeAmount"]);
+            else Amount.Parse(la[2..], ctx);
+        }
         if (t["Phase"] is { } ph && ph.Split(',').Any(one => one.Trim() is not ("Upkeep" or "Draw" or "Main1" or "Main2" or "End of Turn" or "End Of Turn" or "BeginCombat" or "EndCombat")))
             ctx.Need("TriggerPhase:" + ph);
     }
@@ -170,6 +179,8 @@ public static class Triggers
         if (!ModeMatches(g, t, source, e, x)) return false;
         if (t.Mode != "Phase" && t["Phase"] is { } phases && !phases.Split(',').Any(ph => Conditions.PhaseIs(g.State.Step, ph.Trim()))) return false;
         if (t["PlayerTurn"] == "True" && g.State.ActivePlayer != source.Controller) return false;
+        if (t["LifeTotal"] is { } whose && t["LifeAmount"] is { } life
+            && !Defined.Players(whose, x).All(p => Filter.Compare(g.State.Players[p].Life, life[..2], Effect.EvalAmount(x, life[2..])))) return false;
         return Presence.Hold(t.P, x);
     }
 
@@ -257,6 +268,8 @@ public static class Triggers
                 return true;
             case "AttackersDeclared" when e.Mode == TriggerMode.AttackersDeclared:
                 if (e.Player != source.Controller) return false;
+                // "Whenever enchanted player is attacked": everything attacks one player here.
+                if (t["AttackedTarget"] is { } attackedTarget && !(g.State.ThisTurn.DefendingPlayer is { } dp && FilterOf(x, attackedTarget).MatchesPlayer(dp, x))) return false;
                 return t["ValidAttackers"] is not { } va || g.State.Attackers.Any(a => FilterOf(x, va).MatchesCard(g.State[a], x));
             case "Drawn" when e.Mode == TriggerMode.Drawn && t["Number"] is { } number:
                 return int.TryParse(number, out var nthCard) && e.Amount == nthCard && CardMatches(g, t, e.CardId, x, source, e.Player);
@@ -266,6 +279,8 @@ public static class Triggers
                 return isFirst == (first == "True") && CardMatches(g, t, e.CardId, x, source, e.Player);
             }
             case "Drawn" when e.Mode == TriggerMode.Drawn:
+            case "LandPlayed" when e.Mode == TriggerMode.LandPlayed && t["Origin"] is { } landFrom && !ZoneMatches(landFrom, e.From):
+                return false;   // "whenever you play a land from exile"
             case "LandPlayed" when e.Mode == TriggerMode.LandPlayed:
             case "Discarded" when e.Mode == TriggerMode.Discarded:
             case "Taps" when e.Mode == TriggerMode.Taps:

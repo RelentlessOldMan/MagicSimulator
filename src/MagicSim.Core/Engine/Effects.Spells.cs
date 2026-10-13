@@ -54,6 +54,8 @@ sealed class PlayEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "Defined", "Valid", "ValidZone", "ValidSA", "WithoutManaCost", "Optional", "Amount", "Controller", "ForgetPlayed", "RememberPlayed",
         "ReplaceGraveyard", "ImprintPlayed",
+        // Showing the card to the player casting it changes nothing here.
+        "ShowCardToActivator",
         // Generated for miracle: cast it for its miracle cost.
         "Miracle");
 

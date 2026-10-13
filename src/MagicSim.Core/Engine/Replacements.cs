@@ -22,6 +22,8 @@ public enum ReplacementKind
     AsCascade,
     /// <summary>"You can't lose the game this turn" (Angel's Grace): the event doesn't happen.</summary>
     CantHappen,
+    /// <summary>"Other creatures you control enter with additional +1/+1 counters" (Kalain): runs as they enter.</summary>
+    EntersWithCounters,
 }
 
 /// <summary>A replacement effect (rule 614) of a permanent or effect object, other than its own "as this enters".</summary>
@@ -56,7 +58,7 @@ public static class Replacements
         ["GainLife"] = new(StringComparer.Ordinal) { "ValidPlayer" },
         // "Damage that would reduce your life total to less than 1 reduces it to 1 instead" (Angel's Grace).
         ["LifeReduced"] = new(StringComparer.Ordinal) { "ValidPlayer", "IsDamage", "Result" },
-        ["Moved"] = new(StringComparer.Ordinal) { "ValidCard", "Origin", "Destination", "ValidLKI" },
+        ["Moved"] = new(StringComparer.Ordinal) { "ValidCard", "Origin", "Destination", "ValidLKI", "ReplacementResult" },
         ["Draw"] = new(StringComparer.Ordinal) { "ValidPlayer", "NotFirstCardInDrawStep" },
     };
 
@@ -151,6 +153,11 @@ public static class Replacements
                 kind = ReplacementKind.Amount;
                 newAmount = w["Amount"];
                 break;
+            case "Moved" when r["Destination"] == "Battlefield" && r["Origin"] is null && w.Api == "PutCounter" && w["ETB"] == "True"
+                              && w["Defined"] == "ReplacedCard" && OnlyKeys(w, "ETB", "Defined", "CounterType", "CounterNum"):
+                kind = ReplacementKind.EntersWithCounters;
+                instead = CardCompiler.CompileAbility(w, ctx, AbilityKind.Sub, 0);
+                break;
             case "Moved" when r["Destination"] == "Graveyard" && w.Api == "ChangeZone" && w["Destination"] == "Exile"
                               && w["Defined"] == "ReplacedCard" && OnlyKeys(w, "Destination", "Defined", "Origin", "Hidden"):
                 kind = ReplacementKind.ExileInstead;
@@ -208,6 +215,17 @@ public static class Replacements
     {
         var terms = filter.Split(',').Where(t => !t.Trim().StartsWith("Emblem", StringComparison.Ordinal)).ToList();
         return terms.Count == 0 ? "Card" : string.Join(',', terms);
+    }
+
+    /// <summary>Another permanent's "[creatures] enter with additional counters" for <paramref name="entering"/>.</summary>
+    public static IEnumerable<AbilityDef> EntersWithCounters(Game g, Card entering)
+    {
+        foreach (var (host, r) in Active(g, "Moved"))
+        {
+            if (r.Kind != ReplacementKind.EntersWithCounters || host.Id == entering.Id) continue;
+            var x = ContextFor(g, host, r, 0);
+            if (CardOk(r, "ValidCard", entering, x) && Presence.Hold(r.P, x)) yield return r.With!;
+        }
     }
 
     /// <summary>Permanents and effect objects whose replacement effects apply now.</summary>

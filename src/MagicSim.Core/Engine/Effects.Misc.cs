@@ -252,6 +252,8 @@ sealed class RollDiceEffect : Effect
     {
         if (!int.TryParse(ab["Sides"] ?? "6", out _)) ctx.Need("RollDice.Sides:" + ab["Sides"]);
         if (ab["Amount"] is { } a && a != "1") ctx.Need("RollDice.Amount:" + a);
+        // "ResultSVar$ Result": later links read the roll as Result (stored on the card when it's rolled).
+        if (ab["ResultSVar"] is { } resultName && !ctx.Face.SVars.ContainsKey(resultName)) ctx.Face.SVars[resultName] = "Number$0";
         if (ab["ResultSubAbilities"] is not { } results) { if (ab["ResultSVar"] is null) ctx.Need("RollDice:NoResult"); return; }
         foreach (var entry in results.Split(',', StringSplitOptions.TrimEntries))
         {

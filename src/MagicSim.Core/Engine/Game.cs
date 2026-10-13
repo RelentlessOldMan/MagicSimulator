@@ -935,8 +935,9 @@ public sealed partial class Game
         State.Players[land.Controller].LandsPlayedThisTurn++;
         Note($"play {land.Name}");
         State.Record.Cast.Add(land.Def.Name);
+        var from = land.Zone;
         MoveTo(land, Zone.Battlefield);
-        Fire(new TriggerEvent(TriggerMode.LandPlayed, CardId: land.Id, Player: land.Controller));
+        Fire(new TriggerEvent(TriggerMode.LandPlayed, CardId: land.Id, From: from, Player: land.Controller));
     }
 
     /// <summary>The spell's cost: its spell ability's Cost$ (which includes any mana) or the face's mana cost, plus commander tax.</summary>
@@ -1055,6 +1056,8 @@ public sealed partial class Game
         _payingForSpell = false;
         if (!paid) throw new InvalidOperationException($"could not pay for {c.Name} after checking it was castable");
         c.ColorsSpent = LastColorsSpent;
+        c.ManaSpentToCast = LastManaSpent;
+        c.TreasureManaSpent = LastTreasureManaSpent;
         if (LastSacrificed.Count > 0) item.Sacrificed = LastSacrificed.ToList();
         if (LastExiled.Count > 0) item.Exiled = LastExiled.ToList();
         if (from == Zone.Command) c.CommandCasts++;
@@ -1383,6 +1386,12 @@ public sealed partial class Game
             {
                 var target = item.ChainTargets.FirstOrDefault()?.FirstOrDefault();
                 var targetZone = item.Ability["TgtZone"] == "Graveyard" ? Zone.Graveyard : Zone.Battlefield;
+                if (target?.Player is { } enchanted && !State.Players[enchanted].Lost)
+                {
+                    source.EnchantedPlayer = enchanted;   // "Enchant player" (curses)
+                    MoveTo(source, Zone.Battlefield);
+                    return;
+                }
                 if (target?.CardId is not { } to || State[to].Zone != targetZone)
                 {
                     Note($"  {item.Description} fizzles (no legal targets)");
@@ -1509,6 +1518,8 @@ public sealed partial class Game
                 if (ab.UnlessCostAmount is { } amount)
                     unless = new Cost { Mana = ManaCost.Zero.WithExtraGeneric(Math.Max(0, Effect.EvalAmount(ctx, amount))) };
                 var paid = PaysUnlessCost(ctx, unless);
+                // UnlessSwitched$: it happens only if the cost is paid ("you may pay {X}. If you do, draw X cards").
+                if (ab["UnlessSwitched"] == "True") paid = !paid;
                 // UnlessResolveSubs$ WhenPaid: paying skips this effect and goes on; not paying does it and stops.
                 if (ab["UnlessResolveSubs"] == "WhenPaid")
                 {
@@ -1555,7 +1566,8 @@ public sealed partial class Game
         if (PlayerFor(x, x.Ability["UnlessPayer"]) is not { } p) return false;
         if (State.Players[p].IsGoldfish) return GoldfishPaysToSurvive(x, cost, p);
         if (!CanPayCost(cost, x.Host, p, x.X, excludeSourceFromMana: false)) return false;
-        var what = x.Ability["UnlessResolveSubs"] == "WhenPaid" ? "to go on" : "to avoid " + x.Ability.Description;
+        var what = x.Ability["UnlessResolveSubs"] == "WhenPaid" ? "to go on"
+            : x.Ability["UnlessSwitched"] == "True" ? "to " + x.Ability.Description : "to avoid " + x.Ability.Description;
         if (!Decider.ChooseYesNo(this, p, x.Host, $"pay {(cost.HasNonManaParts ? string.Join(" ", cost.Parts.Select(q => q.Raw)) : cost.Mana)} {what}?")) return false;
         PayCost(cost, x.Host, p, x.X, excludeSourceFromMana: false);
         Note($"  paid to avoid: {x.Ability.Description}");
@@ -1620,7 +1632,7 @@ public sealed partial class Game
             if (c.Zone != Zone.Battlefield) continue;
             var host = c.AttachedTo >= 0 ? State[c.AttachedTo] : null;
             // "Enchant creature card in a graveyard" (Animate Dead) holds until it changes what it enchants.
-            var attachedOk = host is not null && (host.Zone == Zone.Battlefield
+            var attachedOk = c.EnchantedPlayer >= 0 && !State.Players[c.EnchantedPlayer].Lost || host is not null && (host.Zone == Zone.Battlefield
                 || host.Zone == Zone.Graveyard && c.CurrentFace.AuraSpell?["TgtZone"] == "Graveyard"
                    && !(c.Animations?.Any(a => a.Ability["RemoveKeywords"] is not null) ?? false));
             if (c.Types.HasSubtype("Aura") && !attachedOk) MoveTo(c, Zone.Graveyard);

@@ -97,7 +97,9 @@ public sealed class RolloutPolicy : ChoiceDecider
             case DecisionKind.Target:
                 if (option is null) return 0.2;
                 var t = (TargetRef)option;
-                var harmful = d.Ability is not null && Harmful.Contains(d.Ability.Api);
+                // Curses ("Enchant player" Auras marked AttachAILogic$ Curse) go on an opponent.
+                var harmful = d.Ability is not null && Harmful.Contains(d.Ability.Api)
+                    || d.Source?.CurrentFace.SVars.GetValueOrDefault("AttachAILogic") == "Curse";
                 var mine = t.Player is { } p ? p == d.Player : s[t.CardId!.Value].Controller == d.Player;
                 return harmful == mine ? 0.1 : 5;
             case DecisionKind.X:

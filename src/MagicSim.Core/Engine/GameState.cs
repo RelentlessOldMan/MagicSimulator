@@ -56,7 +56,14 @@ public sealed class Card
     /// <summary>The StoredVars entry for a remembered number ("RememberCounteredCMC$"), forgotten with the remembered objects.</summary>
     public const string RememberedNumberKey = "__RememberedNumber";
     public string? NamedCard { get; set; }
+    /// <summary>"Choose a number" (Well of Lost Dreams).</summary>
+    public int ChosenNumber { get; set; }
+    /// <summary>How much mana was spent to cast this (CastTotalManaSpent), and how much of it came from Treasures.</summary>
+    public int ManaSpentToCast { get; set; }
+    public int TreasureManaSpent { get; set; }
     public int AttachedTo { get; set; } = -1;
+    /// <summary>The player this Aura enchants (curses), or -1.</summary>
+    public int EnchantedPlayer { get; set; } = -1;
     /// <summary>The permanent entered or was cast this turn with X = this value.</summary>
     public int XPaid { get; set; }
     /// <summary>A token created with set power/toughness (TokenPower$/TokenToughness$).</summary>
@@ -207,7 +214,7 @@ public sealed class Card
         RememberedPlayers = RememberedPlayers is null ? null : new List<int>(RememberedPlayers),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
+        NamedCard = NamedCard, EnchantedPlayer = EnchantedPlayer, ChosenNumber = ChosenNumber, ManaSpentToCast = ManaSpentToCast, TreasureManaSpent = TreasureManaSpent, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
         TriggerUses = TriggerUses is null ? null : new(TriggerUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,

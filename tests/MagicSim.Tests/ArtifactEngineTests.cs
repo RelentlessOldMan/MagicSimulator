@@ -51,7 +51,7 @@ public class ArtifactEngineTests
         foreach (var s in Scripts)
         {
             var name = s[5..s.IndexOf('\n')];
-            Assert.Equal(name + ": ", name + ": " + string.Join("; ", Pool.Resolve(name)!.Missing));
+            Assert.Equal(name + ": ", name + ": " + string.Join("; ", Pool.Compile(name)!.Missing));
         }
     }
 

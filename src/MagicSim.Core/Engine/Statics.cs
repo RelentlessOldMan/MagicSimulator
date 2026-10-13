@@ -56,7 +56,7 @@ public static class Presence
     {
         if (p["IsPresent"] is { } present) Filter.Parse(present, ctx);
         if (p["PresentCompare"] is { } pc) ValidateCompare(pc, ctx);
-        if (p["PresentZone"] is { } pz && !pz.Split(',').All(z => z.Trim() is "Battlefield" or "Graveyard" or "Hand" or "Exile" or "Library"))
+        if (p["PresentZone"] is { } pz && !pz.Split(',').All(z => z.Trim() is "Battlefield" or "Graveyard" or "Hand" or "Exile" or "Library" or "Command"))
             ctx.Need("PresentZone:" + pz);
         if (p["PresentDefined"] is { } pd && pd != "Self") ctx.Need("PresentDefined:" + pd);
         if (p["CheckSVar"] is { } sv)
