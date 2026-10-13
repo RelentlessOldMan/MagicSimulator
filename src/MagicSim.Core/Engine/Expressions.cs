@@ -204,6 +204,7 @@ public sealed class Filter
                 && !x.S.BattlefieldCards.Any(o => o.Id != c.Id && o.Controller == x.Controller && o.Name == c.Name),
             "hasABasicLandType" => (c, pl, x) => c is not null && TypeLine.BasicLandTypes.Any(c.Types.HasSubtype),
             "enchanted" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Aura")),
+            "equipped" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Equipment")),
             "faceUp" => (c, pl, x) => c is not null && !c.FaceDown,
             "wasCastFromGraveyard" => (c, pl, x) => c is not null && c.CastFrom == Zone.Graveyard,
             "wasCastFromExile" => (c, pl, x) => c is not null && c.CastFrom == Zone.Exile,
@@ -554,6 +555,12 @@ public sealed class Amount
         if (kind.StartsWith("IfCastInOwnMainPhase.", StringComparison.Ordinal) && kind.Split('.') is [_, var mp1, var mp0]
             && int.TryParse(mp1, out var mainValue) && int.TryParse(mp0, out var notMainValue))
             return new(core, x => x.Host.CastInOwnMainPhase ? mainValue : notMainValue);
+        // "Count$MostCardName Land.YouCtrl": the most cards among them that share a name (Endless Atlas).
+        if (kind == "MostCardName" && arg.Length > 0)
+        {
+            var named = Filter.Parse(arg, ctx);
+            return new(core, x => x.S.BattlefieldCards.Where(c => named.MatchesCard(c, x)).GroupBy(c => c.Name).Select(grp => grp.Count()).DefaultIfEmpty(0).Max());
+        }
         // "Count$Monarch.7.2": one number if you're the monarch, another if not.
         if (kind.StartsWith("Monarch.", StringComparison.Ordinal) && kind.Split('.') is [_, var m1, var m0]
             && int.TryParse(m1, out var monarchValue) && int.TryParse(m0, out var notMonarchValue))

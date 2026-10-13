@@ -64,7 +64,7 @@ public static class Effects
         new ImmediateTriggerEffect(), new SuspendEffect(), new AmassEffect(),
         new PoisonEffect(), new ExploreEffect(), new CascadeEffect(), new DiscoverEffect(), new NinjutsuEffect(), new EarthbendEffect(),
         new MoveCounterEffect(), new GenericChoiceEffect(), new AddPhaseEffect(), new AddTurnEffect(),
-        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new DamageResolveEffect(), new FogEffect(), new AddOrRemoveCounterEffect(), new ControlPlayerEffect(), new ExchangeControlEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
+        new TapOrUntapAllEffect(), new PeekAndRevealEffect(), new SacrificeAllEffect(), new TurnFaceUpEffect(), new ManifestEffect(), new RevealEffect(), new ChooseSourceEffect(), new ForetellEffect(), new ChooseNumberEffect(), new DamageResolveEffect(), new FogEffect(), new AddOrRemoveCounterEffect(), new ControlPlayerEffect(), new ExchangeControlEffect(), new RemoveFromCombatEffect(), new ChooseCardEffect(), new ExploitEffect(), new ChangeTargetsEffect(), new InvestigateEffect(),
     }.ToDictionary(e => e.Api, StringComparer.Ordinal);
 
     public static Effect? Get(string api) => All.TryGetValue(api, out var e) ? e : null;
@@ -108,6 +108,8 @@ sealed class ManaEffect : Effect
         P(new[] { "Produced", "Amount", "ActivationZone", "RestrictValid", "Defined", "PersistentMana",
             // "If that mana is spent on a creature spell, it gains haste": applied when paying (Game.UseManaSource).
             "AddsKeywords", "AddsKeywordsValid",
+            // "… it gains haste until end of turn": keywords given this way already last until the turn ends.
+            "AddsKeywordsUntil",
             // "When that mana is spent to cast a creature spell …, scry 1": also when paying.
             "TriggersWhenSpent" }.Concat(Presence.Params).ToArray());
 
@@ -437,6 +439,8 @@ sealed class DigEffect : Effect
         "DigNum", "ChangeNum", "DestinationZone", "DestinationZone2", "LibraryPosition", "LibraryPosition2", "RestRandomOrder",
         "ChangeValid", "Optional", "AnyNumber", "Reveal", "Defined", "NoMove", "SkipReorder", "ForceRevealToController",
         "RememberChanged", "Imprint", "NoReveal",
+        // "Onto the battlefield tapped and attacking" (Winota).
+        "Tapped", "Attacking",
         // Face-down exile and who may look at it: hidden information doesn't matter against goldfish opponents.
         "ExileFaceDown", "WithMayLook");
 
@@ -473,7 +477,9 @@ sealed class DigEffect : Effect
         var pos = ab["LibraryPosition"] is { } lp ? int.Parse(lp) : -1;
         foreach (var id in chosen)
         {
-            x.Game.MoveTo(x.S[id], dest, pos);
+            x.Game.MoveTo(x.S[id], dest, pos, tapped: ab["Tapped"] == "True");
+            if (dest == Zone.Battlefield && ab["Attacking"] == "True" && x.S.Step == Step.DeclareAttackers && x.S[id].Zone == Zone.Battlefield)
+                x.S.Attackers.Add(id);
             if (dest == Zone.Exile) x.S[id].ExiledWith = x.Host.Id;
             ChangeZoneEffect.Note(x, id);
         }

@@ -318,10 +318,32 @@ public static partial class CardCompiler
         var def = new CardDef { Name = source.FullName, Source = source };
         foreach (var f in source.Faces)
             def.Faces.Add(CompileFace(f, def.Missing, tokens));
+        if (source.AlternateMode == "Split" && def.Faces.Count == 2 && def.Faces.Any(face => face.KeywordNames.Contains("Fuse"))) AddFused(def);
         // Two-faced transforming cards play their front face; other multi-face layouts need casting support first.
         if (source.AlternateMode is { } mode && mode is not ("DoubleFaced" or "Modal" or "Adventure" or "Split"))
             def.Missing.Add("Layout:" + mode);
         return def;
+    }
+
+    /// <summary>
+    /// Fuse (rule 702.102): from your hand, cast both halves as one spell for both costs. A spell ability on the left
+    /// face whose chain is the left half's followed by the right half's.
+    /// </summary>
+    private static void AddFused(CardDef def)
+    {
+        var (left, right) = (def.Faces[0], def.Faces[1]);
+        if (left.SpellAbilities.FirstOrDefault(a => a.AltCost is null) is not { } l || right.SpellAbilities.FirstOrDefault(a => a.AltCost is null) is not { } r) return;
+        var links = l.Chain().Concat(r.Chain()).Select(a => a.CloneHead()).ToList();
+        for (var i = 0; i < links.Count; i++)
+        {
+            links[i].ChainIndex = i;
+            links[i].Sub = i + 1 < links.Count ? links[i + 1] : null;
+        }
+        var fused = links[0];
+        fused.AltCost = new Cost { Mana = left.ManaCost }.Plus(new Cost { Mana = right.ManaCost });
+        fused.AltCondition = "Fuse";
+        fused.ModeDescription = "Fused";
+        left.SpellAbilities.Add(fused);
     }
 
     /// <summary>A blank version of a card: kept for its name, types and cost; it never does anything.</summary>
@@ -743,6 +765,8 @@ public static partial class CardCompiler
                 face.SVars["__BattleCry"] = "DB$ PumpAll | ValidCards$ Creature.attacking+Other | NumAtt$ +1";
                 face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ Attacks | ValidCard$ Card.Self | Execute$ __BattleCry"), ctx));
                 return true;
+            case "Fuse":
+                return true;   // the card adds its fused spell once both halves are compiled
             case "Bloodthirst":
                 // "If an opponent was dealt damage this turn, this creature enters with N +1/+1 counters on it."
                 face.SVars["__Bloodthirst"] = "Count$DamageOppsThisTurn";

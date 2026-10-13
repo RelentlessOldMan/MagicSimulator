@@ -37,7 +37,8 @@ sealed class TokenEffect : Effect
         ValidateAmount(ab, "TokenAmount", ctx);
         ValidateAmount(ab, "TokenPower", ctx);
         ValidateAmount(ab, "TokenToughness", ctx);
-        if (ab["TokenAttacking"] is { } att && att != "True") ctx.Need("Token.TokenAttacking:" + att);
+        // "Tapped and attacking that player or a planeswalker they control" (Adeline): every attacker attacks the same player here.
+        if (ab["TokenAttacking"] is { } att && att != "True" && !att.StartsWith("RememberedPlayer", StringComparison.Ordinal)) ctx.Need("Token.TokenAttacking:" + att);
         if (ab["PumpDuration"] is { } pd && pd is not ("EOT" or "EndOfTurn")) ctx.Need("Token.PumpDuration:" + pd);
         if (ab["PumpKeywords"] is { } kws)
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
@@ -64,7 +65,7 @@ sealed class TokenEffect : Effect
                         token.TempKeywords ??= new HashSet<string>(StringComparer.Ordinal);
                         foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries)) token.TempKeywords.Add(Forge.ForgeRequirements.KeywordName(k));
                     }
-                    if (ab["TokenAttacking"] == "True" && x.S.Step == Step.DeclareAttackers) x.S.Attackers.Add(token.Id);
+                    if (ab["TokenAttacking"] is not null && x.S.Step == Step.DeclareAttackers) x.S.Attackers.Add(token.Id);
                     if (ab["AtEOT"] is { } eot) x.S.ThisTurn.AtEndStep.Add((token.Id, eot));
                     // An Aura token created attached to something (a Role on a creature).
                     if (ab["AttachedTo"] is { } at && Defined.Cards(at, x).Select(id => x.S[id]).FirstOrDefault(c => c.Zone == Zone.Battlefield) is { } host)
@@ -376,6 +377,18 @@ sealed class ExchangeControlEffect : Effect
         (both[0].Controller, both[1].Controller) = (both[1].Controller, both[0].Controller);
         foreach (var c in both) c.ControlledSinceTurn = x.S.Turn;
         x.Game.Note($"  {both[0].Name} and {both[1].Name} exchange controllers");
+    }
+}
+
+/// <summary>"Remove target attacking creature from combat" (Reconnaissance).</summary>
+sealed class RemoveFromCombatEffect : CardsEffect
+{
+    public override string Api => "RemoveFromCombat";
+    public override IReadOnlySet<string> Params { get; } = P("Defined");
+
+    public override void Resolve(EffectContext x)
+    {
+        foreach (var c in Cards(x)) x.S.Attackers.Remove(c.Id);
     }
 }
 

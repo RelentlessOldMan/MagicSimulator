@@ -1087,6 +1087,8 @@ public sealed partial class Game
         "Spectacle" => State.ThisTurn.LifeLost.Any(kv => kv.Key != c.Controller && kv.Value > 0),
         // Surge: you've cast another spell this turn.
         "Surge" => State.ThisTurn.SpellsCast > 0,
+        // Fuse: both halves together, only from your hand.
+        "Fuse" => c.Zone == Zone.Hand,
         "Miracle" => c.Id == _miracleCast,
         _ => false,
     };
