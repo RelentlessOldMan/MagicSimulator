@@ -75,6 +75,13 @@ public static class Replacements
         // Preventing damage dealt to you or your permanents: goldfish opponents never deal any.
         if (evt == "DamageDone" && (r["Prevent"] == "True" || r["PreventionEffect"] == "True"))
             return r["ValidTarget"] is { } vt && vt.Split(',').All(AboutYou);
+        // "If a player would gain life, that player gains no life instead" (Sulfuric Vortex).
+        if (evt == "GainLife" && r["Prevent"] == "True" && r.Values.Keys.All(k => Common.Contains(k) || k is "ValidPlayer" or "Prevent" || Presence.Params.Contains(k)))
+        {
+            if (r["ValidPlayer"] is { } gvp) Filter.Parse(gvp, ctx);
+            face.Replacements.Add(new ReplacementDef { P = r, Event = evt, Kind = ReplacementKind.Amount, Face = face, NewAmount = "0" });
+            return true;
+        }
         // Effects on what opponents' cards do: goldfish opponents have none.
         foreach (var key in new[] { "ValidCard", "ValidLKI" })
             if (r[key] is { } ovc && ovc.Split(',').All(t => t.Contains("OppCtrl", StringComparison.Ordinal) || t.Contains("OppOwn", StringComparison.Ordinal)))

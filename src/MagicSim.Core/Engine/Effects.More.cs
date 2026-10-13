@@ -898,7 +898,8 @@ sealed class ChooseTypeEffect : Effect
 sealed class ChoosePlayerEffect : Effect
 {
     public override string Api => "ChoosePlayer";
-    public override IReadOnlySet<string> Params { get; } = P("Defined", "Choices");
+    // RememberChosen$: also remember the player (Bitter Feud chooses two: the remembered one and the chosen one).
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "Choices", "RememberChosen");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -913,6 +914,7 @@ sealed class ChoosePlayerEffect : Effect
         if (players.Count == 0) return;
         var labels = players.Select(p => $"player {p}").ToList();
         x.Host.ChosenPlayer = players[x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, labels)];
+        if (x.Ability["RememberChosen"] == "True") (x.Host.RememberedPlayers ??= new()).Add(x.Host.ChosenPlayer.Value);
     }
 }
 

@@ -83,6 +83,12 @@ public sealed class Filter
             // "Triggered.sameName", "Triggered.Other+sharesPermanentTypeWith": cards compared with the card that triggered.
             var relative = baseName == "Triggered";
             if (relative) baseName = "Card";
+            // "NonChosenPlayer": a player other than the one chosen (Bitter Feud's second choice).
+            if (baseName == "NonChosenPlayer")
+            {
+                baseName = "Player";
+                props.Add(new Prop(false, (c, pl, x) => pl is not null && pl != x.Host.ChosenPlayer));
+            }
             if (!IsKnownBase(baseName)) ctx.Need("FilterBase:" + baseName);
             if (dot >= 0)
                 foreach (var p in raw[(dot + 1)..].Split('+', StringSplitOptions.RemoveEmptyEntries))
@@ -212,7 +218,11 @@ public sealed class Filter
             "NamedCard" => (c, pl, x) => c is not null && x.Host.NamedCard is { } n && string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase),
             "isMonarch" => (c, pl, x) => pl is not null && x.S.Monarch == pl,
             "wasDealtCombatDamageThisTurnBySource" => (c, pl, x) => pl is { } dealt && x.S.ThisTurn.CombatDamagedBy.Contains((x.Host.Id, dealt)),
-            "IsRemembered" => (c, pl, x) => c is not null ? x.Host.Remembered?.Contains(c.Id) ?? false : pl is not null && pl == x.Item.IteratedPlayer,
+            "IsRemembered" => (c, pl, x) => c is not null ? x.Host.Remembered?.Contains(c.Id) ?? false
+                : pl is not null && (pl == x.Item.IteratedPlayer || (x.Host.RememberedPlayers?.Contains(pl.Value) ?? false)),
+            "RememberedPlayerCtrl" => (c, pl, x) => c is not null && (x.Host.RememberedPlayers?.Contains(c.Controller) ?? false),
+            // "A red source you control" (Torbran).
+            "RedSource" => (c, pl, x) => c is not null && (c.Colors & ManaColor.R.Mask()) != 0,
             "IsTriggerRemembered" => (c, pl, x) => c is not null && (x.Item.DelayRemembered?.Contains(c.Id) ?? false),
             "ThisTurnEntered" => (c, pl, x) => c is not null && c.Zone == Zone.Battlefield && c.EnteredTurn == x.S.Turn,
             "Historic" => (c, pl, x) => c is not null && (c.Types.Has(SuperType.Legendary) || c.Types.Is(CardType.Artifact) || c.Types.HasSubtype("Saga")),
@@ -540,6 +550,10 @@ public sealed class Amount
         if (kind.StartsWith("Revolt.", StringComparison.Ordinal) && kind.Split('.') is [_, var r1, var r0]
             && int.TryParse(r1, out var revoltValue) && int.TryParse(r0, out var noRevoltValue))
             return new(core, x => x.S.ThisTurn.PermanentLeft.Contains(x.Controller) ? revoltValue : noRevoltValue);
+        // "Count$IfCastInOwnMainPhase.3.2": one number if this spell was cast in its controller's main phase, another if not.
+        if (kind.StartsWith("IfCastInOwnMainPhase.", StringComparison.Ordinal) && kind.Split('.') is [_, var mp1, var mp0]
+            && int.TryParse(mp1, out var mainValue) && int.TryParse(mp0, out var notMainValue))
+            return new(core, x => x.Host.CastInOwnMainPhase ? mainValue : notMainValue);
         // "Count$Monarch.7.2": one number if you're the monarch, another if not.
         if (kind.StartsWith("Monarch.", StringComparison.Ordinal) && kind.Split('.') is [_, var m1, var m0]
             && int.TryParse(m1, out var monarchValue) && int.TryParse(m0, out var notMonarchValue))
@@ -678,14 +692,18 @@ public sealed class Amount
         return Const(0);
     }
 
-    private static readonly Regex PlayerCountRx = new(@"^PlayerCount(Players|Opponents|RegisteredOpponents)\$(Amount|Highest|Lowest)?(.*)$", RegexOptions.Compiled);
+    private static readonly Regex PlayerCountRx = new(@"^PlayerCount(Players|Opponents|RegisteredOpponents|Remembered)\$(Amount|Highest|Lowest)?(.*)$", RegexOptions.Compiled);
     private static readonly Regex DefinedPlayerRx = new(@"^(TargetedPlayer|You|TriggeredTarget|TriggeredPlayer|PlayerCountPropertyYou)\$(.+)$", RegexOptions.Compiled);
 
     /// <summary>"PlayerCountOpponents$Amount", "PlayerCountPlayers$HighestValidGraveyard Card.YouOwn": over a group of players, how many, the most, the least, or the total.</summary>
     private static Amount PlayerCountAmount(string core, Match m, CompileContext ctx)
     {
         var opponents = m.Groups[1].Value is "Opponents" or "RegisteredOpponents";
-        IEnumerable<int> Players(EffectContext x) => x.S.Players.Where(p => !p.Lost && (!opponents || p.Index != x.Controller)).Select(p => p.Index);
+        // "PlayerCountRemembered$LifeLostThisTurn": the player being repeated over, or the remembered players.
+        var remembered = m.Groups[1].Value == "Remembered";
+        IEnumerable<int> Players(EffectContext x) => remembered
+            ? x.Item.IteratedPlayer is { } ip ? new[] { ip } : x.Host.RememberedPlayers ?? new List<int>()
+            : x.S.Players.Where(p => !p.Lost && (!opponents || p.Index != x.Controller)).Select(p => p.Index);
         if (m.Groups[2].Value == "Amount")
         {
             if (m.Groups[3].Value.Length > 0) ctx.Need("Amount:" + core);

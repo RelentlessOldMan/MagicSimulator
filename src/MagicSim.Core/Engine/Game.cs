@@ -506,6 +506,9 @@ public sealed partial class Game
             .Where(c => c.Controller == Me && c.Types.Is(CardType.Creature) && !c.Tapped && !IsSick(c) && !c.HasKeyword("Defender") && !Statics.CantAttack(this, c))
             .Select(c => c.Id).ToList();
         var attackers = candidates.Count == 0 ? new List<int>() : Decider.ChooseAttackers(this, Me, candidates);
+        // "No more than one creature can attack each combat" (Silent Arbiter): the strongest of those chosen.
+        if (Statics.MaxAttackers(this) is { } most && attackers.Count > most)
+            attackers = attackers.OrderByDescending(id => State[id].Power).Take(most).ToList();
         if (attackers.Count == 0) return;
         State.Attackers.AddRange(attackers);
         State.ThisTurn.AttackersDeclared += attackers.Count;
@@ -1128,6 +1131,7 @@ public sealed partial class Game
         if (!paid) throw new InvalidOperationException($"could not pay for {c.Name} after checking it was castable");
         if (altGrant is { } grant) Statics.UseOnce(this, grant.Source, grant.Static);
         c.ColorsSpent = LastColorsSpent;
+        c.CastInOwnMainPhase = State.ActivePlayer == player && State.Step is Step.Main1 or Step.Main2;
         c.ManaSpentToCast = LastManaSpent;
         c.TreasureManaSpent = LastTreasureManaSpent;
         if (LastSacrificed.Count > 0) item.Sacrificed = LastSacrificed.ToList();

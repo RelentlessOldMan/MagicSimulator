@@ -89,7 +89,9 @@ sealed class AnimateEffect : Effect
     public override IReadOnlySet<string> Params { get; } = P(
         "Defined", "Types", "Power", "Toughness", "Keywords", "Colors", "OverwriteColors", "RemoveCardTypes", "RemoveCreatureTypes",
         "RemoveSuperTypes", "RemoveAllAbilities", "Abilities", "Triggers", "staticAbilities", "Duration", "AtEOT", "sVars",
-        "AddAllCreatureTypes", "RemoveKeywords");
+        "AddAllCreatureTypes", "RemoveKeywords",
+        // "If it would leave the battlefield, exile it instead" (Whip of Erebos).
+        "LeaveBattlefield");
 
     public static readonly HashSet<string> Durations = new(StringComparer.Ordinal)
     {
@@ -113,6 +115,7 @@ sealed class AnimateEffect : Effect
                 if (ForgeRequirements.KeywordName(k) != "Enchant") ctx.Need("Animate.RemoveKeywords:" + ForgeRequirements.KeywordName(k));
         if (ab["Duration"] is { } d && !Durations.Contains(d)) ctx.Need("Animate.Duration:" + d);
         if (ab["AtEOT"] is { } eot && eot is not ("Exile" or "Sacrifice")) ctx.Need("Animate.AtEOT:" + eot);
+        if (ab["LeaveBattlefield"] is { } lb && lb != "Exile") ctx.Need("Animate.LeaveBattlefield:" + lb);
         ab.Grants = Grants.Compile(ab.P, ctx, "Abilities", "Triggers", "staticAbilities");
     }
 
@@ -150,6 +153,7 @@ sealed class AnimateEffect : Effect
             if (c.Zone != Zone.Battlefield) continue;
             (c.Animations ??= new()).Add(anim);
             if (ab["AtEOT"] is { } eot) x.S.ThisTurn.AtEndStep.Add((c.Id, eot));
+            if (ab["LeaveBattlefield"] == "Exile") c.ExileIfLeaves = true;
             x.Game.Note($"  {c.Name} becomes " + string.Join(' ', new[] { power is null ? null : $"{power}/{toughness}", types }.Where(s => s is not null)));
         }
         x.Game.StaticsApplied = true;

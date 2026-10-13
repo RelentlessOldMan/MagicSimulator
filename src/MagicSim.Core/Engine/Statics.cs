@@ -121,6 +121,8 @@ public static class Statics
         "IgnoreLandWalk", "MustAttack",
         // Untapping during other players' untap steps: the simulation only plays your turns.
         "UntapOtherPlayer",
+        // Blocking never comes up against goldfish opponents.
+        "BlockRestrict",
         // "Damage can't be prevented": nothing here prevents the damage your cards deal (only goldfish opponents could).
         "CantPreventDamage",
     };
@@ -151,6 +153,7 @@ public static class Statics
     private static readonly HashSet<string> CantAttackParams = new(StringComparer.Ordinal) { "ValidCard", "EffectZone" };
     private static readonly HashSet<string> CantBeActivatedParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Activator" };
     private static readonly HashSet<string> PlayerParams = new(StringComparer.Ordinal) { "Player", "EffectZone" };
+    private static readonly HashSet<string> AttackRestrictParams = new(StringComparer.Ordinal) { "MaxAttackers", "EffectZone" };
     private static readonly HashSet<string> ValidPlayerParams = new(StringComparer.Ordinal) { "ValidPlayer", "EffectZone" };
     private static readonly HashSet<string> CastWithFlashParams = new(StringComparer.Ordinal) { "ValidCard", "ValidSA", "EffectZone", "Caster" };
     private static readonly HashSet<string> OptionalAttackCostParams = new(StringComparer.Ordinal) { "ValidCard", "Trigger", "Cost" };
@@ -211,6 +214,10 @@ public static class Statics
                 if (s["ValidSA"] is { } bsa) Triggers.ValidateActivated(bsa, ctx);
                 // "Enchanted player can't activate abilities" (Overwhelming Splendor): whoever activates fits the filter.
                 if (s["Activator"] is { } activator && activator is not ("You" or "Player")) Filter.Parse(activator, ctx);
+                break;
+            case "AttackRestrict":
+                own = AttackRestrictParams;
+                if (s["MaxAttackers"] is not { } max || !int.TryParse(max, out _)) ctx.Need("AttackRestrict.MaxAttackers:" + s["MaxAttackers"]);
                 break;
             case "CantPlayLand":
                 own = PlayerParams;
@@ -837,6 +844,16 @@ public static class Statics
                     && (st["ValidSA"] is not { } sa || Triggers.ActivatedMatches(sa, ability)) && Presence.Hold(st.P, x)) return true;
             }
         return false;
+    }
+
+    /// <summary>"No more than N creatures can attack each combat": the smallest such N, or null.</summary>
+    public static int? MaxAttackers(Game g)
+    {
+        int? most = null;
+        foreach (var (source, st) in Pairs(g))
+            if (st.Mode == "AttackRestrict" && st["ValidDefender"] is null && WorksFrom(source, st) && Presence.Hold(st.P, ContextFor(g, source, st)))
+                most = Math.Min(most ?? int.MaxValue, int.Parse(st["MaxAttackers"]!));
+        return most;
     }
 
     /// <summary>"You can't play lands" (Aggressive Mining).</summary>
