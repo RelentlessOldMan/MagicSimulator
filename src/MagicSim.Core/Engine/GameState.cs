@@ -245,6 +245,9 @@ public sealed class Player
     /// <summary>Floating mana with a spending restriction ("spend this mana only to cast creature spells").</summary>
     public List<RestrictedMana>? RestrictedPool;
     public int LandsPlayedThisTurn { get; set; }
+    /// <summary>The turns of this player's latest upkeep and the one before it (echo: "since your last upkeep").</summary>
+    public int UpkeepTurn { get; set; }
+    public int PrevUpkeepTurn { get; set; }
     public int LandDropsPerTurn { get; set; } = 1;
     /// <summary>Extra land drops from continuous effects (Exploration, Azusa).</summary>
     public int StaticLandDrops { get; set; }
@@ -288,7 +291,7 @@ public sealed class Player
 
     public Player Clone() => new()
     {
-        Index = Index, Life = Life, Poison = Poison, Counters = Counters is null ? null : new(Counters), Pool = Pool, PersistentPool = PersistentPool, RestrictedPool = RestrictedPool?.ToList(), LandsPlayedThisTurn = LandsPlayedThisTurn,
+        Index = Index, Life = Life, Poison = Poison, Counters = Counters is null ? null : new(Counters), Pool = Pool, PersistentPool = PersistentPool, RestrictedPool = RestrictedPool?.ToList(), LandsPlayedThisTurn = LandsPlayedThisTurn, UpkeepTurn = UpkeepTurn, PrevUpkeepTurn = PrevUpkeepTurn,
         LandDropsPerTurn = LandDropsPerTurn, StaticLandDrops = StaticLandDrops, StaticUntapLimits = StaticUntapLimits?.ToList(), StaticMaxHandSize = StaticMaxHandSize, StaticMaxHandSizeRaise = StaticMaxHandSizeRaise, Lost = Lost, LossReason = LossReason, AbstractLibrary = AbstractLibrary, AbstractHand = AbstractHand,
         IsGoldfish = IsGoldfish, CommanderDamageTaken = new Dictionary<int, int>(CommanderDamageTaken),
         LifePaidTotal = LifePaidTotal, DrewFromEmpty = DrewFromEmpty, KnownTop = KnownTop, CityBlessing = CityBlessing,

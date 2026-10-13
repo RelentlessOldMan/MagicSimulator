@@ -4,7 +4,9 @@ namespace MagicSim.Core.Engine;
 sealed class CopySpellAbilityEffect : Effect
 {
     public override string Api => "CopySpellAbility";
-    public override IReadOnlySet<string> Params { get; } = P("Defined", "Amount", "Controller", "MayChooseTarget", "Optional");
+    public override IReadOnlySet<string> Params { get; } = P("Defined", "Amount", "Controller", "MayChooseTarget", "Optional",
+        // "Copy the spell for each other creature you control that spell could target" (Zada).
+        "CopyForEachCanTarget");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -14,6 +16,25 @@ sealed class CopySpellAbilityEffect : Effect
         // "That player copies it" (Bonus Round): the copied spell's controller.
         if (ab["Controller"] is { } c && c is not ("You" or "TriggeredCardController")) ctx.Need("CopySpellAbility.Controller:" + c);
         ValidateAmount(ab, "Amount", ctx);
+        if (ab["CopyForEachCanTarget"] is { } each) Filter.Parse(each, ctx);
+    }
+
+    /// <summary>One copy for each other object matching <paramref name="each"/> that the spell could target, aimed at it.</summary>
+    private static void CopyForEach(EffectContext x, StackItem original, int copier, Filter each)
+    {
+        var links = original.Ability.Chain().ToList();
+        var index = links.FindIndex(a => a.TargetFilter is not null);
+        if (index < 0) return;
+        var current = original.ChainTargets.ElementAtOrDefault(index) ?? new();
+        var source = x.S[original.SourceId];
+        foreach (var t in x.Game.TargetCandidates(source, links[index], copier))
+        {
+            if (t.CardId is not { } id || current.Contains(t) || !each.MatchesCard(x.S[id], x)) continue;
+            var targets = original.ChainTargets.Select(ts => new List<TargetRef>(ts)).ToList();
+            while (targets.Count <= index) targets.Add(new());
+            targets[index] = new() { t };
+            x.Game.CopySpell(original, copier, newTargets: false, targets);
+        }
     }
 
     public override void Resolve(EffectContext x)
@@ -42,6 +63,7 @@ sealed class CopySpellAbilityEffect : Effect
                 : x.S.Stack.LastOrDefault(s => s.IsSpell && s.SourceId == id);
             if (original is null || original.IsSpell && x.S[id].Types.IsPermanent) continue;   // copies of permanent spells (tokens) aren't supported
             var copier = ab["Controller"] == "TriggeredCardController" ? original.Controller : x.Controller;
+            if (ab["CopyForEachCanTarget"] is { } each) { CopyForEach(x, original, copier, FilterFor(x.SVarFace, each)); continue; }
             for (var i = 0; i < n; i++) x.Game.CopySpell(original, copier, ab["MayChooseTarget"] == "True");
         }
     }

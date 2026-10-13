@@ -337,6 +337,8 @@ public sealed partial class Game
                 foreach (var c in LimitUntaps(untapping)) c.Tapped = false;
                 return;   // no priority in the untap step
             case Step.Upkeep:
+                State.Players[State.ActivePlayer].PrevUpkeepTurn = State.Players[State.ActivePlayer].UpkeepTurn;
+                State.Players[State.ActivePlayer].UpkeepTurn = State.Turn;
                 Suspended();
                 FirePhase("Upkeep");
                 break;
@@ -1057,6 +1059,8 @@ public sealed partial class Game
                    || c.Types.AllCreatureTypes && State.ThisTurn.CombatDamageTypes.Count > 0
                    || c.Types.Subtypes.Any(t => TypeLine.IsCreatureType(t) && State.ThisTurn.CombatDamageTypes.Contains(t)),
         "Spectacle" => State.ThisTurn.LifeLost.Any(kv => kv.Key != c.Controller && kv.Value > 0),
+        // Surge: you've cast another spell this turn.
+        "Surge" => State.ThisTurn.SpellsCast > 0,
         "Miracle" => c.Id == _miracleCast,
         _ => false,
     };
@@ -1229,10 +1233,10 @@ public sealed partial class Game
     }
 
     /// <summary>Puts a copy of a spell on the stack (rule 707.10), with new targets if allowed.</summary>
-    public void CopySpell(StackItem original, int controller, bool newTargets)
+    public void CopySpell(StackItem original, int controller, bool newTargets, List<List<TargetRef>>? givenTargets = null)
     {
         var source = State[original.SourceId];
-        var targets = original.ChainTargets.Select(t => new List<TargetRef>(t)).ToList();
+        var targets = givenTargets ?? original.ChainTargets.Select(t => new List<TargetRef>(t)).ToList();
         // "You may choose new targets for the copy" (rule 707.10c): where none are chosen, it keeps the original's.
         if (newTargets)
         {

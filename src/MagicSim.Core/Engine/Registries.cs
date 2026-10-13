@@ -18,6 +18,8 @@ public static class Keywords
         // An Aura's own enchant restriction (Animate Dead swapping its "enchant" ability).
         "Enchant",
         Game.MayNotUntap,
+        // Blocking never comes up against goldfish opponents.
+        "HIDDEN CARDNAME can't block.",
     };
 }
 
@@ -47,7 +49,8 @@ public static class Triggers
     {
         ["ChangesZone"] = new(StringComparer.Ordinal) { "Origin", "Destination" },
         ["Phase"] = new(StringComparer.Ordinal) { "Phase", "ValidPlayer" },
-        ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ActivatorThisTurnCast" },
+        // "Whenever you cast a spell that targets only [this]" (Zada): IsSingleTarget$, TargetsValid$.
+        ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ActivatorThisTurnCast", "IsSingleTarget", "TargetsValid" },
         ["CounterAddedOnce"] = new(StringComparer.Ordinal) { "CounterType", "ValidSource" },
         ["Attacks"] = new(StringComparer.Ordinal) { "Attacked", "FirstAttack" },
         ["BecomeMonarch"] = new(StringComparer.Ordinal) { "ValidPlayer" },
@@ -104,6 +107,7 @@ public static class Triggers
             else Filter.Parse(vs, ctx);
         }
         if (t["ValidTarget"] is { } vt) Filter.Parse(vt, ctx);
+        if (t["TargetsValid"] is { } tvs) Filter.Parse(tvs, ctx);
         if (t["ValidAttachment"] is { } va) Filter.Parse(va, ctx);
         if (t["ValidObject"] is { } vo) Filter.Parse(vo, ctx);
         // "Whenever a spell or ability you control counters a spell": whose spell or ability countered it.
@@ -263,6 +267,16 @@ public static class Triggers
                 if (t["CounterType"] is { } ct && ct != e.CounterType) return false;
                 if (t["ValidSource"] is { } vsrc && vsrc != "You") return false;
                 return CardMatches(g, t, e.CardId, x, source);
+            case "SpellCast" when e.Mode == TriggerMode.SpellCast && (t["IsSingleTarget"] is not null || t["TargetsValid"] is not null):
+            {
+                var spell = g.State.Stack.LastOrDefault(i => i.IsSpell && i.SourceId == e.CardId);
+                var targets = spell?.ChainTargets.SelectMany(ts => ts).Distinct().ToList() ?? new();
+                if (t["IsSingleTarget"] == "True" && targets.Count != 1) return false;
+                if (t["TargetsValid"] is { } tv && (targets.Count == 0
+                        || !targets.All(tr => tr.Player is { } tp ? FilterOf(x, tv).MatchesPlayer(tp, x) : FilterOf(x, tv).MatchesCard(g.State[tr.CardId!.Value], x))))
+                    return false;
+                return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller, x, t.Face) && CardMatches(g, t, e.CardId, x, source);
+            }
             case "SpellCast" when e.Mode == TriggerMode.SpellCast:
                 return PlayerMatches(t["ValidActivatingPlayer"], e.Player, source.Controller, x, t.Face) && CardMatches(g, t, e.CardId, x, source);
             case "Attacks" when e.Mode == TriggerMode.Attacks && t["FirstAttack"] == "True" && g.State.ThisTurn.Attacks.GetValueOrDefault(e.CardId!.Value) != 1:

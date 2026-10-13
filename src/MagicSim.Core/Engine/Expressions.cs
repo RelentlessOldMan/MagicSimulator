@@ -158,6 +158,14 @@ public sealed class Filter
             "Paired" => (c, pl, x) => c?.PairedWith is not null,
             "PairedWith" => (c, pl, x) => c is not null && c.PairedWith == x.Host.Id,
             "prowled" => (c, pl, x) => c is not null && (c.PaidOptional?.Contains("Prowl") ?? false),
+            "surged" => (c, pl, x) => c is not null && (c.PaidOptional?.Contains("Surge") ?? false),
+            // Echo: "if this came under your control since the beginning of your last upkeep".
+            "cameUnderControlSinceLastUpkeep" => (c, pl, x) => c is not null && c.ControlledSinceTurn >= x.S.Players[c.Controller].PrevUpkeepTurn,
+            // The creature an "attacks" trigger is about (Shared Animosity).
+            "TriggeredAttacker" => (c, pl, x) => c is not null && c.Id == x.Item.TriggeredCardId,
+            "sharesCreatureTypeWith TriggeredAttacker" => (c, pl, x) => c is not null && x.Item.TriggeredCardId is { } attacker && SharesCreatureType(c.Types, x.S[attacker].Types),
+            // Coat of Arms: shares a creature type with the card it's worked out for.
+            "sharesCreatureTypeWith" => (c, pl, x) => c is not null && SharesCreatureType(c.Types, x.Host.Types),
             // "If you cast it" (from your hand): the permanent came from a spell. Only you cast spells here.
             "wasCast" or "wasCastByYou" => (c, pl, x) => c is not null && c.CastFrom is not null && c.Controller == x.Controller,
             "wasCastFromHand" or "wasCastFromYourHand" or "wasCastFromYourHandByYou" => (c, pl, x) => c is not null && c.CastFrom == Zone.Hand && c.Controller == x.Controller,

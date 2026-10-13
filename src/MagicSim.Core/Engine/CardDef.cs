@@ -645,7 +645,7 @@ public static partial class CardCompiler
                 AddGenerated(face, ctx, $"AB$ Suspend | Cost$ {Part(2)} | ActivationZone$ Hand | TimeCounters$ {Part(1)}"
                     + (face.Types.Is(CardType.Instant) || face.KeywordNames.Contains("Flash") ? "" : " | SorcerySpeed$ True") + " | SpellDescription$ Suspend");
                 return true;
-            case "Prowl" or "Spectacle":
+            case "Prowl" or "Spectacle" or "Surge":
                 // Prowl: if a creature that shares a creature type with it dealt combat damage to a player this turn.
                 // Spectacle: if an opponent lost life this turn.
                 face.ConditionalCosts.Add((name, ParseCost(Part(1), ctx)));
@@ -726,6 +726,18 @@ public static partial class CardCompiler
             case "Strive":
                 if (ManaCost.Parse(Part(1)) is not { } strive) { ctx.Need("Keyword:Strive+" + Part(1)); return true; }
                 face.Strive = strive;
+                return true;
+            case "Echo":
+                // "At the beginning of your upkeep, if this came under your control since the beginning of your last upkeep,
+                // sacrifice it unless you pay its echo cost."
+                face.SVars["__Echo"] = $"DB$ Sacrifice | SacValid$ Self | UnlessCost$ {Part(1)} | UnlessPayer$ You";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ Phase | Phase$ Upkeep | ValidPlayer$ You | TriggerZones$ Battlefield"
+                    + " | IsPresent$ Card.Self+cameUnderControlSinceLastUpkeep | Execute$ __Echo"), ctx));
+                return true;
+            case "Battle cry":
+                // "Whenever this creature attacks, each other attacking creature gets +1/+0 until end of turn."
+                face.SVars["__BattleCry"] = "DB$ PumpAll | ValidCards$ Creature.attacking+Other | NumAtt$ +1";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ Attacks | ValidCard$ Card.Self | Execute$ __BattleCry"), ctx));
                 return true;
             case "Bloodthirst":
                 // "If an opponent was dealt damage this turn, this creature enters with N +1/+1 counters on it."
