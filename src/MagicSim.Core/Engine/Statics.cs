@@ -469,11 +469,13 @@ public static class Statics
         }
         foreach (var p in s.Players) { p.StaticLandDrops = 0; p.StaticMaxHandSize = null; p.StaticMaxHandSizeRaise = 0; p.StaticUntapLimits = null; }
 
-        var holding = active.Where(a => Presence.Hold(a.Static.P, a.X)).ToList();
+        var holding = new List<(Card Source, StaticDef Static, EffectContext X)>(active.Count);
+        foreach (var a in active)
+            if (Presence.Hold(a.Static.P, a.X)) holding.Add(a);
         // What an effect applies to is fixed when it first applies (rule 613.6): an effect that makes
         // noncreature artifacts into creatures still sets their power and toughness afterwards.
         var affected = new List<Card>?[holding.Count];
-        List<Card> Affected(int i) => affected[i] ??= AffectedCards(g, holding[i].Source, holding[i].Static, holding[i].X).ToList();
+        List<Card> Affected(int i) => affected[i] ??= AffectedCards(g, holding[i].Source, holding[i].Static, holding[i].X);
 
         // Layer 2: control ("you control enchanted creature"); it goes back when the effect stops.
         HashSet<int>? controlled = null;
@@ -763,31 +765,36 @@ public static class Statics
     public static Cost AltManaCost(Card c, string text) =>
         CachedCost(text.Replace("ConvertedManaCost", c.CurrentFace.ManaCost.ManaValue.ToString()), c.CurrentFace);
 
-    private static IEnumerable<Card> AffectedCards(Game g, Card source, StaticDef st, EffectContext x)
+    private static List<Card> AffectedCards(Game g, Card source, StaticDef st, EffectContext x)
     {
         var filter = st["Affected"] is { } a ? Effect.FilterFor(source.CurrentFace, a) : null;
-        IEnumerable<Card> cards;
+        var result = new List<Card>();
+        void Consider(Card c) { if (filter is null || filter.MatchesCard(c, x)) result.Add(c); }
         if (IsColorEverywhere(st))
         {
             g.OffFieldColors = true;
-            return g.State.Cards.Where(c => c.Zone is not (Zone.None or Zone.PhasedOut) && (filter is null || filter.MatchesCard(c, x))).ToList();
+            foreach (var c in g.State.Cards)
+                if (c.Zone is not (Zone.None or Zone.PhasedOut)) Consider(c);
+            return result;
         }
         switch (st["AffectedDefined"])
         {
             case "Self":
-                cards = new[] { source };
+                Consider(source);
                 break;
             case "Enchanted" or "Equipped" or "AttachedBy Self":
-                cards = source.AttachedTo >= 0 && g.State[source.AttachedTo].Zone == Zone.Battlefield
-                    ? new[] { g.State[source.AttachedTo] } : Array.Empty<Card>();
+                if (source.AttachedTo >= 0 && g.State[source.AttachedTo].Zone == Zone.Battlefield) Consider(g.State[source.AttachedTo]);
                 break;
             default:
                 if (filter is null)
-                    return st["CharacteristicDefining"] == "True" ? new[] { source } : Array.Empty<Card>();
-                cards = g.State.BattlefieldCards;
+                {
+                    if (st["CharacteristicDefining"] == "True") result.Add(source);
+                    break;
+                }
+                foreach (var id in g.State.Battlefield) Consider(g.State[id]);
                 break;
         }
-        return cards.Where(c => filter is null || filter.MatchesCard(c, x)).ToList();
+        return result;
     }
 
     /// <summary>"All cards that aren't on the battlefield, spells, and permanents are the chosen color" (Painter's Servant).</summary>

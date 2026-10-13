@@ -444,6 +444,33 @@ public sealed class TurnInfo
     };
 }
 
+/// <summary>
+/// The cards for a list of ids, in order. A struct, so a foreach over the battlefield (done for nearly every check)
+/// allocates nothing; LINQ still works on it as an <see cref="IEnumerable{Card}"/>.
+/// </summary>
+public readonly struct CardView : IEnumerable<Card>
+{
+    private readonly List<int> _ids;
+    private readonly List<Card> _cards;
+    public CardView(List<int> ids, List<Card> cards) { _ids = ids; _cards = cards; }
+
+    public Enumerator GetEnumerator() => new(_ids.GetEnumerator(), _cards);
+    IEnumerator<Card> IEnumerable<Card>.GetEnumerator() => GetEnumerator();
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+    public struct Enumerator : IEnumerator<Card>
+    {
+        private List<int>.Enumerator _ids;
+        private readonly List<Card> _cards;
+        public Enumerator(List<int>.Enumerator ids, List<Card> cards) { _ids = ids; _cards = cards; }
+        public Card Current => _cards[_ids.Current];
+        object System.Collections.IEnumerator.Current => Current;
+        public bool MoveNext() => _ids.MoveNext();
+        public void Reset() => throw new NotSupportedException();
+        public void Dispose() => _ids.Dispose();
+    }
+}
+
 /// <summary>Everything about a game in progress. <see cref="Clone"/> gives an independent copy for search.</summary>
 public sealed class GameState
 {
@@ -481,7 +508,7 @@ public sealed class GameState
 
     public Card this[int id] => Cards[id];
 
-    public IEnumerable<Card> BattlefieldCards => Battlefield.Select(id => Cards[id]);
+    public CardView BattlefieldCards => new(Battlefield, Cards);
     /// <summary>Permanents phased out (Teferi's Protection): kept, but outside the battlefield until they phase in.</summary>
     public List<int> PhasedOut { get; set; } = new();
 

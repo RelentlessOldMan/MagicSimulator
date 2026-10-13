@@ -399,25 +399,69 @@ public sealed class Filter
     /// <summary>An opponent of the controller, as the owner of unknown cards (they're only ever from goldfish libraries and hands).</summary>
     public static int SomeOpponent(EffectContext x) => x.S.Players.FirstOrDefault(p => p.Index != x.Controller)?.Index ?? -1;
 
-    public bool MatchesUnknownCard(int owner, EffectContext x) =>
-        _terms.Any(t => t.Base == "Card" && t.Props.All(p => p.OwnerTest is { } o && o(owner, x) != p.Negated));
+    public bool MatchesUnknownCard(int owner, EffectContext x)
+    {
+        foreach (var t in _terms)
+        {
+            if (t.Base != "Card") continue;
+            var all = true;
+            foreach (var p in t.Props)
+                if (p.OwnerTest is not { } o || o(owner, x) == p.Negated) { all = false; break; }
+            if (all) return true;
+        }
+        return false;
+    }
 
     /// <summary>How many cards in these zones fit (only <paramref name="player"/>'s, if given), counting goldfish opponents' hands.</summary>
     public int CountIn(IReadOnlyCollection<Zone> zones, EffectContext x, int? player = null)
     {
         var n = 0;
+        var s = x.S;
         foreach (var z in zones)
-            foreach (var c in x.Game.CardsIn(z))
-                if ((player is null || (z == Zone.Battlefield ? c.Controller : c.Owner) == player) && MatchesCard(c, x)) n++;
+            switch (z)
+            {
+                case Zone.Battlefield:
+                    foreach (var id in s.Battlefield)
+                        if ((player is null || s[id].Controller == player) && MatchesCard(s[id], x)) n++;
+                    break;
+                case Zone.Stack:
+                    foreach (var c in x.Game.CardsIn(z))
+                        if ((player is null || c.Owner == player) && MatchesCard(c, x)) n++;
+                    break;
+                default:
+                    foreach (var p in s.Players)
+                        if (player is null || p.Index == player)
+                            foreach (var id in s.ZoneList(p.Index, z))
+                                if (MatchesCard(s[id], x)) n++;
+                    break;
+            }
         if (zones.Contains(Zone.Hand))
             foreach (var p in x.S.Players)
                 if (p.IsGoldfish && (player is null || p.Index == player) && MatchesUnknownCard(p.Index, x)) n += p.AbstractHand;
         return n;
     }
 
-    public bool MatchesCard(Card c, EffectContext x) => _terms.Any(t => BaseMatchesCard(t.Base, c) && t.Props.All(p => p.Test(c, null, x) != p.Negated));
+    // Plain loops: these run for every card on every check, and closures would allocate each time.
+    public bool MatchesCard(Card c, EffectContext x)
+    {
+        foreach (var t in _terms)
+            if (BaseMatchesCard(t.Base, c) && PropsHold(t, c, null, x)) return true;
+        return false;
+    }
 
-    public bool MatchesPlayer(int player, EffectContext x) => _terms.Any(t => BaseMatchesPlayer(t.Base, player, x) && t.Props.All(p => p.Test(null, player, x) != p.Negated));
+    public bool MatchesPlayer(int player, EffectContext x)
+    {
+        foreach (var t in _terms)
+            if (BaseMatchesPlayer(t.Base, player, x) && PropsHold(t, null, player, x)) return true;
+        return false;
+    }
+
+    private static bool PropsHold(Term t, Card? c, int? player, EffectContext x)
+    {
+        foreach (var p in t.Props)
+            if (p.Test(c, player, x) == p.Negated) return false;
+        return true;
+    }
 
     public bool CanTargetPlayers => _terms.Any(t => t.Base is "Player" or "Opponent" or "You" or "Any");
     public bool CanTargetCards => _terms.Any(t => t.Base is not ("Player" or "Opponent" or "You"));

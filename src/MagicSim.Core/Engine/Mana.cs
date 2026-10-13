@@ -187,22 +187,31 @@ public static class ManaPayment
         lifePaid = 0;
         if (cost.NoCost) return false;
         var work = pool;
-        // Single-color shards have no choice: pay them first.
-        var flexible = new List<Shard>();
-        foreach (var s in cost.Shards)
+        // Single-color shards have no choice: pay them first. (Index loops: this runs for every cost the planner tries.)
+        List<Shard>? flexible = null;
+        var shards = cost.Shards;
+        for (var i = 0; i < shards.Count; i++)
         {
+            var s = shards[i];
             if (s.IsSingle && !s.Phyrexian && !s.TwoGeneric)
             {
-                var c = ManaColors.All.First(k => k.Mask() == s.Colors);
+                var c = ColorOf(s.Colors);
                 if (work[c] == 0) return false;
                 work[c]--;
             }
-            else flexible.Add(s);
+            else (flexible ??= new()).Add(s);
         }
         var generic = cost.Generic + cost.XCount * x;
-        if (!PayFlexible(ref work, flexible, 0, generic, ref lifePaid, allowLifeForPhyrexian)) return false;
+        if (flexible is null ? !PayGeneric(ref work, generic) : !PayFlexible(ref work, flexible, 0, generic, ref lifePaid, allowLifeForPhyrexian)) return false;
         pool = work;
         return true;
+    }
+
+    internal static ManaColor ColorOf(ColorMask mask)
+    {
+        foreach (var k in ManaColors.All)
+            if (k.Mask() == mask) return k;
+        throw new InvalidOperationException("not a single color: " + mask);
     }
 
     private static bool PayFlexible(ref ManaPool pool, List<Shard> shards, int i, int generic, ref int life, bool allowLife)

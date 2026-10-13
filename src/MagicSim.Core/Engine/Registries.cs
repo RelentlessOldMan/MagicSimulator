@@ -187,8 +187,24 @@ public static class Triggers
         valid.Split(',').Any(term => term.Trim().Split('.', 2) is var parts
             && (parts.Length == 1 || parts[1].Split('+').All(p => ActivatedProps[p.TrimStart('!')](ab) != p.StartsWith('!'))));
 
+    /// <summary>
+    /// The events a trigger mode can match (<see cref="ModeMatches"/> only ever matches these): checked first, so the
+    /// many triggers an event can't fire don't build a context.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ulong> ModeEvents = new(StringComparer.Ordinal);
+
+    private static bool CouldMatch(string mode, TriggerMode m) =>
+        (ModeEvents.GetOrAdd(mode, static s => s switch
+        {
+            "SpellCastOrCopy" => 1UL << (int)TriggerMode.SpellCast | 1UL << (int)TriggerMode.SpellCopied,
+            "SpellCopy" => 1UL << (int)TriggerMode.SpellCopied,
+            "AttackersDeclaredOneTarget" => 1UL << (int)TriggerMode.AttackersDeclared,
+            _ => Enum.TryParse<TriggerMode>(s, out var one) ? 1UL << (int)one : 0,
+        }) & 1UL << (int)m) != 0;
+
     public static bool Matches(Game g, TriggerDef t, Card source, TriggerEvent e)
     {
+        if (!CouldMatch(t.Mode, e.Mode)) return false;
         var x = new EffectContext
         {
             Game = g, Ability = t.Execute ?? Game.PermanentSpell,

@@ -928,13 +928,42 @@ public sealed partial class Game
         var needed = cost.ManaValue + cost.XCount * x - cost.Shards.Count(s => s.Phyrexian);
         if (pool.Total + sources.Sum(s => s.Amount) < needed) return null;
 
+        // What any payment needs at least: a mana for each symbol but phyrexian ones (which life can pay), and a mana of
+        // its color for each single-color symbol. With what the sources from i on can still make at most, a branch that
+        // can't reach that is cut, so a cost that can't be paid fails fast instead of trying every combination.
+        var least = cost.Generic + cost.XCount * x;
+        var ofColor = new int[ManaColors.All.Length];
+        foreach (var s in cost.Shards)
+        {
+            if (s.Phyrexian) continue;
+            least++;
+            if (s.IsSingle && !s.TwoGeneric) ofColor[(int)ManaPayment.ColorOf(s.Colors)]++;
+        }
+        var restTotal = new int[sources.Count + 1];
+        var restOfColor = new int[ManaColors.All.Length, sources.Count + 1];
+        for (var i = sources.Count - 1; i >= 0; i--)
+        {
+            restTotal[i] = restTotal[i + 1] + sources[i].Amount;
+            foreach (var c in ManaColors.All)
+                restOfColor[(int)c, i] = restOfColor[(int)c, i + 1] + ((sources[i].Options & c.Mask()) != 0 ? sources[i].Amount : 0);
+        }
+
         var chosen = new List<(ManaSource, ManaColor)>();
         var budget = 20000;
         return Search(0, pool, 0) ? chosen : null;
 
+        bool CanStillPay(int i, ManaPool current)
+        {
+            if (current.Total + restTotal[i] < least) return false;
+            foreach (var c in ManaColors.All)
+                if (current[c] + restOfColor[(int)c, i] < ofColor[(int)c]) return false;
+            return true;
+        }
+
         bool Search(int i, ManaPool current, int lifeSpent)
         {
             if (--budget < 0) return false;
+            if (!CanStillPay(i, current)) return false;
             var test = current;
             if (ManaPayment.TryPay(ref test, cost, x, out var life, allowLifeForPhyrexian: true) && life + lifeSpent <= spendable) return true;
             if (i >= sources.Count) return false;

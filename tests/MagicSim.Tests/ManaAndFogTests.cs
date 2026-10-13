@@ -36,6 +36,7 @@ public class ManaAndFogTests
         "Name:Brawler\nManaCost:0\nTypes:Creature Ogre\nPT:5/5\n" +
         "T:Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | ValidCard$ Card.Self | Execute$ TrigFight\n" +
         "SVar:TrigFight:DB$ Fight | Optional$ True | Defined$ Self | ValidTgts$ Creature.Other\n",
+        "Name:Twins\nManaCost:4 R R\nTypes:Creature Giant\nPT:6/6\n",
     };
 
     private static readonly CardPool Pool = new(ForgeLibrary.FromScripts(Scripts, new Dictionary<string, string>()), null);
@@ -138,5 +139,15 @@ public class ManaAndFogTests
         var h = Setup(new[] { "Brawler" }, new[] { "Bear" }, decider: new TestDecider { Choose = (game, d) => d.Kind == DecisionKind.YesNo ? 1 : null });
         Cast(h, "Brawler");
         Assert.Equal(Zone.Battlefield, h.State.Cards.First(c => c.Name == "Bear").Zone);
+    }
+
+    [Fact]
+    public void PlentyOfManaButNotTheColorsNeeded()
+    {
+        var wastes = Enumerable.Repeat("Waste", 24);
+        var g = Setup(new[] { "Twins" }, wastes.Append("Peak").ToArray());
+        Assert.False(g.CanCast(g.State[InHand(g, "Twins")], -1));
+        var h = Setup(new[] { "Twins" }, new[] { "Peak" }.Concat(wastes).Append("Peak").ToArray());
+        Assert.True(h.CanCast(h.State[InHand(h, "Twins")], -1));
     }
 }
