@@ -42,6 +42,7 @@ public sealed record GameResult
     public List<string> Notes { get; init; } = new();
     public List<string> Seen { get; init; } = new();
     public List<string> Cast { get; init; } = new();
+    public List<int> CastTurns { get; init; } = new();
     public List<string> WinCards { get; init; } = new();
 }
 
@@ -105,7 +106,7 @@ public static class Runner
             Won = won, WinTurn = won ? s.Round : null, WinLine = won ? s.WinReason : null, FailReason = fail,
             LifeEnd = me.Life, OpponentsLifeEnd = s.Players.Where(p => p.Index != Game.Me).Select(p => p.Life).ToList(),
             TurnsPlayed = s.Round, ManaByTurn = s.Record.ManaByTurn.ToList(), LifePaid = me.LifePaidTotal,
-            StormMax = s.Record.StormMax, Notes = s.Record.Notes.ToList(), Seen = seen, Cast = s.Record.Cast.ToList(),
+            StormMax = s.Record.StormMax, Notes = s.Record.Notes.ToList(), Seen = seen, Cast = s.Record.Cast.ToList(), CastTurns = s.Record.CastRounds.ToList(),
             WinCards = won ? s.Record.WinCards.ToList() : new(),
         };
     }

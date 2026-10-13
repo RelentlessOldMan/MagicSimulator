@@ -1045,6 +1045,7 @@ public sealed partial class Game
         State.Players[land.Controller].LandsPlayedThisTurn++;
         Note($"play {land.Name}");
         State.Record.Cast.Add(land.Def.Name);
+        State.Record.CastRounds.Add(State.Round);
         var from = land.Zone;
         MoveTo(land, Zone.Battlefield);
         Fire(new TriggerEvent(TriggerMode.LandPlayed, CardId: land.Id, From: from, Player: land.Controller));
@@ -1199,6 +1200,7 @@ public sealed partial class Game
         State.ThisTurn.SpellsCast++;
         State.ThisTurn.Cast.Add(c.Id);
         State.Record.Cast.Add(c.Def.Name);
+        State.Record.CastRounds.Add(State.Round);
         Note($"cast {c.Name}" + (ability.CastFaceDown ? " face down" : "") + (x > 0 ? $" (X={x})" : "") + TargetText(item) + $" — pool {State.Players[player].Pool}");
         c.FaceDown = ability.CastFaceDown;
         c.Escaped = escaped;

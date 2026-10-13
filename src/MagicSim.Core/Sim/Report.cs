@@ -177,6 +177,7 @@ public static class Report
         notes = g.Notes,
         seen = g.Seen,
         cast = g.Cast,
+        cast_turns = g.CastTurns,
         win_cards = g.Won ? g.WinCards : null,
     }, JsonLine);
 }

@@ -35,6 +35,7 @@ public static class Program
                 "run" => Run(opts),
                 "replay" => Replay(opts),
                 "compare" => CompareCommand(opts),
+                "batch" => Batch(opts),
                 "report" => HtmlReportCommand(opts),
                 "forge-setup" => await ForgeSetup(opts),
                 "forge-gauntlet" => ForgeGauntlet(opts),
@@ -295,6 +296,88 @@ public static class Program
         }
     }
 
+    /// <summary>
+    /// Every deck in the given folders or files: a run (with per-game results) each, optionally a Forge playtest each against
+    /// evenly spread opponents from the same field, then the report with a page per deck. Files without a commander are skipped.
+    /// </summary>
+    private static int Batch(Options o)
+    {
+        if (o.Positional.Count == 0) throw new UsageException("batch needs deck folders or deck files");
+        var outDir = o.Get("--out") ?? throw new UsageException("batch needs --out <folder>");
+        var opts = RunOptionsFrom(o);
+        int Int(string key, int fallback, int min)
+        {
+            if (o.Get(key) is not { } v) return fallback;
+            return int.TryParse(v, out var n) && n >= min ? n : throw new UsageException($"{key} must be an integer >= {min}");
+        }
+        var forgeGames = Int("--forge-games", 0, 0);
+        var forgeOpponents = Int("--forge-opponents", 6, 1);
+        var forgeParallel = LowPriority.Active ? OneCore(o, "--forge-parallel") : Int("--forge-parallel", 1, 1);
+
+        var decks = new List<string>();
+        foreach (var p in o.Positional)
+        {
+            if (Directory.Exists(p))
+                decks.AddRange(Directory.EnumerateFiles(p, "*.txt").Order(StringComparer.OrdinalIgnoreCase)
+                    .Where(f => !Path.GetFileNameWithoutExtension(f).EndsWith("-moxfield", StringComparison.OrdinalIgnoreCase) && Gauntlet.IsDeckFile(f)));
+            else if (File.Exists(p))
+                decks.Add(Gauntlet.IsDeckFile(p) ? p : throw new UsageException($"{p} isn't a deck (no *CMDR* line)"));
+            else throw new FileNotFoundException($"not found: {p}");
+        }
+        decks = decks.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (decks.Count == 0) throw new UsageException("no decks found (a deck is a .txt with a *CMDR* line)");
+        Directory.CreateDirectory(outDir);
+        var scripts = ForgeLibrary.Load(o.Get("--forge"));
+        var pool = new CardPool(scripts, CardIndex.Load(o.Get("--cards")));
+        Console.Error.WriteLine($"batch: {decks.Count} decks, {opts.Games} games per table, mulligan and seat" +
+                                (forgeGames > 0 ? $", Forge {forgeGames} games against each of {Math.Min(forgeOpponents, decks.Count - 1)} opponents" : ""));
+
+        var outputs = new List<string>();
+        var total = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var path in decks)
+        {
+            var deck = Runner.Prepare(DeckReader.ReadFile(path), pool);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var tableSeconds = new Dictionary<string, double>();
+            var games = Runner.Run(deck, opts, tableSeconds: tableSeconds);
+            var json = Path.Combine(outDir, deck.Name + ".json");
+            File.WriteAllText(json, JsonSerializer.Serialize(Report.RunDocument(deck, path, opts, games, tableSeconds), Report.Json) + "\n");
+            File.WriteAllLines(Path.Combine(outDir, deck.Name + ".games.jsonl"), games.Select(Report.GameLine), new System.Text.UTF8Encoding(false));
+            outputs.Add(json);
+            Console.Error.WriteLine($"  {deck.Name}: {games.Count} games in {sw.Elapsed.TotalSeconds:F0}s");
+        }
+        Console.Error.WriteLine($"goldfish done in {total.Elapsed.TotalMinutes:F1} min");
+
+        if (forgeGames > 0 && decks.Count > 1)
+        {
+            var app = ForgeApp.Load(o.Get("--forge-app"));
+            var offsets = Gauntlet.SpreadOffsets(decks.Count, forgeOpponents);
+            var gauntlet = new GauntletOptions
+            {
+                Games = forgeGames, Parallel = forgeParallel, TimeoutSeconds = Int("--timeout", 120, 1),
+                Priority = LowPriority.Active ? System.Diagnostics.ProcessPriorityClass.Idle : System.Diagnostics.ProcessPriorityClass.BelowNormal,
+            };
+            var forgeStart = System.Diagnostics.Stopwatch.StartNew();
+            for (var i = 0; i < decks.Count; i++)
+            {
+                var opponents = offsets.Select(k => decks[(i + k) % decks.Count]).ToList();
+                var result = Gauntlet.Run(app, decks[i], opponents, gauntlet, scripts, TextWriter.Null);
+                var json = Path.Combine(outDir, result.DeckName + ".forge.json");
+                File.WriteAllText(json, JsonSerializer.Serialize(GauntletReport.Document(result), JsonOut) + "\n");
+                outputs.Add(json);
+                var errors = result.Opponents.Count(m => m.Error is not null);
+                Console.Error.WriteLine($"  Forge {result.DeckName}: {result.Opponents.Sum(m => m.Games.Count)} games in {result.ElapsedSeconds:F0}s" +
+                                        (errors > 0 ? $", {errors} opponents failed" : ""));
+            }
+            Console.Error.WriteLine($"Forge done in {forgeStart.Elapsed.TotalMinutes:F1} min");
+        }
+
+        var reportArgs = outputs.Concat(new[] { "--out", Path.Combine(outDir, "report.html") }).ToArray();
+        HtmlReportCommand(Options.Parse(reportArgs));
+        Console.Error.WriteLine($"batch done in {total.Elapsed.TotalMinutes:F1} min");
+        return Ok;
+    }
+
     private static int Run(Options o)
     {
         var opts = RunOptionsFrom(o);
@@ -338,10 +421,32 @@ public static class Program
                 if (doc.TryGetProperty("schema", out var s) && s.GetString() == GauntletReport.Schema) forge.Add(doc);
             }
         }
-        var html = Core.Sim.HtmlReport.Build(runs, DateTime.Now, forge);
         var outPath = o.Get("--out") ?? "report.html";
-        File.WriteAllText(outPath, html, new System.Text.UTF8Encoding(false));
-        Console.Error.WriteLine($"wrote {outPath}");
+        var utf8 = new System.Text.UTF8Encoding(false);
+        var now = DateTime.Now;
+
+        // A page per deck in decks/ next to the report, with its fastest and worst games when its per-game file is there:
+        // <run>.games.jsonl or <deck name>.games.jsonl next to its run JSON.
+        var deckLinks = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var deckDir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outPath)) ?? ".", "decks");
+        foreach (var (run, path) in runs.Zip(runPaths))
+        {
+            var name = run.GetProperty("deck").GetProperty("name").GetString() ?? "deck";
+            var dir = Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
+            var gamesPath = new[] { Path.ChangeExtension(Path.GetFullPath(path), ".games.jsonl"), Path.Combine(dir, name + ".games.jsonl") }
+                .FirstOrDefault(File.Exists);
+            var games = gamesPath is null ? new List<Core.Sim.GameRow>() : Core.Sim.GameRow.Read(File.ReadLines(gamesPath));
+            JsonElement? deckForge = forge.Where(f => string.Equals(f.GetProperty("deck").GetProperty("name").GetString(), name,
+                StringComparison.OrdinalIgnoreCase)).Select(f => (JsonElement?)f).FirstOrDefault();
+            var file = string.Concat(name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)) + ".html";
+            Directory.CreateDirectory(deckDir);
+            File.WriteAllText(Path.Combine(deckDir, file),
+                Core.Sim.HtmlReport.BuildDeck(run, games, deckForge, now, "../" + Path.GetFileName(outPath)), utf8);
+            deckLinks[name] = "decks/" + Uri.EscapeDataString(file);
+        }
+
+        File.WriteAllText(outPath, Core.Sim.HtmlReport.Build(runs, now, forge, deckLinks), utf8);
+        Console.Error.WriteLine($"wrote {outPath}" + (deckLinks.Count > 0 ? $" and {deckLinks.Count} deck pages in {deckDir}" : ""));
         return Ok;
     }
 
@@ -432,10 +537,13 @@ public static class Program
                   [--table 1v1|1v1v1|both] [--max-turn T] [--rollouts R] [--threads N] [--json out.json] [--per-game games.jsonl]
               compare <base.txt> [--swap "Out=>In"]... [--variant "Out=>In[;Out=>In]"]... [<other.txt>...] [same options as run]
                                                    each variant vs the base on the same shuffles: deltas, intervals, McNemar
+              batch <folder | deck.txt>... --out <folder> [same options as run] [--forge-games G] [--forge-opponents K]
+                  [--forge-parallel P] [--timeout S]
+                                                   every deck: runs with per-game results, optional Forge playtest, report + deck pages
               replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--table 1v1|1v1v1]
                   [--max-turn T]
               report <run.json | deck.forge.json> [...] [--out report.html]
-                                                   HTML charts of run results, plus Forge playtests if any
+                                                   HTML charts of run results, a page per deck (hands, plays) and Forge playtests
 
               forge-setup [--dir path] [--version V]   download Forge and Java 17 for the Forge playtest
               forge-gauntlet <deck.txt> [--against deck|dir|list.txt]... [--games N] [--parallel P]

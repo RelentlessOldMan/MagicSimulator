@@ -2,7 +2,7 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.9** (2026-10-12).
+Status: **draft v0.10** (2026-10-12).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
@@ -17,12 +17,13 @@ Status: **draft v0.9** (2026-10-12).
 - v0.8.2: three more goldfish rules (§3): your attackers all attack the opponent with the least life, chosen as you declare them; effects on an opponent's library ("exiles the top twenty cards") take cards off their library count; and when an opponent separates cards into two piles (Fact or Fiction), they put the card with the highest mana value in a pile by itself. No field changes.
 - v0.8.3: one more goldfish rule (§3): when everyone votes (Expropriate, "will of the council"), each opponent votes for the first choice you didn't. At `1v1` that ties; at `1v1v1` they outvote you. No field changes.
 - v0.8.4: one more goldfish rule (§3): an opponent facing "loses life unless they discard" (Court of Ambition) takes the life loss unless it would kill them, and then discards if they can. No field changes.
+- v0.10: per-game rows gain `cast_turns`, the turn of each `cast` entry (§3). `sim report` also writes a page per deck (`decks/<Deck>.html`), with its fastest and worst games, hands and plays when it finds `<Deck>.games.jsonl` next to the run JSON. New `sim batch` runs a whole folder of decks, with an optional Forge playtest, and writes the report. All additive.
 - v0.9: `compare` is built (§3). Beyond the spec it takes `--variant "Out=>In[;Out=>In]"` (repeatable, one variant each) so one call can test several variants, and each result row adds `p_value_by_turn`, `delta_cumulative_by_turn_ci95` and `p_value_mean_turn_capped`. Weighted rows use a z-test on the paired differences instead of McNemar. The document carries `sim_version`.
 - v0.8.6: every command takes `--low` (or the environment variable `MAGICSIM_LOW=1`): idle priority on a single core, one thread, and Forge games one at a time (§3). Use it for long runs on a machine someone is using. Nothing else changes.
 - v0.8.5: `run` output gains a `timing` block: wall-clock seconds for the whole run and for each table size, and the thread count (§3). It's the only part of the document that varies between identical runs. `sim report` shows run times, Forge's included. Nothing else changes.
 - v0.8.1: goldfish opponents take a turn that does nothing, and their hand is a count that discard can empty (§3). "Each opponent's upkeep" and "each end step" now trigger in their turns, and they draw a card in each, so mill decks get a little faster. No field changes.
 - Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
-- Also built: `run`, `replay`, `report`, `compare`, `forge-setup` and `forge-gauntlet`.
+- Also built: `run`, `replay`, `report`, `compare`, `batch`, `forge-setup` and `forge-gauntlet`.
 - Spec only, not built yet: profiles.
 
 ---
@@ -143,6 +144,14 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
 ```
 
 `report <run.json> [<run.json> ...] [--out report.html]` (built) writes one self-contained HTML page: cumulative win-rate curves for each table size with one line per deck, a summary table, and each deck's wins-per-turn histogram. It uses each table's play/draw-weighted row when there is one. Its HTML isn't a stable format.
+- **Deck pages:** it also writes `decks/<Deck>.html` next to the report for each run, linked from the summary. A deck page has that deck's curves, its card stats and its Forge playtest. When `<run>.games.jsonl` or `<Deck>.games.jsonl` (per-game output) sits next to the run JSON, the page also shows the fastest and worst games: the hand kept, the cards put on the bottom, the plays by turn, and a `sim replay` command for each. It also shows which opening-hand cards go with faster or slower games, and the results by mulligans taken.
+- **Forge results:** `<Deck>.forge.json` next to a run JSON is picked up automatically.
+- **Run time:** the report ends with a run-time table (1v1, 1v1v1 and Forge per deck, with totals).
+
+`batch <folder | deck.txt>... --out <folder> [same options as run] [--forge-games G] [--forge-opponents K] [--forge-parallel P] [--timeout S] [--low]` (built) runs every deck: every `.txt` with a `*CMDR*` line in the folders, skipping `-moxfield` copies.
+- **Per deck** it writes `<Deck>.json` (the run) and `<Deck>.games.jsonl` (per game).
+- **Forge (opt-in):** with `--forge-games` above 0, each deck also gets a Forge playtest against K opponents (default 6), spread evenly through the same field, saved as `<Deck>.forge.json`. Every deck meets K opponents and is met K times.
+- **Report:** it then writes `report.html` with the deck pages. Progress goes to stderr.
 
 `replay` prints a readable turn-by-turn log of one game: the mulligans, each spell and ability, each trigger, what's on the stack and when it resolves, the mana pool, and how the game ended. The same (deck, seed, `--game`, mulligan, seat, table) gives the same game as row `game` in the `--per-game` output, so any interesting row can be replayed. This is for checking by hand that the engine plays correctly. Its text output isn't a stable format.
 
@@ -244,7 +253,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
  "mana_by_turn":[5,9],"life_paid":4,"storm_max":6,
  "notes":["Tainted Pact stopped: duplicate Island"],
  "seen":["Dark Ritual","Demonic Consultation","…"],
- "cast":["Dark Ritual","Demonic Consultation","Thassa's Oracle"],
+ "cast":["Dark Ritual","Demonic Consultation","Thassa's Oracle"],"cast_turns":[1,1,1],
  "win_cards":["Demonic Consultation","Thassa's Oracle"]}
 ```
 
@@ -253,7 +262,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
 - **`variant`:** `base` for a run or the compare base, otherwise the variant's label (e.g. `Mox Opal=>Gemstone Mine`).
 - **When a game isn't won:** `won` is false, `win_turn`, `win_line` and `win_cards` are null, and `turns_played` equals `max_turn`.
 - **`seen`:** every card that was in hand at any point, including the opening hand. It's a set, so each card appears once.
-- **`cast`:** every card that was cast or played, in order.
+- **`cast`:** every card that was cast or played, in order. **`cast_turns`:** the turn (round) of each, so `cast_turns[i]` goes with `cast[i]`.
 - **`win_cards`:** the cards in the winning line. These are what the planned `in_win_line` stat counts.
 - **Hands:** `mulligans` is how many were taken, the first free one included. `hand_kept` is the hand that was kept, after bottoming, and `bottomed` is the cards put on the bottom.
 - **`fail_reason`:** for a game that wasn't won, the engine's best guess at why. It's null when the game was won. Values:

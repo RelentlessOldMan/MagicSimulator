@@ -10,7 +10,7 @@ namespace MagicSim.Core.Sim;
 /// a per-turn histogram per deck, and a summary table, plus each deck's Forge playtest (magicsim.forge/1) when one
 /// was run. For people to read; not a stable format.
 /// </summary>
-public static class HtmlReport
+public static partial class HtmlReport
 {
     private sealed record Series(string Deck, string Label, string Table, int Games, int MaxTurn, double[] ByTurn, double[] Cumulative,
         double NoWin, double? Median, double? Mean, double Capped, double[] CappedCi, int Unsupported);
@@ -18,7 +18,9 @@ public static class HtmlReport
     private static readonly string[] Tables = { "1v1", "1v1v1" };
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-    public static string Build(IReadOnlyList<JsonElement> runs, DateTime generated, IReadOnlyList<JsonElement>? forge = null)
+    /// <param name="deckLinks">Each deck's own page, by deck name, linked from the summary.</param>
+    public static string Build(IReadOnlyList<JsonElement> runs, DateTime generated, IReadOnlyList<JsonElement>? forge = null,
+        IReadOnlyDictionary<string, string>? deckLinks = null)
     {
         forge ??= Array.Empty<JsonElement>();
         var series = runs.SelectMany(Read).ToList();
@@ -29,13 +31,35 @@ public static class HtmlReport
         var settings = runs.Select(r => r.GetProperty("settings")).ToList();
 
         var h = new StringBuilder();
+        Head(h, "MagicSim Report");
+        h.Append($$"""
+            <body>
+            <main>
+            <h1>MagicSim report</h1>
+            <p class="muted">Goldfish games against opponents that never interact. Win rates are weighted for play/draw at each table size
+            (1/2 on the play at 1v1, 1/3 at 1v1v1). Generated {{Esc(generated.ToString("yyyy-MM-dd HH:mm", Inv))}}.
+            {{Esc(SettingsText(settings))}}</p>
+            """);
+        if (deckLinks is { Count: > 0 })
+            h.Append("<p>Deck pages: " + string.Join(" · ", deckLinks.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kv => $"<a href=\"{Esc(kv.Value)}\">{Esc(kv.Key)}</a>")) + "</p>");
+        if (series.Count > 0) Goldfish(h, series, labels, color, maxTurn, deckLinks);
+        if (forge.Count > 0) Forge(h, forge);
+        RunTimes(h, runs, forge);
+        h.Append("</main></body></html>\n");
+        return h.ToString();
+    }
+
+    /// <summary>The page head and styles shared by the report and the deck pages, up to the opening body tag.</summary>
+    internal static void Head(StringBuilder h, string title)
+    {
         h.Append($$"""
             <!doctype html>
             <html lang="en">
             <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>MagicSim Report</title>
+            <title>{{Esc(title)}}</title>
             <style>
             :root {
               --bg: #fbfaf7; --fg: #1d1c1a; --muted: #6b6760; --grid: #e4e0d8; --card: #ffffff; --border: #ddd8ce;
@@ -72,24 +96,25 @@ public static class HtmlReport
             th { color: var(--muted); font-weight: 600; }
             .forge td:nth-child(2) { text-align: right; }
             .warn { color: var(--c1); }
+            a { color: var(--c0); }
+            .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+            .chip { border: 1px solid var(--border); border-radius: 6px; padding: 0 7px; font-size: 13px; white-space: nowrap; }
+            .chip.out { opacity: 0.55; text-decoration: line-through; }
+            td.wrap { white-space: normal; text-align: left; min-width: 240px; }
+            td.play { white-space: normal; text-align: left; min-width: 320px; font-size: 13px; }
+            .play b { color: var(--muted); font-weight: 600; }
+            code { font-size: 12px; color: var(--muted); white-space: nowrap; }
+            .good { color: var(--c2); }
             </style>
             </head>
-            <body>
-            <main>
-            <h1>MagicSim report</h1>
-            <p class="muted">Goldfish games against opponents that never interact. Win rates are weighted for play/draw at each table size
-            (1/2 on the play at 1v1, 1/3 at 1v1v1). Generated {{Esc(generated.ToString("yyyy-MM-dd HH:mm", Inv))}}.
-            {{Esc(SettingsText(settings))}}</p>
             """);
-        if (series.Count > 0) Goldfish(h, series, labels, color, maxTurn);
-        if (forge.Count > 0) Forge(h, forge);
-        RunTimes(h, runs, forge);
-        h.Append("</main></body></html>\n");
-        return h.ToString();
     }
 
-    private static void Goldfish(StringBuilder h, List<Series> series, List<string> labels, Dictionary<string, string> color, int maxTurn)
+    private static void Goldfish(StringBuilder h, List<Series> series, List<string> labels, Dictionary<string, string> color, int maxTurn,
+        IReadOnlyDictionary<string, string>? deckLinks = null)
     {
+        string Name(Series s) => deckLinks is not null && deckLinks.TryGetValue(s.Deck, out var href)
+            ? $"<a href=\"{Esc(href)}\">{Esc(s.Label)}</a>" : Esc(s.Label);
 
         // Cumulative curves, one chart per table size.
         h.Append("<h2>Win rate by turn (cumulative)</h2><div class=\"grid2\">");
@@ -113,7 +138,7 @@ public static class HtmlReport
             """);
         foreach (var label in labels)
             foreach (var s in series.Where(s => s.Label == label).OrderBy(s => Array.IndexOf(Tables, s.Table)))
-                h.Append($"<tr><td><span class=\"sw\" style=\"background:{color[label]}\"></span>{Esc(label)}</td><td>{s.Table}</td>" +
+                h.Append($"<tr><td><span class=\"sw\" style=\"background:{color[label]}\"></span>{Name(s)}</td><td>{s.Table}</td>" +
                          $"<td>{s.Games:N0}</td><td>{Pct(1 - s.NoWin)}</td><td>{Num(s.Median)}</td><td>{Num(s.Mean)}</td>" +
                          $"<td>{Num(s.Capped)}</td><td>{Num(s.CappedCi[0])}–{Num(s.CappedCi[1])}</td><td>{s.Unsupported}</td></tr>");
         h.Append($"""

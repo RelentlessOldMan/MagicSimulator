@@ -575,6 +575,8 @@ public sealed class GameRecord
 {
     public SortedSet<string> Seen { get; set; } = new(StringComparer.Ordinal);
     public List<string> Cast { get; set; } = new();
+    /// <summary>The round each <see cref="Cast"/> entry happened in.</summary>
+    public List<int> CastRounds { get; set; } = new();
     public List<string> Notes { get; set; } = new();
     public List<int> ManaByTurn { get; set; } = new();
     public int StormMax { get; set; }
@@ -586,7 +588,7 @@ public sealed class GameRecord
     public GameRecord Clone() => new()
     {
         Seen = new SortedSet<string>(Seen, StringComparer.Ordinal), Cast = new List<string>(Cast),
-        Notes = new List<string>(Notes), ManaByTurn = new List<int>(ManaByTurn), StormMax = StormMax,
+        CastRounds = new List<int>(CastRounds), Notes = new List<string>(Notes), ManaByTurn = new List<int>(ManaByTurn), StormMax = StormMax,
         WinCards = new List<string>(WinCards), WinLine = WinLine, LastHitBy = LastHitBy,
     };
 }

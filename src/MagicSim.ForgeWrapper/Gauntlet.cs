@@ -29,6 +29,16 @@ public static class Gauntlet
     private const int MinGamesPerProcess = 5;
 
     /// <summary>A Commander deck: a .txt with a *CMDR* line. Strategy notes and list files aren't.</summary>
+    /// <summary>
+    /// For a field of <paramref name="decks"/> decks, the offsets (1 to decks-1, spread evenly) of the opponents each deck
+    /// plays: deck i plays decks i+offset. Every deck then meets the same number of opponents and is met that many times.
+    /// </summary>
+    public static List<int> SpreadOffsets(int decks, int opponents)
+    {
+        opponents = Math.Clamp(opponents, 0, Math.Max(0, decks - 1));
+        return Enumerable.Range(0, opponents).Select(j => 1 + j * (decks - 1) / opponents).ToList();
+    }
+
     public static bool IsDeckFile(string path) =>
         path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) && DeckReader.ReadFile(path).Commanders.Count > 0;
 
