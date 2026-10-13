@@ -206,6 +206,8 @@ public sealed class Filter
             "enchanted" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Aura")),
             "equipped" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Equipment")),
             "IsGoaded" => (c, pl, x) => c is not null && c.GoadedTurn == x.S.Turn,
+            "withMutate" => (c, pl, x) => c is not null && c.HasKeyword("Mutate"),
+            "hasKeywordFlash" => (c, pl, x) => c is not null && c.HasKeyword("Flash"),
             // There are no teams here: your team is you.
             "YourTeamCtrl" => (c, pl, x) => c is not null && c.Controller == x.Controller,
             // Counters on it now, or as it left the battlefield (The Ozolith's "if it had counters on it").
@@ -596,6 +598,10 @@ public sealed class Amount
             var named = Filter.Parse(arg, ctx);
             return new(core, x => x.S.BattlefieldCards.Where(c => named.MatchesCard(c, x)).GroupBy(c => c.Name).Select(grp => grp.Count()).DefaultIfEmpty(0).Max());
         }
+        // "Count$wasCastFromYourLibrary.2.1": one number if this was cast from your library, another if not (Fblthp).
+        if (kind.StartsWith("wasCastFromYourLibrary.", StringComparison.Ordinal) && kind.Split('.') is [_, var lib1, var lib0]
+            && int.TryParse(lib1, out var fromLibrary) && int.TryParse(lib0, out var notFromLibrary))
+            return new(core, x => x.Host.CastFrom == Zone.Library ? fromLibrary : notFromLibrary);
         // "Count$Monarch.7.2": one number if you're the monarch, another if not.
         if (kind.StartsWith("Monarch.", StringComparison.Ordinal) && kind.Split('.') is [_, var m1, var m0]
             && int.TryParse(m1, out var monarchValue) && int.TryParse(m0, out var notMonarchValue))
@@ -630,6 +636,7 @@ public sealed class Amount
             case "xPaid": return new(core, x => x.X);
             case "CardPower": return new(core, x => x.Host.LastKnownPower);
             case "ChosenNumber": return new(core, x => x.Host.ChosenNumber);
+            case "TimesMutated": return new(core, x => x.Host.TimesMutated);
             // "Base power and toughness each equal to its mana value" (Starfield of Nyx's AffectedX).
             case "CardManaCost": return new(core, x => x.Host.ManaValue);
             case "LifeYouLostThisTurn": return new(core, x => x.S.ThisTurn.LifeLost.GetValueOrDefault(x.Controller));
@@ -799,7 +806,7 @@ public sealed class Amount
         return null;
     }
 
-    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|ParentTargeted|TargetedObjects|TriggeredCard|TriggeredSpellAbility|TriggeredSource|Remembered|RememberedLKI|Imprinted|Sacrificed|Exiled|ReplacedCard|ReplacedCardLKI)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+|CastTotalManaSpent)(?: (.+))?$", RegexOptions.Compiled);
+    private static readonly Regex DefinedCardsRx = new(@"^(Targeted|ParentTargeted|TriggeredCardLKI|TargetedObjects|TriggeredCard|TriggeredSpellAbility|TriggeredSource|Remembered|RememberedLKI|Imprinted|Sacrificed|Exiled|ReplacedCard|ReplacedCardLKI)\$(CardPower|CardToughness|CardManaCost|CardManaCostLKI|Amount|Valid|CardCounters\.\w+|CastTotalManaSpent)(?: (.+))?$", RegexOptions.Compiled);
 
     /// <summary>"Targeted$CardPower", "Remembered$CardManaCost", "Imprinted$Valid Card.X": a property of defined cards (summed), or how many there are.</summary>
     private static Amount DefinedCardsAmount(string core, Match m, CompileContext ctx)
@@ -807,6 +814,16 @@ public sealed class Amount
         var which = m.Groups[1].Value;
         var prop = m.Groups[2].Value;
         var filter = prop == "Valid" ? Filter.Parse(m.Groups[3].Value, ctx) : null;
+        // "TriggeredCardLKI$Valid Card.inZoneLibrary": whether the card that triggered came from that zone (Fblthp).
+        if (which == "TriggeredCardLKI")
+        {
+            if (prop != "Valid" || Regex.Match(m.Groups[3].Value, @"^Card\.inZone(\w+)$") is not { Success: true } zm || !Enum.TryParse<Zone>(zm.Groups[1].Value, out var lkiZone))
+            {
+                ctx.Need("Amount:" + core);
+                return Const(0);
+            }
+            return new(core, x => x.Item.TriggeredFrom == lkiZone ? 1 : 0);
+        }
         // "CastTotalManaSpent Treasure": only the mana from Treasures (Kalain).
         var treasure = prop == "CastTotalManaSpent" && m.Groups[3].Value == "Treasure";
         if (prop != "Valid" && m.Groups[3].Success && !treasure) ctx.Need("Amount:" + core);

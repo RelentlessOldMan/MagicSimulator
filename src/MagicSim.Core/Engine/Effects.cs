@@ -301,7 +301,11 @@ sealed class ChangeZoneEffect : Effect
             if (ab["GainControl"] == "True") c.Controller = x.Controller;
             if (ab["WithCountersType"] is { } kind) Game.AddCounters(c, kind, Amount(x, ab["WithCountersAmount"], 1));
         }
+        // Triggers can tell which source is moving a card ("if it wasn't put onto the battlefield with this ability").
+        var outer = x.Game.MovingFor;
+        x.Game.MovingFor = x.Host.Id;
         x.Game.MoveTo(c, dest, position, tapped);
+        x.Game.MovingFor = outer;
         if (dest == Zone.Exile && c.Zone == Zone.Exile) c.ExiledWith = x.Host.Id;
         if (dest == Zone.Battlefield && c.Zone == Zone.Battlefield)
         {
@@ -522,7 +526,8 @@ sealed class DigUntilEffect : Effect
 {
     public override string Api => "DigUntil";
     public override IReadOnlySet<string> Params { get; } = P(
-        "Valid", "ValidDescription", "FoundDestination", "RevealedDestination", "Amount", "Defined", "Shuffle", "RememberRevealed", "RevealedLibraryPosition");
+        "Valid", "ValidDescription", "FoundDestination", "RevealedDestination", "Amount", "Defined", "Shuffle", "RememberRevealed", "RevealedLibraryPosition",
+        "RememberFound");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -552,6 +557,7 @@ sealed class DigUntilEffect : Effect
         foreach (var id in revealed) x.Game.MoveTo(x.S[id], revealedDest, revealedAt);
         // The other cards revealed ("lose 1 life for each of the exiled cards").
         if (ab["RememberRevealed"] == "True") (x.Host.Remembered ??= new()).AddRange(revealed);
+        if (ab["RememberFound"] == "True") (x.Host.Remembered ??= new()).AddRange(found);
         x.Game.Note($"  revealed {revealed.Count}, found {(found.Count == 0 ? "nothing" : string.Join(", ", found.Select(id => x.S[id].Name)))}");
         if (ab["Shuffle"] == "True") x.Game.Shuffle(player);
     }

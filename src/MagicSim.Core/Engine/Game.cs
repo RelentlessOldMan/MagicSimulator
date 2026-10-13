@@ -976,6 +976,37 @@ public sealed partial class Game
     }
 
     /// <summary>An activated ability's cost, less any "costs {1} less for each …" (ReduceCost$).</summary>
+    /// <summary>
+    /// Merges a mutating creature spell with a creature (rule 729): over it, the merged permanent has the spell's
+    /// characteristics; under it, the creature's. Either way it has every card's abilities, and stays the same object.
+    /// </summary>
+    private void Mutate(Card spell, Card host)
+    {
+        var over = Decider.ChooseOption(this, spell.Controller, spell, new List<string> { $"{spell.Name} on top", $"{host.Name} on top" }) == 0;
+        var pieces = host.MergedCards ?? new List<int> { host.Id };
+        if (over) pieces.Insert(0, spell.Id); else pieces.Add(spell.Id);
+        RemoveFromZone(spell);
+        spell.Zone = Zone.Exile;
+        State.Players[spell.Owner].Exile.Add(spell.Id);
+        host.MergedCards = pieces;
+        host.TimesMutated++;
+        var faces = pieces.Select(id => State[id].Def.Faces[0]).ToList();
+        var top = faces[0];
+        var face = top.CopyWith(top.Types, top.Power, top.Toughness, top.Colors, faces.Skip(1).SelectMany(f => f.RawKeywords).ToList());
+        foreach (var under in faces.Skip(1))
+        {
+            face.Activated.AddRange(under.Activated);
+            face.Triggers.AddRange(under.Triggers);
+            face.Statics.AddRange(under.Statics);
+            face.Replacements.AddRange(under.Replacements);
+        }
+        var topCard = State[pieces[0]];
+        host.CopyDef = new CardDef { Name = top.Name, Source = topCard.Def.Source, ColorIdentity = topCard.Def.ColorIdentity };
+        host.CopyDef.Faces.Add(face);
+        Note($"  {spell.Name} mutates {(over ? "onto" : "under")} {host.Def.Name}: {host.Name} {host.Power}/{host.Toughness}");
+        Fire(new TriggerEvent(TriggerMode.Mutates, CardId: host.Id, Player: host.Controller));
+    }
+
     /// <summary>Untaps a permanent: "whenever this becomes untapped" (Key to the City).</summary>
     public void Untap(Card c)
     {
@@ -1015,6 +1046,9 @@ public sealed partial class Game
     }
 
     /// <summary>The spell's cost: its spell ability's Cost$ (which includes any mana) or the face's mana cost, plus commander tax.</summary>
+    /// <summary>The source whose ability is moving cards right now (NotThisAbility$ triggers), or null.</summary>
+    public int? MovingFor { get; set; }
+
     /// <summary>The once-each-turn static whose other cost <see cref="SpellCost"/> last used, if any.</summary>
     private (Card Source, StaticDef Static)? _altCostGrant;
 
@@ -1082,6 +1116,9 @@ public sealed partial class Game
         if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].AltCondition is { } condition && !AltConditionHolds(c, condition))
             return false;
         if (spellIndex >= 0 && !TimingAllows(c.CurrentFace.SpellAbilities[spellIndex])) return false;
+        // "Cast this from your graveyard using its mutate ability" (Brokkos): only that way from there.
+        if (c.Zone is Zone.Graveyard or Zone.Exile or Zone.Library && Statics.MayPlay(this, c.Controller).GetValueOrDefault(c.Id).MutateOnly
+            && !(spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex].IsMutate)) return false;
         if (spellIndex >= 0 && c.CurrentFace.SpellAbilities[spellIndex] is { CharmNumExpr: { } charmNum } modal
             && modal.CharmCount > Effect.EvalAmount(ContextFor(c), charmNum))
             return false;
@@ -1493,7 +1530,17 @@ public sealed partial class Game
         if (item.IsSpell && item.Ability.Api == "PermanentSpell")
         {
             if (source.Zone != Zone.Stack) return;
-            if (item.Ability.TargetFilter is not null)   // an Aura: attach to its target, or fizzle
+            // Mutate onto its target if that's still a non-Human creature you own; otherwise it just enters (rule 702.140b).
+            if (item.Ability.IsMutate)
+            {
+                if (item.ChainTargets.FirstOrDefault()?.FirstOrDefault().CardId is { } onto && State[onto] is { Zone: Zone.Battlefield } host
+                    && host.Types.Is(CardType.Creature) && !host.Types.HasSubtype("Human") && host.Owner == source.Owner)
+                {
+                    Mutate(source, host);
+                    return;
+                }
+            }
+            else if (item.Ability.TargetFilter is not null)   // an Aura: attach to its target, or fizzle
             {
                 var target = item.ChainTargets.FirstOrDefault()?.FirstOrDefault();
                 var targetZone = item.Ability["TgtZone"] == "Graveyard" ? Zone.Graveyard : Zone.Battlefield;

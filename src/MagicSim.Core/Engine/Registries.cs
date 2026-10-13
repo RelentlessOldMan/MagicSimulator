@@ -41,6 +41,8 @@ public static class Triggers
         "NoResolvingCheck", "AILogic",
         // "If it's your main phase" on a trigger of another kind (Moraug's landfall).
         "PlayerTurn", "Phase",
+        // "If it wasn't put onto the battlefield with this ability" (Kodama of the East Tree).
+        "NotThisAbility",
         // "If you have 40 or more life" (Felidar Sovereign): LifeTotal$ You | LifeAmount$ GE40.
         "LifeTotal", "LifeAmount",
     };
@@ -57,6 +59,7 @@ public static class Triggers
         ["BecomeMonstrous"] = new(StringComparer.Ordinal) { },
         // "Whenever this becomes untapped" (Key to the City).
         ["Untaps"] = new(StringComparer.Ordinal) { },
+        ["Mutates"] = new(StringComparer.Ordinal) { },
         // "Whenever you cast a spell that targets only [this]" (Zada): IsSingleTarget$, TargetsValid$.
         ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ActivatorThisTurnCast", "IsSingleTarget", "TargetsValid" },
         ["CounterAddedOnce"] = new(StringComparer.Ordinal) { "CounterType", "ValidSource" },
@@ -216,6 +219,7 @@ public static class Triggers
         if (t["CheckDefinedPlayer"] is { } check && !g.State.Players.Any(p => !p.Lost && FilterOf(x, check).MatchesPlayer(p.Index, x))) return false;
         if (!ModeMatches(g, t, source, e, x)) return false;
         if (t.Mode != "Phase" && t["Phase"] is { } phases && !phases.Split(',').Any(ph => Conditions.PhaseIs(g.State.Step, ph.Trim()))) return false;
+        if (t["NotThisAbility"] == "True" && g.MovingFor == source.Id) return false;
         if (t["PlayerTurn"] == "True" && g.State.ActivePlayer != source.Controller) return false;
         if (t["LifeTotal"] is { } whose && t["LifeAmount"] is { } life
             && !Defined.Players(whose, x).All(p => Filter.Compare(g.State.Players[p].Life, life[..2], Effect.EvalAmount(x, life[2..])))) return false;
@@ -248,6 +252,7 @@ public static class Triggers
                 return CardMatches(g, t, e.CardId, x, source);
             case "CounterAdded" when e.Mode == TriggerMode.CounterAdded:
                 return (t["CounterType"] is not { } addedKind || addedKind == e.CounterType) && CardMatches(g, t, e.CardId, x, source);
+            case "Mutates" when e.Mode == TriggerMode.Mutates:
             case "Untaps" when e.Mode == TriggerMode.Untaps:
                 return CardMatches(g, t, e.CardId, x, source);
             case "BecomeMonstrous" when e.Mode == TriggerMode.BecomeMonstrous:

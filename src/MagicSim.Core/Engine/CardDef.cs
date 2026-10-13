@@ -54,6 +54,8 @@ public sealed class AbilityDef
     public bool IsCycling { get; set; }
     /// <summary>An equip ability ("the first equip ability you activate each turn", Bruenor Battlehammer).</summary>
     public bool IsEquip { get; set; }
+    /// <summary>A creature spell cast for its mutate cost: it merges with its target instead of entering.</summary>
+    public bool IsMutate { get; set; }
     /// <summary>Activated mana ability: resolves immediately, doesn't use the stack.</summary>
     public bool IsManaAbility { get; init; }
     /// <summary>Cached <see cref="Game.IsAutoManaAbility"/> (abilities don't change once compiled).</summary>
@@ -519,6 +521,21 @@ public static partial class CardCompiler
                 AddGenerated(face, ctx, $"AB$ Attach | Cost$ {Part(1)} | ValidTgts$ {valid} | SorcerySpeed$ True | SpellDescription$ Equip {Part(1)}");
                 face.Activated[^1].IsEquip = true;
                 return true;
+            case "Mutate":
+            {
+                // "If you cast this spell for its mutate cost, put it over or under target non-Human creature you own."
+                var mutateCost = ParseCost(Part(1), ctx);
+                if (face.SpellAbilities.Count == 0)
+                    face.SpellAbilities.Add(new AbilityDef { P = new ForgeParams("SP$ PermanentSpell"), Api = "PermanentSpell", Kind = AbilityKind.Spell });
+                const string onto = "Creature.nonHuman+YouOwn";
+                face.SpellAbilities.Add(new AbilityDef
+                {
+                    P = new ForgeParams($"SP$ PermanentSpell | ValidTgts$ {onto}"), Api = "PermanentSpell", Kind = AbilityKind.Spell,
+                    TargetFilter = Filter.Parse(onto, ctx), TargetMin = 1, TargetMax = 1,
+                    AltCost = mutateCost, IsMutate = true, ModeDescription = "Mutate",
+                });
+                return true;
+            }
             case "Living Weapon":
                 // "When this Equipment enters, create a 0/0 black Phyrexian Germ creature token, then attach this to it."
                 face.SVars["__LivingWeapon"] = "DB$ Token | TokenScript$ b_0_0_phyrexian_germ | TokenOwner$ You | RememberTokens$ True | SubAbility$ __LivingWeaponAttach";

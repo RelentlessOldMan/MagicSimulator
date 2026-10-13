@@ -137,6 +137,8 @@ public static class Statics
         "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost", "MayPlayIgnoreType", "MayPlayIgnoreColor",
         // "Once each turn, you may pay {0} rather than pay the mana cost for a spell you cast" (As Foretold).
         "MayPlayDontGrantZonePermissions", "MayPlayLimit",
+        // "You may cast this from your graveyard using its mutate ability" (Brokkos): ValidSA$ Spell.Mutate.
+        "ValidSA",
         // "… and loses flying" (Colossus Hammer).
         "RemoveKeyword",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
@@ -331,6 +333,7 @@ public static class Statics
             }
             else if (s["AffectedZone"] is not ("Exile" or "Graveyard" or "Library" or "Command")) ctx.Need("MayPlay.AffectedZone:" + s["AffectedZone"]);
             if (s["MayPlayLimit"] is { } mpl && !int.TryParse(mpl, out _)) ctx.Need("MayPlayLimit:" + mpl);
+            if (s["ValidSA"] is { } mvs && mvs != "Spell.Mutate") ctx.Need("MayPlay.ValidSA:" + mvs);
             if (s.P.Values.Keys.Any(k => k is "AddPower" or "AddToughness" or "AddKeyword" or "SetPower" or "SetToughness")) ctx.Need("MayPlay+Modify");
             // "If you cast a spell this way, pay life equal to its mana value rather than pay its mana cost" (Bolas's Citadel).
             if (s["MayPlayAltManaCost"] is { } alt) CardCompiler.ParseCost(alt.Replace("ConvertedManaCost", "1"), ctx);
@@ -703,7 +706,7 @@ public static class Statics
     }
 
     /// <summary>How a card outside the hand may be played: free, or for another cost instead of its mana cost.</summary>
-    public readonly record struct MayPlayGrant(bool Free, string? AltManaCost, bool AnyTypeOfMana = false);
+    public readonly record struct MayPlayGrant(bool Free, string? AltManaCost, bool AnyTypeOfMana = false, bool MutateOnly = false);
 
     /// <summary>Cards outside the hand that <paramref name="player"/> may play now, and how.</summary>
     public static Dictionary<int, MayPlayGrant> MayPlay(Game g, int player)
@@ -721,7 +724,8 @@ public static class Statics
                 if (c.Owner == player && !c.IsEffect && (filter is null || filter.MatchesCard(c, x)))
                 {
                     // "Spend mana as though it were mana of any color": like any type, as far as paying goes here.
-                    var grant = new MayPlayGrant(st["MayPlayWithoutManaCost"] == "True", st["MayPlayAltManaCost"], st["MayPlayIgnoreType"] == "True" || st["MayPlayIgnoreColor"] == "True");
+                    var grant = new MayPlayGrant(st["MayPlayWithoutManaCost"] == "True", st["MayPlayAltManaCost"], st["MayPlayIgnoreType"] == "True" || st["MayPlayIgnoreColor"] == "True",
+                        st["ValidSA"] == "Spell.Mutate");
                     // The cheapest way wins: free, then an alternative cost, then the normal cost.
                     result[c.Id] = result.TryGetValue(c.Id, out var had) && (had.Free || had.AltManaCost is not null && !grant.Free) ? had : grant;
                 }

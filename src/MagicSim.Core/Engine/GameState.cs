@@ -138,6 +138,9 @@ public sealed class Card
     public HashSet<string>? StaticRemovedKeywords { get; set; }
     /// <summary>The other card of a melded pair, kept in exile while they're one permanent; -1 if none.</summary>
     public int MeldedWith { get; set; } = -1;
+    /// <summary>A mutated permanent's cards from top to bottom (itself among them); the others wait in exile with it.</summary>
+    public List<int>? MergedCards { get; set; }
+    public int TimesMutated { get; set; }
 
     /// <summary>A copy effect on this permanent (Clone): its copiable values, replacing the printed card's.</summary>
     public CardDef? CopyDef { get; set; }
@@ -232,7 +235,7 @@ public sealed class Card
         RememberedPlayers = RememberedPlayers is null ? null : new List<int>(RememberedPlayers),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, Monstrous = Monstrous, MeldedWith = MeldedWith, GoadedTurn = GoadedTurn, CastInOwnMainPhase = CastInOwnMainPhase, StaticControlBase = StaticControlBase, EnchantedPlayer = EnchantedPlayer, ChosenNumber = ChosenNumber, ManaSpentToCast = ManaSpentToCast, TreasureManaSpent = TreasureManaSpent, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
+        NamedCard = NamedCard, Monstrous = Monstrous, MeldedWith = MeldedWith, MergedCards = MergedCards?.ToList(), TimesMutated = TimesMutated, GoadedTurn = GoadedTurn, CastInOwnMainPhase = CastInOwnMainPhase, StaticControlBase = StaticControlBase, EnchantedPlayer = EnchantedPlayer, ChosenNumber = ChosenNumber, ManaSpentToCast = ManaSpentToCast, TreasureManaSpent = TreasureManaSpent, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
         TriggerUses = TriggerUses is null ? null : new(TriggerUses), ActivationUses = ActivationUses is null ? null : new(ActivationUses), StaticUses = StaticUses is null ? null : new(StaticUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
@@ -365,6 +368,8 @@ public sealed class StackItem
     public int? TriggeredObjectId { get; init; }
     /// <summary>"Whenever you activate an ability": that ability (Rings of Brighthearth copies it).</summary>
     public int? TriggeredAbilityId { get; init; }
+    /// <summary>Where the card that triggered this came from (a "TriggeredCardLKI" look at its old zone).</summary>
+    public Zone TriggeredFrom { get; init; }
     /// <summary>The card whose event a replacement from another source is changing ("ReplacedCard"); else the source itself.</summary>
     public int? ReplacedCardId { get; init; }
     /// <summary>A triggered ability (not a spell, a copy of one or an activated ability).</summary>
@@ -374,7 +379,7 @@ public sealed class StackItem
     public StackItem Clone(int? id = null, int? controller = null) => new()
     {
         DelayRemembered = DelayRemembered, DelayPlayers = DelayPlayers, DelayNumber = DelayNumber, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount, Sacrificed = Sacrificed, Exiled = Exiled, Spliced = Spliced,
-        TriggeredSourceId = TriggeredSourceId, CastFrom = CastFrom, TriggeredObjectId = TriggeredObjectId, TriggeredAbilityId = TriggeredAbilityId, ReplacedCardId = ReplacedCardId,
+        TriggeredSourceId = TriggeredSourceId, CastFrom = CastFrom, TriggeredObjectId = TriggeredObjectId, TriggeredAbilityId = TriggeredAbilityId, ReplacedCardId = ReplacedCardId, TriggeredFrom = TriggeredFrom,
         Id = id ?? Id, SourceId = SourceId, Ability = Ability, Controller = controller ?? Controller, IsSpell = id is null && IsSpell,
         ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, TriggeredPlayer = TriggeredPlayer, Description = Description, ExileAfter = ExileAfter,
     };

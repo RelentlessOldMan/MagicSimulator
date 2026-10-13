@@ -81,12 +81,19 @@ public sealed partial class Game
             c.ColorsSpent = 0;
             c.ClearStaticEffects();
             State.Attackers.Remove(c.Id);
-            // A melded permanent is two cards: the other one goes where it goes (rule 712.4c).
+            // A melded permanent is two cards: the other one goes where it goes (rule 712.4c). So do a mutated one's (rule 729.4).
             if (c.MeldedWith >= 0)
             {
                 var other = State[c.MeldedWith];
                 c.MeldedWith = -1;
                 if (other.Zone == Zone.Exile) MoveTo(other, to == Zone.Battlefield ? Zone.Graveyard : to);
+            }
+            if (c.MergedCards is { } merged)
+            {
+                c.MergedCards = null;
+                c.TimesMutated = 0;
+                foreach (var id in merged.Where(id => id != c.Id))
+                    if (State[id].Zone == Zone.Exile) MoveTo(State[id], to == Zone.Battlefield ? Zone.Graveyard : to);
             }
         }
         // Off the battlefield and the stack a modal double-faced card is its front face again.
@@ -633,7 +640,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch, AbilityCast, BecomesTarget, CounterRemoved, CounterAdded, BecomeMonstrous, Untaps }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch, AbilityCast, BecomesTarget, CounterRemoved, CounterAdded, BecomeMonstrous, Untaps, Mutates }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null,
@@ -708,7 +715,7 @@ public sealed partial class Game
                 TriggeredCardId = pt.Event.Mode is TriggerMode.DamageDone or TriggerMode.BecomesTarget ? pt.Event.TargetCardId : pt.Event.CardId,
                 Sacrificed = pt.Event.Mode == TriggerMode.Sacrificed && pt.Event.CardId is { } sac ? new() { sac } : null,
                 TriggeredPlayer = pt.Event.Player, DelayRemembered = pt.DelayRemembered, DelayPlayers = pt.DelayPlayers, DelayNumber = pt.DelayNumber,
-                TriggerAmount = pt.Event.Amount,
+                TriggerAmount = pt.Event.Amount, TriggeredFrom = pt.Event.From,
                 TriggeredSourceId = pt.Event.Mode is TriggerMode.DamageDone or TriggerMode.BecomesTarget ? pt.Event.CardId : null,
                 TriggeredObjectId = pt.Event.Mode == TriggerMode.Unattached ? pt.Event.TargetCardId : null,
                 TriggeredAbilityId = pt.Event.Activated?.Id,
