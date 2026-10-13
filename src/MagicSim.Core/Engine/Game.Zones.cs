@@ -62,6 +62,7 @@ public sealed partial class Game
             c.TempKeywords = null;
             c.AttachedTo = -1;
             c.EnchantedPlayer = -1;
+            c.StaticControlBase = null;
             c.Face = 0;
             c.CopyDef = null;
             c.CopyUntilCleanup = false;
@@ -269,8 +270,8 @@ public sealed partial class Game
         var face = c.CurrentFace;
         if (face.Loyalty is { } loyalty && c.Types.Is(CardType.Planeswalker))
             AddCounters(c, "LOYALTY", Replacements.Amount(this, "AddCounter", loyalty, targetCard: c, counterType: "LOYALTY"));
-        foreach (var counters in Replacements.EntersWithCounters(this, c).ToList())
-            RunChain(new StackItem { SourceId = c.Id, Ability = counters, Controller = c.Controller, Description = c.Name + " enters" });
+        foreach (var (host, counters) in Replacements.EntersWithCounters(this, c).ToList())
+            RunChain(new StackItem { SourceId = host.Id, ReplacedCardId = c.Id, Ability = counters, Controller = host.Controller, Description = c.Name + " enters" });
         if (face.EtbCounters.Count == 0 && face.EtbReplacements.Count == 0) return;
         foreach (var (kind, amount, condition) in face.EtbCounters)
         {
@@ -354,6 +355,24 @@ public sealed partial class Game
             if (c.Zone == Zone.Battlefield) continue;
             State.ReturnWhenDies.Remove(id);
             if (c.Zone is Zone.Graveyard or Zone.Exile) MoveTo(c, Zone.Battlefield, tapped: true);
+        }
+        // "For as long as [this] remains on the battlefield / remains tapped / you control it": control goes back.
+        foreach (var link in State.ControlLinks.ToList())
+        {
+            var (card, host) = (State[link.CardId], State[link.HostId]);
+            var ends = link.Until.Split(',').Any(u => u switch
+            {
+                "LeavesPlay" => host.Zone != Zone.Battlefield,
+                "Untap" => !host.Tapped,
+                "LoseControl" => host.Controller != link.Holder,
+                _ => false,
+            });
+            if (card.Zone != Zone.Battlefield) State.ControlLinks.Remove(link);
+            else if (ends)
+            {
+                State.ControlLinks.Remove(link);
+                if (card.Controller == link.Holder) { card.Controller = link.Previous; card.ControlledSinceTurn = State.Turn; }
+            }
         }
         // Cards exiled until a permanent leaves come back when it does.
         foreach (var (card, host) in State.UntilHostLeaves.ToList())
@@ -686,6 +705,8 @@ public sealed partial class Game
     }
 
     public bool HasPendingTriggers => _pending.Count > 0;
+
+    public const string MayNotUntap = "You may choose not to untap CARDNAME during your untap step.";
 
     /// <summary>Each object and player a spell or ability on the stack targets "becomes the target" of it.</summary>
     private void FireBecomesTarget(StackItem item)

@@ -462,6 +462,20 @@ public static partial class CardCompiler
     }
 
     /// <summary>Keywords that stand for abilities (Equip, Cycling, …): adds those abilities. False if not one of these.</summary>
+    /// <summary>
+    /// The triggered abilities a keyword stands for, when another card grants it ("other creatures you control have
+    /// dethrone"); null if the keyword is more than triggers.
+    /// </summary>
+    public static List<TriggerDef>? KeywordTriggers(string raw, CompileContext ctx)
+    {
+        var face = new FaceDef { Name = ctx.Face.Name, ManaCost = ctx.Face.ManaCost, Types = ctx.Face.Types, SVars = new(ctx.Face.SVars) };
+        var temp = new CompileContext { Face = face, Missing = new(), Tokens = ctx.Tokens };
+        if (!CompileKeyword(raw, ForgeRequirements.KeywordName(raw), face, temp) || temp.Missing.Count > 0 || face.Triggers.Count == 0
+            || face.SpellAbilities.Count + face.Activated.Count + face.Statics.Count + face.EtbReplacements.Count + face.EtbCounters.Count + face.Replacements.Count > 0)
+            return null;
+        return face.Triggers;
+    }
+
     private static bool CompileKeyword(string raw, string name, FaceDef face, CompileContext ctx)
     {
         var parts = raw.Split(':');

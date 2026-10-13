@@ -808,21 +808,26 @@ sealed class ChooseTypeEffect : Effect
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
-        if (ab["Defined"] is { } d && d != "You") ctx.Need("ChooseType.Defined:" + d);
+        // "An opponent chooses a creature type" (Callous Oppressor): the chosen player.
+        if (ab["Defined"] is { } d && d is not ("You" or "Player.Chosen")) ctx.Need("ChooseType.Defined:" + d);
         if (ab["Type"] is not ("Creature" or "Basic Land" or "Card")) ctx.Need("ChooseType.Type:" + ab["Type"]);
         if (ab["Type"] == "Card" && ab["ValidTypes"] is null) ctx.Need("ChooseType.Card:AnyType");
     }
 
     public override void Resolve(EffectContext x)
     {
+        var chooser = x.Ability["Defined"] == "Player.Chosen" && x.Host.ChosenPlayer is { } chosen ? chosen : x.Controller;
         List<string> options;
         if (x.Ability["Type"] == "Basic Land") options = TypeLine.BasicLandTypes.ToList();
         else if (x.Ability["Type"] == "Card") options = x.Ability["ValidTypes"]!.Split(',', StringSplitOptions.TrimEntries).ToList();
         else
-            options = x.S.Cards.Where(c => c.Owner == x.Controller && c.Types.Is(CardType.Creature) && !c.IsEffect)
+            // Your own deck's creature types; another player names those of the creatures it controls.
+            options = (chooser == x.Controller ? x.S.Cards.Where(c => c.Owner == chooser) : x.S.BattlefieldCards.Where(c => c.Controller == chooser))
+                .Where(c => c.Types.Is(CardType.Creature) && !c.IsEffect)
                 .SelectMany(c => c.Types.Subtypes).GroupBy(t => t).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal)
                 .Select(g => g.Key).Take(6).DefaultIfEmpty("Human").ToList();
-        x.Host.ChosenType = options[x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, options)];
+        // Another player names the type that protects the most of their creatures.
+        x.Host.ChosenType = chooser == x.Controller ? options[x.Game.Decider.ChooseOption(x.Game, x.Controller, x.Host, options)] : options[0];
         x.Game.Note($"  chose {x.Host.ChosenType}");
     }
 }

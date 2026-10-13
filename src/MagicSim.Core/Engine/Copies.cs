@@ -10,7 +10,9 @@ namespace MagicSim.Core.Engine;
 public static class Copies
 {
     /// <summary>The "except …" parameters a copy effect may carry.</summary>
-    public static readonly string[] ExceptParams = { "AddTypes", "SetPower", "SetToughness", "AddKeywords", "NonLegendary", "SetColor", "SetCreatureTypes", "GainThisAbility" };
+    public static readonly string[] ExceptParams = { "AddTypes", "SetPower", "SetToughness", "AddKeywords", "NonLegendary", "SetColor", "SetCreatureTypes", "GainThisAbility",
+        // "… except it has [this static ability]" (Sakashima of a Thousand Faces).
+        "AddStaticAbilities" };
 
     public static void ValidateExcept(AbilityDef ab, CompileContext ctx)
     {
@@ -20,6 +22,7 @@ public static class Copies
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
                 if (!Keywords.Supported.Contains(ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + k);
         if (ab["SetColor"] is { } col && ColorsOf(col) is null) ctx.Need($"{ab.Api}.SetColor:{col}");
+        if (ab["AddStaticAbilities"] is not null) ab.Grants = Grants.Compile(ab.P, ctx, "-", "-", "AddStaticAbilities");
     }
 
     // A copy of the same face with the same changes is the same definition; caching keeps the
@@ -54,6 +57,7 @@ public static class Copies
             copy.Faces.Add(face.CopyWith(types, power, toughness, colors, keywords));
             // "… except it has this ability" (Thespian's Stage).
             if (mods?["GainThisAbility"] == "True" && mods.Kind == AbilityKind.Activated) copy.Faces[0].Activated.Add(mods);
+            if (mods?.Grants is { } granted) copy.Faces[0].Statics.AddRange(granted.Statics);
             return copy;
         });
     }

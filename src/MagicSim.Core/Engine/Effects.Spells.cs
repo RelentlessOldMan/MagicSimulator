@@ -133,7 +133,7 @@ sealed class GainControlEffect : Effect
         else if (ab["Defined"] is null && ab.TargetFilter is null) ctx.Need("GainControl:NoTarget");
         if (ab.TargetFilter is { CanTargetPlayers: true }) ctx.Need("GainControl:Player");
         Defined.ValidatePlayers(ab["NewController"], ctx);
-        if (ab["LoseControl"] is { } lc && lc != "EOT") ctx.Need("GainControl.LoseControl:" + lc);
+        if (ab["LoseControl"] is { } lc && !lc.Split(',').All(u => u is "EOT" or "LeavesPlay" or "Untap" or "LoseControl")) ctx.Need("GainControl.LoseControl:" + lc);
         if (ab["AddKWs"] is { } kws)
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
                 if (!Keywords.Supported.Contains(Forge.ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + k);
@@ -149,6 +149,7 @@ sealed class GainControlEffect : Effect
             var c = x.S[id];
             if (c.Zone != Zone.Battlefield) continue;
             if (ab["LoseControl"] == "EOT") x.S.ThisTurn.ControlUntilEot.Add((c.Id, c.Controller));
+            else if (ab["LoseControl"] is { } until) x.S.ControlLinks.Add((c.Id, x.Host.Id, c.Controller, newController, until));
             if (c.Controller != newController)
             {
                 c.Controller = newController;

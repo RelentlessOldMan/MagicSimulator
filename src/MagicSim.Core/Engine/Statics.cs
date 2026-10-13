@@ -131,7 +131,7 @@ public static class Statics
     {
         "Affected", "AffectedDefined", "AddPower", "AddToughness", "AddKeyword", "SetPower", "SetToughness",
         "CharacteristicDefining", "EffectZone", "AffectedZone", "AdjustLandPlays", "SetMaxHandSize", "RaiseMaxHandSize", "MayPlay", "MayPlayWithoutManaCost",
-        "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "RemoveLandTypes", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
+        "AddType", "RemoveCardTypes", "RemoveCreatureTypes", "RemoveLandTypes", "GainControl", "AddAllCreatureTypes", "SetColor", "AddColor", "AddAbility", "AddTrigger",
         "RemoveType", "RemoveAllAbilities", "MayLookAt", "MayPlayAltManaCost", "MayPlayIgnoreType",
         // Granted abilities keep using the SVars of the card that grants them, so handing over SVars is not needed.
         "AddSVar", "GainsAbilitiesOf", "GainsAbilitiesOfZones",
@@ -198,6 +198,10 @@ public static class Statics
             : s.Mode is "CantAttack,CantBlock" or "CantBlock,CantAttack" ? "CantAttack" : s.Mode;
         switch (mode)
         {
+            case "IgnoreLegendRule":
+                own = CantAttackParams;
+                if (s["ValidCard"] is { } lvc) Filter.Parse(lvc, ctx);
+                break;
             case "CantBeActivated":
                 own = CantBeActivatedParams;
                 if (s["ValidCard"] is { } bvc) Filter.Parse(bvc, ctx);
@@ -317,13 +321,21 @@ public static class Statics
             if (parts.Length != 3 || !int.TryParse(parts[2], out _) || s["Affected"] is not ("Player" or "Player.Opponent" or "You")) ctx.Need("Keyword:" + adjust);
             else Filter.Parse(parts[1], ctx);
         }
-        else if (s["AddKeyword"] is { } kws)
+        List<TriggerDef>? keywordTriggers = null;
+        if (s["AddKeyword"] is { } kws && !kws.StartsWith("UntapAdjust:", StringComparison.Ordinal))
             foreach (var k in kws.Split('&', StringSplitOptions.TrimEntries))
-                if (!Keywords.Supported.Contains(ForgeRequirements.KeywordName(k))) ctx.Need("Keyword:" + ForgeRequirements.KeywordName(k));
+            {
+                if (Keywords.Supported.Contains(ForgeRequirements.KeywordName(k))) continue;
+                // A keyword that stands for triggered abilities (dethrone, mentor) gives the affected cards those triggers.
+                if (CardCompiler.KeywordTriggers(k, ctx) is { } triggers) (keywordTriggers ??= new()).AddRange(triggers);
+                else ctx.Need("Keyword:" + ForgeRequirements.KeywordName(k));
+            }
+        if (s["GainControl"] is { } gc && gc != "You") ctx.Need("Continuous.GainControl:" + gc);
         TypeChange.Validate(s["AddType"], ctx, "AddType");
         foreach (var key in new[] { "SetColor", "AddColor" })
             if (s[key] is { } col && col != "ChosenColor" && AnimateEffect.ColorsOf(col) is null) ctx.Need($"{key}:{col}");
         s.Grants = Grants.Compile(s.P, ctx, "AddAbility", "AddTrigger", null);
+        if (keywordTriggers is not null) (s.Grants ??= new Grants()).Triggers.AddRange(keywordTriggers);
     }
 
     /// <summary>"Each nonland card in your graveyard has escape" (Underworld Breach): gives cards in the graveyard an escape cost.</summary>
@@ -413,6 +425,26 @@ public static class Statics
         // noncreature artifacts into creatures still sets their power and toughness afterwards.
         var affected = new List<Card>?[holding.Count];
         List<Card> Affected(int i) => affected[i] ??= AffectedCards(g, holding[i].Source, holding[i].Static, holding[i].X).ToList();
+
+        // Layer 2: control ("you control enchanted creature"); it goes back when the effect stops.
+        HashSet<int>? controlled = null;
+        for (var i = 0; i < holding.Count; i++)
+        {
+            var (source, st, _) = holding[i];
+            if (st["GainControl"] is null) continue;
+            foreach (var card in Affected(i))
+            {
+                card.StaticControlBase ??= card.Controller;
+                if (card.Controller != source.Controller) { card.Controller = source.Controller; card.ControlledSinceTurn = s.Turn; }
+                (controlled ??= new()).Add(card.Id);
+            }
+        }
+        foreach (var c in s.BattlefieldCards)
+            if (c.StaticControlBase is { } before && !(controlled?.Contains(c.Id) ?? false))
+            {
+                if (c.Controller != before) { c.Controller = before; c.ControlledSinceTurn = s.Turn; }
+                c.StaticControlBase = null;
+            }
 
         // Layer 4: types.
         for (var i = 0; i < holding.Count; i++)
@@ -736,6 +768,19 @@ public static class Statics
                 if (st.Mode != "ActivateAbilityAsIfHaste" || !WorksFrom(source, st)) continue;
                 var x = ContextFor(g, source, st);
                 if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(creature, x)) && Presence.Hold(st.P, x)) return true;
+            }
+        return false;
+    }
+
+    /// <summary>"The legend rule doesn't apply to permanents you control" (Sakashima).</summary>
+    public static bool IgnoresLegendRule(Game g, Card card)
+    {
+        foreach (var source in Sources(g))
+            foreach (var st in source.Statics)
+            {
+                if (st.Mode != "IgnoreLegendRule" || !WorksFrom(source, st)) continue;
+                var x = ContextFor(g, source, st);
+                if ((st["ValidCard"] is not { } vc || Effect.FilterFor(x.SVarFace, vc).MatchesCard(card, x)) && Presence.Hold(st.P, x)) return true;
             }
         return false;
     }

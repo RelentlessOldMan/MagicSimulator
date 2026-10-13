@@ -17,6 +17,7 @@ public static class Keywords
         "Flashback", "Unearth", "Cumulative upkeep", "Prowl", "Spectacle", "Delve", "Escape", "Splice", "Kicker", "Bargain", "Transmute", "Morph", "Megamorph", "Fabricate", "Rebound", "Extort", "Exploit", "MayFlashSac", "Overload", "Entwine", "Ascend", "Jump-start", "Multikicker", "Soulbond", "Improvise", "Buyback", "Miracle", "Retrace", "Split second", "Cipher",
         // An Aura's own enchant restriction (Animate Dead swapping its "enchant" ability).
         "Enchant",
+        Game.MayNotUntap,
     };
 }
 

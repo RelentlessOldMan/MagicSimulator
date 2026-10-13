@@ -160,8 +160,10 @@ public static class Replacements
                 kind = ReplacementKind.Amount;
                 newAmount = w["Amount"];
                 break;
+            // "[It] enters with additional counters", from another permanent or an effect (Kalain, Spark Double).
             case "Moved" when r["Destination"] == "Battlefield" && r["Origin"] is null && w.Api == "PutCounter" && w["ETB"] == "True"
-                              && w["Defined"] == "ReplacedCard" && OnlyKeys(w, "ETB", "Defined", "CounterType", "CounterNum"):
+                              && w["Defined"] is "ReplacedCard" or "ReplacedNewCard" or "ReplacedNewCard.Creature"
+                              && OnlyKeys(w, "ETB", "Defined", "CounterType", "CounterNum", "SubAbility"):
                 kind = ReplacementKind.EntersWithCounters;
                 instead = CardCompiler.CompileAbility(w, ctx, AbilityKind.Sub, 0);
                 break;
@@ -224,14 +226,14 @@ public static class Replacements
         return terms.Count == 0 ? "Card" : string.Join(',', terms);
     }
 
-    /// <summary>Another permanent's "[creatures] enter with additional counters" for <paramref name="entering"/>.</summary>
-    public static IEnumerable<AbilityDef> EntersWithCounters(Game g, Card entering)
+    /// <summary>Another permanent's or effect's "[creatures] enter with additional counters" for <paramref name="entering"/>.</summary>
+    public static IEnumerable<(Card Host, AbilityDef With)> EntersWithCounters(Game g, Card entering)
     {
         foreach (var (host, r) in Active(g, "Moved"))
         {
             if (r.Kind != ReplacementKind.EntersWithCounters || host.Id == entering.Id) continue;
             var x = ContextFor(g, host, r, 0);
-            if (CardOk(r, "ValidCard", entering, x) && Presence.Hold(r.P, x)) yield return r.With!;
+            if (CardOk(r, "ValidCard", entering, x) && Presence.Hold(r.P, x)) yield return (host, r.With!);
         }
     }
 

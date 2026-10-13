@@ -64,6 +64,8 @@ public sealed class Card
     public int AttachedTo { get; set; } = -1;
     /// <summary>Activated abilities with a per-turn limit (ActivationLimit$): the turn and times each was last activated.</summary>
     public Dictionary<AbilityDef, (int Turn, int Count)>? ActivationUses { get; set; }
+    /// <summary>Its controller before a static "you control enchanted creature" took it (Control Magic), while that applies.</summary>
+    public int? StaticControlBase { get; set; }
     /// <summary>The player this Aura enchants (curses), or -1.</summary>
     public int EnchantedPlayer { get; set; } = -1;
     /// <summary>The permanent entered or was cast this turn with X = this value.</summary>
@@ -216,7 +218,7 @@ public sealed class Card
         RememberedPlayers = RememberedPlayers is null ? null : new List<int>(RememberedPlayers),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, EnchantedPlayer = EnchantedPlayer, ChosenNumber = ChosenNumber, ManaSpentToCast = ManaSpentToCast, TreasureManaSpent = TreasureManaSpent, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
+        NamedCard = NamedCard, StaticControlBase = StaticControlBase, EnchantedPlayer = EnchantedPlayer, ChosenNumber = ChosenNumber, ManaSpentToCast = ManaSpentToCast, TreasureManaSpent = TreasureManaSpent, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
         TriggerUses = TriggerUses is null ? null : new(TriggerUses), ActivationUses = ActivationUses is null ? null : new(ActivationUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,
@@ -346,6 +348,8 @@ public sealed class StackItem
     public int? TriggeredObjectId { get; init; }
     /// <summary>"Whenever you activate an ability": that ability (Rings of Brighthearth copies it).</summary>
     public int? TriggeredAbilityId { get; init; }
+    /// <summary>The card whose event a replacement from another source is changing ("ReplacedCard"); else the source itself.</summary>
+    public int? ReplacedCardId { get; init; }
     /// <summary>A triggered ability (not a spell, a copy of one or an activated ability).</summary>
     public bool IsTriggered => !IsSpell && Ability.Kind == AbilityKind.TriggerEffect;
 
@@ -353,7 +357,7 @@ public sealed class StackItem
     public StackItem Clone(int? id = null, int? controller = null) => new()
     {
         DelayRemembered = DelayRemembered, DelayPlayers = DelayPlayers, DelayNumber = DelayNumber, IteratedPlayer = IteratedPlayer, TriggerAmount = TriggerAmount, Sacrificed = Sacrificed, Exiled = Exiled, Spliced = Spliced,
-        TriggeredSourceId = TriggeredSourceId, CastFrom = CastFrom, TriggeredObjectId = TriggeredObjectId, TriggeredAbilityId = TriggeredAbilityId,
+        TriggeredSourceId = TriggeredSourceId, CastFrom = CastFrom, TriggeredObjectId = TriggeredObjectId, TriggeredAbilityId = TriggeredAbilityId, ReplacedCardId = ReplacedCardId,
         Id = id ?? Id, SourceId = SourceId, Ability = Ability, Controller = controller ?? Controller, IsSpell = id is null && IsSpell,
         ChainTargets = ChainTargets.Select(t => new List<TargetRef>(t)).ToList(), X = X, TriggeredCardId = TriggeredCardId, TriggeredPlayer = TriggeredPlayer, Description = Description, ExileAfter = ExileAfter,
     };
@@ -440,6 +444,8 @@ public sealed class GameState
     public int NextStackId { get; set; }
     /// <summary>Cards exiled "until [host] leaves the battlefield": (exiled card, host).</summary>
     public List<(int CardId, int HostId)> UntilHostLeaves { get; set; } = new();
+    /// <summary>Control gained "for as long as" its source stays (LoseControl$ LeavesPlay, Untap, LoseControl).</summary>
+    public List<(int CardId, int HostId, int Previous, int Holder, string Until)> ControlLinks { get; set; } = new();
     /// <summary>Permanents that return to the battlefield tapped when they die or are exiled (earthbend).</summary>
     public List<int> ReturnWhenDies { get; set; } = new();
     /// <summary>Delayed triggers waiting for their event.</summary>
@@ -474,7 +480,7 @@ public sealed class GameState
         Turn = Turn, ExtraTurns = ExtraTurns, ExtraTurnsTaken = ExtraTurnsTaken, Step = Step, ActivePlayer = ActivePlayer, Rng = Rng,
         GameOver = GameOver, Winner = Winner, Monarch = Monarch, WinReason = WinReason, ThisTurn = ThisTurn.Clone(), Attackers = new List<int>(Attackers),
         NextStackId = NextStackId, Record = keepRecord ? Record.Clone() : new GameRecord(), Delayed = new List<DelayedTrigger>(Delayed),
-        UntilHostLeaves = new(UntilHostLeaves), ReturnWhenDies = new(ReturnWhenDies),
+        UntilHostLeaves = new(UntilHostLeaves), ControlLinks = new(ControlLinks), ReturnWhenDies = new(ReturnWhenDies),
     };
 }
 

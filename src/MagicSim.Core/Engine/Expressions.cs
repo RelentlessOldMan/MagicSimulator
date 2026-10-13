@@ -209,6 +209,8 @@ public sealed class Filter
             "ChosenColor" => (c, pl, x) => c is not null && x.Host.ChosenColor is { } cc && (c.Colors & cc.Mask()) != 0,
             "ChosenType" => (c, pl, x) => c is not null && x.Host.ChosenType is { } ct
                 && (c.Types.HasSubtype(ct) || CardTypes.TryGetValue(ct, out var chosenCardType) && c.Types.Is(chosenCardType)),
+            "IsNotChosenType" => (c, pl, x) => c is not null && !(x.Host.ChosenType is { } nct
+                && (c.Types.HasSubtype(nct) || CardTypes.TryGetValue(nct, out var notChosenCardType) && c.Types.Is(notChosenCardType))),
             "IsImprinted" => (c, pl, x) => c is not null && (x.Host.Imprinted?.Contains(c.Id) ?? false),
             // "Shares a creature type with your commander" (Path of Ancestry).
             "sharesCreatureTypeWith Commander" => (c, pl, x) => c is not null && x.S.Cards.Any(k => k.IsCommander && k.Owner == x.Controller && SharesCreatureType(c.Types, k.Types)),
@@ -752,7 +754,7 @@ public sealed class Amount
                 "Remembered" or "RememberedLKI" => x.Host.Remembered ?? new List<int>(),
                 "Sacrificed" => x.Item.Sacrificed ?? new List<int>(),
                 "Exiled" => x.Item.Exiled ?? new List<int>(),
-                "ReplacedCard" or "ReplacedCardLKI" => new[] { x.Item.SourceId },
+                "ReplacedCard" or "ReplacedCardLKI" => new[] { x.Item.ReplacedCardId ?? x.Item.SourceId },
                 _ => x.Host.Imprinted ?? new List<int>(),
             };
             return ids.Select(id => x.S[id]).ToList();
@@ -805,7 +807,7 @@ public static class Defined
         "Self", "Targeted", "ParentTarget", "Remembered", "TriggeredCard", "TriggeredCardLKICopy", "TriggeredNewCardLKICopy",
         "Enchanted", "Equipped", "Imprinted", "ExiledWith", "RememberedLKI", "RememberedCard", "Sacrificed", "SacrificedCards",
         "TriggeredAttacker", "TriggeredAttackerLKICopy", "TriggeredSource", "TriggeredSourceLKICopy", "DelayTriggerRemembered", "DelayTriggerRememberedLKI",
-        "ReplacedCard", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard", "Parent", "DirectRemembered",
+        "ReplacedCard", "ReplacedNewCard", "TopOfLibrary", "TriggeredObject", "TriggeredObjectLKICopy", "ChosenCard", "Parent", "DirectRemembered",
     };
 
     /// <summary>Whether a Defined$ names players ("You", "Player.Opponent") rather than cards.</summary>
@@ -834,6 +836,7 @@ public static class Defined
         }
         // "Valid Creature.YouCtrl": every permanent matching the filter.
         if (text is not null && text.StartsWith("Valid ", StringComparison.Ordinal)) { Filter.Parse(text[6..], ctx); return; }
+        if (text is not null && text.StartsWith("ReplacedNewCard.", StringComparison.Ordinal)) { Filter.Parse(text[16..], ctx); return; }
         if (text is not null && !CardRefs.Contains(text)) ctx.Need("DefinedCard:" + text);
     }
 
@@ -879,6 +882,12 @@ public static class Defined
             var filter = Effect.FilterFor(x.SVarFace, text[6..]);
             return x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x)).Select(c => c.Id).ToList();
         }
+        // "ReplacedNewCard.Creature": the card entering, if it's a creature (Spark Double).
+        if (text is not null && text.StartsWith("ReplacedNewCard.", StringComparison.Ordinal))
+        {
+            var kind = Effect.FilterFor(x.SVarFace, text[16..]);
+            return Cards("ReplacedNewCard", x).Where(id => kind.MatchesCard(x.S[id], x)).ToList();
+        }
         return (text ?? fallback) switch
         {
             "Self" or "Parent" => new() { x.Item.SourceId },
@@ -899,7 +908,7 @@ public static class Defined
             "ChosenCard" => x.Host.ChosenCards?.ToList() ?? new(),
             "Sacrificed" or "SacrificedCards" => x.Item.Sacrificed?.ToList() ?? new(),
             // The card a replacement effect is replacing the event of: its own "as this enters" (Mox Diamond).
-            "ReplacedCard" => new() { x.Item.SourceId },
+            "ReplacedCard" or "ReplacedNewCard" => new() { x.Item.ReplacedCardId ?? x.Item.SourceId },
             "TopOfLibrary" => x.S.Players[x.Controller].Library.Take(1).ToList(),
             _ => new(),
         };

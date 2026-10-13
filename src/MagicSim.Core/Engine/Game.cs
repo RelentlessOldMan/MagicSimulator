@@ -330,6 +330,8 @@ public sealed partial class Game
                     if (c.Controller == Me && !c.CurrentFace.DoesntUntap && !(held?.Contains(c.Id) ?? false))
                     {
                         if (c.SkipNextUntap) c.SkipNextUntap = false;
+                        // "You may choose not to untap": kept tapped while that keeps control of something it took.
+                        else if (c.HasKeyword(MayNotUntap) && State.ControlLinks.Any(l => l.HostId == c.Id && l.Until.Contains("Untap"))) continue;
                         else if (c.Tapped) untapping.Add(c);
                     }
                 foreach (var c in LimitUntaps(untapping)) c.Tapped = false;
@@ -1704,7 +1706,8 @@ public sealed partial class Game
                 && !State.Stack.Any(i => i.SourceId == saga.Id && saga.CurrentFace.Chapters.Any(t => t.Execute == i.Ability || (t.Modes?.Contains(i.Ability) ?? false))))
                 Sacrifice(saga);
         // Legend rule (704.5j): the controller keeps one (offered newest first; a copy may be the one worth keeping).
-        var legends = State.BattlefieldCards.Where(c => c.Types.Has(SuperType.Legendary)).GroupBy(c => (c.Controller, c.Name)).Where(g => g.Count() > 1);
+        var legends = State.BattlefieldCards.Where(c => c.Types.Has(SuperType.Legendary)).GroupBy(c => (c.Controller, c.Name)).Where(g => g.Count() > 1)
+            .Where(g => !g.Any(c => Statics.IgnoresLegendRule(this, c)));
         foreach (var grp in legends.ToList())
         {
             var ordered = grp.OrderByDescending(c => c.ControlledSinceTurn).ThenByDescending(c => c.Id).ToList();
