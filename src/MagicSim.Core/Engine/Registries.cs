@@ -52,6 +52,9 @@ public static class Triggers
         ["Phase"] = new(StringComparer.Ordinal) { "Phase", "ValidPlayer", "FirstUpkeep" },
         // "Whenever a time counter is removed from this while it's exiled" (Aeon Chronicler).
         ["CounterRemoved"] = new(StringComparer.Ordinal) { "CounterType" },
+        // "Whenever a +1/+1 counter is put on this" (Fathom Mage); "when this becomes monstrous".
+        ["CounterAdded"] = new(StringComparer.Ordinal) { "CounterType" },
+        ["BecomeMonstrous"] = new(StringComparer.Ordinal) { },
         // "Whenever you cast a spell that targets only [this]" (Zada): IsSingleTarget$, TargetsValid$.
         ["SpellCast"] = new(StringComparer.Ordinal) { "ValidActivatingPlayer", "ActivatorThisTurnCast", "IsSingleTarget", "TargetsValid" },
         ["CounterAddedOnce"] = new(StringComparer.Ordinal) { "CounterType", "ValidSource" },
@@ -237,6 +240,10 @@ public static class Triggers
         {
             case "ChangesZone" when e.Mode == TriggerMode.ChangesZone:
                 if (!ZoneMatches(t["Origin"], e.From) || !ZoneMatches(t["Destination"], e.To)) return false;
+                return CardMatches(g, t, e.CardId, x, source);
+            case "CounterAdded" when e.Mode == TriggerMode.CounterAdded:
+                return (t["CounterType"] is not { } addedKind || addedKind == e.CounterType) && CardMatches(g, t, e.CardId, x, source);
+            case "BecomeMonstrous" when e.Mode == TriggerMode.BecomeMonstrous:
                 return CardMatches(g, t, e.CardId, x, source);
             case "CounterRemoved" when e.Mode == TriggerMode.CounterRemoved:
                 return (t["CounterType"] is not { } removedKind || removedKind == e.CounterType) && CardMatches(g, t, e.CardId, x, source);

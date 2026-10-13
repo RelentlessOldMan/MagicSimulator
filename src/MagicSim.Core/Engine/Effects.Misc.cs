@@ -478,26 +478,42 @@ sealed class EarthbendEffect : Effect
 sealed class MoveCounterEffect : Effect
 {
     public override string Api => "MoveCounter";
-    public override IReadOnlySet<string> Params { get; } = P("Source", "Defined", "CounterType", "CounterNum");
+    // ValidDefined$ with CounterNum$ Any: "move any number of +1/+1 counters onto other creatures" — here, as many as
+    // chosen onto one of them.
+    public override IReadOnlySet<string> Params { get; } = P("Source", "Defined", "CounterType", "CounterNum", "ValidDefined");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
         Defined.ValidateCards(ab["Source"], ctx);
         Defined.ValidateCards(ab["Defined"], ctx);
         if (ab["CounterType"] is null) ctx.Need("MoveCounter.CounterType:none");
-        if (ab["CounterNum"] is { } n && n != "All") ValidateAmount(ab, "CounterNum", ctx);
+        if (ab["CounterNum"] is { } n && n is not ("All" or "Any")) ValidateAmount(ab, "CounterNum", ctx);
+        if (ab["ValidDefined"] is { } vd) Filter.Parse(vd, ctx);
+        if (ab["CounterType"] == "All" && ab["CounterNum"] != "All") ctx.Need("MoveCounter.All+" + ab["CounterNum"]);
     }
 
     public override void Resolve(EffectContext x)
     {
         var kind = x.Ability["CounterType"]!;
         var from = Defined.Cards(x.Ability["Source"] ?? "Self", x).Select(id => x.S[id]).FirstOrDefault();
-        var to = Defined.Cards(x.Ability["Defined"], x, "Targeted").Select(id => x.S[id]).FirstOrDefault(c => c.Zone == Zone.Battlefield);
+        Card? to;
+        if (x.Ability["ValidDefined"] is { } onto)
+        {
+            var filter = FilterFor(x.SVarFace, onto);
+            var options = x.S.BattlefieldCards.Where(c => filter.MatchesCard(c, x) && c.Id != from?.Id).Select(c => c.Id).ToList();
+            to = options.Count == 0 ? null : x.S[x.Game.Decider.ChooseCards(x.Game, x.Controller, Choice.Generic, x.Host, options, 1, 1)[0]];
+        }
+        else to = Defined.Cards(x.Ability["Defined"], x, "Targeted").Select(id => x.S[id]).FirstOrDefault(c => c.Zone == Zone.Battlefield);
         if (from is null || to is null || from.Id == to.Id) return;
-        var n = Math.Min(from.CounterCount(kind), x.Ability["CounterNum"] == "All" ? int.MaxValue : Amount(x, x.Ability["CounterNum"], 1));
-        if (n <= 0) return;
-        from.Counters![kind] -= n;
-        x.Game.PutCounters(to, kind, n);
+        // "Move all counters" (The Ozolith): every kind.
+        foreach (var k in kind == "All" ? from.Counters?.Keys.ToList() ?? new() : new List<string> { kind })
+        {
+            var n = Math.Min(from.CounterCount(k), x.Ability["CounterNum"] == "All" ? int.MaxValue
+                : x.Ability["CounterNum"] == "Any" ? x.Game.Decider.ChooseX(x.Game, x.Controller, x.Host, from.CounterCount(k)) : Amount(x, x.Ability["CounterNum"], 1));
+            if (n <= 0) continue;
+            from.Counters![k] -= n;
+            x.Game.PutCounters(to, k, n);
+        }
     }
 }
 

@@ -64,6 +64,7 @@ public sealed partial class Game
             c.EnchantedPlayer = -1;
             c.StaticControlBase = null;
             c.GoadedTurn = -1;
+            c.Monstrous = false;
             c.Face = 0;
             c.CopyDef = null;
             c.CopyUntilCleanup = false;
@@ -625,7 +626,7 @@ public sealed partial class Game
 
 // ---- triggers ------------------------------------------------------------------------
 
-public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch, AbilityCast, BecomesTarget, CounterRemoved }
+public enum TriggerMode { ChangesZone, Phase, SpellCast, Attacks, DamageDone, AttackersDeclared, Drawn, LandPlayed, Discarded, LifeGained, Taps, Chapter, Sacrificed, ChangesZoneAll, DamageDoneOnce, CounterAddedOnce, TapsForMana, Immediate, ClassLevelGained, Cycled, SpellCopied, TurnFaceUp, Unattached, Exploited, Always, LifeLost, Countered, BecomeMonarch, AbilityCast, BecomesTarget, CounterRemoved, CounterAdded, BecomeMonstrous }
 
 public readonly record struct TriggerEvent(TriggerMode Mode, int? CardId = null, Zone From = Zone.None, Zone To = Zone.None,
     int? Player = null, string? Phase = null, int? TargetCardId = null, int Amount = 0, bool Combat = false, string? CounterType = null,
@@ -1048,7 +1049,10 @@ public sealed partial class Game
                     if (source.Zone != Zone.Hand) return false;
                     break;
                 case CostPartKind.RemoveCounter:
-                    if (source.CounterCount(part.Valid) < AmountOf(part, x)) return false;
+                    if (part.Amount != "All" && source.CounterCount(part.Valid) < AmountOf(part, x)) return false;
+                    break;
+                case CostPartKind.RemoveAnyCounter:
+                    if (CostCandidates(part, source, player).Sum(id => State[id].Counters?.Values.Sum() ?? 0) < AmountOf(part, x)) return false;
                     break;
                 case CostPartKind.Reveal:
                     if (CostCandidates(part, source, player).Count < AmountOf(part, x)) return false;
@@ -1104,6 +1108,7 @@ public sealed partial class Game
             CostPartKind.Discard => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
             CostPartKind.ExileFromGraveyard => State.Players[player].Graveyard.Select(id => State[id]).Where(c => c.Id != source.Id),
             CostPartKind.ExileAnyGraveyard => State.Players.SelectMany(p => p.Graveyard).Select(id => State[id]),
+            CostPartKind.RemoveAnyCounter => State.BattlefieldCards.Where(c => c.Controller == player),
             CostPartKind.ExileFromHand => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
             CostPartKind.ReturnToHand or CostPartKind.ExileFromBattlefield => State.BattlefieldCards.Where(c => c.Controller == player),
             CostPartKind.Reveal => State.Players[player].Hand.Select(id => State[id]).Where(c => c.Id != source.Id),
@@ -1233,7 +1238,21 @@ public sealed partial class Game
                         MoveTo(State[id], Zone.Hand);
                     break;
                 case CostPartKind.RemoveCounter:
-                    RemoveCounters(source, part.Valid, n);
+                    // "Remove all +1/+1 counters": how many were removed is remembered (Sage of Hours).
+                    var removed = RemoveCounters(source, part.Valid, part.Amount == "All" ? source.CounterCount(part.Valid) : n);
+                    (source.StoredVars ??= new())["CostCountersRemoved"] = removed;
+                    break;
+                case CostPartKind.RemoveAnyCounter:
+                    // "Remove three counters from among other artifacts, creatures and planeswalkers you control": from
+                    // the ones with the most first, harmful counters before helpful ones.
+                    for (var left = n; left > 0;)
+                    {
+                        var holder = CostCandidates(part, source, player).Select(id => State[id]).Where(c => c.Counters?.Values.Any(v => v > 0) ?? false)
+                            .OrderByDescending(c => c.Counters!.Values.Sum()).FirstOrDefault();
+                        if (holder is null) break;
+                        var kind = holder.Counters!.Where(kv => kv.Value > 0).OrderByDescending(kv => kv.Key is "M1M1" or "TIME" ? 1 : 0).First().Key;
+                        left -= RemoveCounters(holder, kind, 1);
+                    }
                     break;
                 case CostPartKind.Reveal:
                     break;   // revealing changes nothing in a goldfish game

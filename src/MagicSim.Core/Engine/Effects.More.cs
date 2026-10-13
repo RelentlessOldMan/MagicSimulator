@@ -30,7 +30,9 @@ sealed class TokenEffect : Effect
         {
             var def = ctx.Tokens?.Invoke(name);
             if (def is null) { ctx.Need("TokenScript:" + name); continue; }
-            foreach (var m in def.Missing) ctx.Need(m);
+            // An X/X token ("*" power and toughness) is fine when this sets them (TokenPower$ / TokenToughness$).
+            foreach (var m in def.Missing)
+                if (!(m == "PT:*" && ab["TokenPower"] is not null && ab["TokenToughness"] is not null)) ctx.Need(m);
             ab.Tokens.Add(def);
         }
         Defined.ValidatePlayers(ab["TokenOwner"], ctx);
@@ -1020,7 +1022,7 @@ sealed class ProliferateEffect : Effect
 
     public override void Resolve(EffectContext x)
     {
-        for (var i = Amount(x, x.Ability["Amount"], 1); i > 0; i--)
+        for (var i = Replacements.Amount(x.Game, "Proliferate", Amount(x, x.Ability["Amount"], 1), targetPlayer: x.Controller); i > 0; i--)
         {
             foreach (var c in x.S.BattlefieldCards.Where(c => c.Counters is not null).ToList())
                 foreach (var kind in c.Counters!.Where(kv => kv.Value > 0).Select(kv => kv.Key).ToList())

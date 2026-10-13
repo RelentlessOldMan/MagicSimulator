@@ -206,6 +206,13 @@ public sealed class Filter
             "enchanted" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Aura")),
             "equipped" => (c, pl, x) => c is not null && x.S.BattlefieldCards.Any(a => a.AttachedTo == c.Id && a.Types.HasSubtype("Equipment")),
             "IsGoaded" => (c, pl, x) => c is not null && c.GoadedTurn == x.S.Turn,
+            // There are no teams here: your team is you.
+            "YourTeamCtrl" => (c, pl, x) => c is not null && c.Controller == x.Controller,
+            // Counters on it now, or as it left the battlefield (The Ozolith's "if it had counters on it").
+            "HasCounters" => (c, pl, x) => c is not null && ((c.Counters?.Values.Any(v => v > 0) ?? false)
+                || c.Zone != Zone.Battlefield && (c.LeftCounters?.Values.Any(v => v > 0) ?? false)),
+            // Evolve: greater power or toughness than the source.
+            "evolvesSource" => (c, pl, x) => c is not null && (c.Power > x.Host.Power || c.Toughness > x.Host.Toughness),
             // The card a "dies" trigger is about, or else the source itself (Academy Rector's "exile it" cost).
             "TriggeredNewCard" => (c, pl, x) => c is not null && c.Id == (x.Item.TriggeredCardId ?? x.Item.SourceId),
             // "Player.TriggeredTarget": the player the trigger is about.
@@ -475,7 +482,7 @@ public sealed class Amount
         return ParseExpression(text, ctx, depth);
     }
 
-    private static readonly Regex MathRx = new(@"/(Plus|NMinus|Minus|Times|Twice|Thrice|HalfUp|HalfDown|Negative|LimitMax|LimitMin)(?:\.(\-?\w+))?", RegexOptions.Compiled);
+    private static readonly Regex MathRx = new(@"/(Plus|NMinus|Minus|Times|Twice|Thrice|HalfUp|HalfDown|Negative|LimitMax|LimitMin|DivideEvenlyDown)(?:\.(\-?\w+))?", RegexOptions.Compiled);
 
     private static Amount ParseExpression(string body, CompileContext ctx, int depth)
     {
@@ -502,6 +509,7 @@ public sealed class Amount
                 "HalfDown" => new(body, x => prev.Eval(x) / 2),
                 "Negative" => new(body, x => -prev.Eval(x)),
                 "LimitMax" => new(body, x => Math.Min(prev.Eval(x), arg.Eval(x))),
+                "DivideEvenlyDown" => new(body, x => arg.Eval(x) is var d and > 0 ? prev.Eval(x) / d : 0),
                 _ => new(body, x => Math.Max(prev.Eval(x), arg.Eval(x))),
             };
         }
@@ -512,6 +520,8 @@ public sealed class Amount
     private static Amount ParseCore(string core, CompileContext ctx, int depth)
     {
         if (core.StartsWith("Number$", StringComparison.Ordinal) && int.TryParse(core[7..], out var num)) return Const(num);
+        // "SVar$CostCountersRemoved": how many counters paying the cost removed (Sage of Hours).
+        if (core == "SVar$CostCountersRemoved") return new(core, x => x.Host.StoredVars?.GetValueOrDefault("CostCountersRemoved") ?? 0);
         if (core.StartsWith("SVar$", StringComparison.Ordinal)) return Parse(core[5..], ctx, depth + 1);
         // The amount a replacement effect is replacing: damage, tokens, counters, life.
         if (core is "ReplaceCount$DamageAmount" or "ReplaceCount$CounterNum" or "ReplaceCount$Amount" or "ReplaceCount$LifeGained")

@@ -56,6 +56,8 @@ public sealed class Card
     /// <summary>The StoredVars entry for a remembered number ("RememberCounteredCMC$"), forgotten with the remembered objects.</summary>
     public const string RememberedNumberKey = "__RememberedNumber";
     public string? NamedCard { get; set; }
+    /// <summary>It became monstrous (monstrosity happens once).</summary>
+    public bool Monstrous { get; set; }
     /// <summary>The turn it was goaded: it stays goaded until its goader's next turn (only your turns are played).</summary>
     public int GoadedTurn { get; set; } = -1;
     /// <summary>Cast during its controller's main phase (Sulfurous Blast).</summary>
@@ -224,7 +226,7 @@ public sealed class Card
         RememberedPlayers = RememberedPlayers is null ? null : new List<int>(RememberedPlayers),
         Imprinted = Imprinted is null ? null : new List<int>(Imprinted),
         StoredVars = StoredVars is null ? null : new Dictionary<string, int>(StoredVars),
-        NamedCard = NamedCard, GoadedTurn = GoadedTurn, CastInOwnMainPhase = CastInOwnMainPhase, StaticControlBase = StaticControlBase, EnchantedPlayer = EnchantedPlayer, ChosenNumber = ChosenNumber, ManaSpentToCast = ManaSpentToCast, TreasureManaSpent = TreasureManaSpent, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
+        NamedCard = NamedCard, Monstrous = Monstrous, GoadedTurn = GoadedTurn, CastInOwnMainPhase = CastInOwnMainPhase, StaticControlBase = StaticControlBase, EnchantedPlayer = EnchantedPlayer, ChosenNumber = ChosenNumber, ManaSpentToCast = ManaSpentToCast, TreasureManaSpent = TreasureManaSpent, AttachedTo = AttachedTo, LoyaltyActivatedTurn = LoyaltyActivatedTurn, ExertedTurn = ExertedTurn, ForetoldTurn = ForetoldTurn, EnteredTurn = EnteredTurn, ClassLevel = ClassLevel, Suspended = Suspended, OnAdventure = OnAdventure,
         TriggerUses = TriggerUses is null ? null : new(TriggerUses), ActivationUses = ActivationUses is null ? null : new(ActivationUses), StaticUses = StaticUses is null ? null : new(StaticUses), XPaid = XPaid, RegenShields = RegenShields, ExileIfLeaves = ExileIfLeaves, PairedWith = PairedWith, CastFrom = CastFrom, PaidOptional = PaidOptional, ExiledWith = ExiledWith, EncodedOn = EncodedOn, FaceDown = FaceDown, Escaped = Escaped, ChosenMode = ChosenMode, FlashSac = FlashSac, ColorsSpent = ColorsSpent, LeftTriggers = LeftTriggers,
         ChosenCards = ChosenCards is null ? null : new List<int>(ChosenCards), LeftPower = LeftPower, LeftToughness = LeftToughness, LeftCounters = LeftCounters,
         SetPower = SetPower, SetToughness = SetToughness, StaticPower = StaticPower, StaticToughness = StaticToughness,

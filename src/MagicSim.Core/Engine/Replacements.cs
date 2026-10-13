@@ -62,6 +62,8 @@ public static class Replacements
         ["Draw"] = new(StringComparer.Ordinal) { "ValidPlayer", "NotFirstCardInDrawStep" },
         // "If you tap a permanent for mana, it produces three times as much of that mana instead" (Nyxbloom Ancient).
         ["ProduceMana"] = new(StringComparer.Ordinal) { "ValidCard", "ValidActivator" },
+        // "If you would proliferate, proliferate twice instead" (Tekuthal).
+        ["Proliferate"] = new(StringComparer.Ordinal) { "ValidPlayer" },
     };
 
     /// <summary>Compiles a non-self replacement into <paramref name="face"/>. False if it isn't one this knows.</summary>
@@ -156,6 +158,10 @@ public static class Replacements
                 kind = ReplacementKind.Amount;
                 newAmount = "ReplaceCount$Amount/" + (w["Amount"] ?? "Twice");
                 if (newAmount.EndsWith("Thrice")) newAmount = newAmount[..^"Thrice".Length] + "Times.3";
+                break;
+            case "Proliferate" when w.Api == "ReplaceEffect" && w["VarName"] == "Num" && OnlyKeys(w, "VarName", "VarValue"):
+                kind = ReplacementKind.Amount;
+                newAmount = w["VarValue"]!.Replace("ReplaceCount$Num", "ReplaceCount$Amount");
                 break;
             case "ProduceMana" when w.Api == "ReplaceMana" && int.TryParse(w["ReplaceAmount"], out var times) && OnlyKeys(w, "ReplaceAmount"):
                 kind = ReplacementKind.Amount;
@@ -312,6 +318,7 @@ public static class Replacements
                     && (r["ValidCounterType"] is not { } ct || ct == counterType),
                 "GainLife" => PlayerOk(r, "ValidPlayer", targetPlayer, x),
                 "ProduceMana" => CardOk(r, "ValidCard", source, x) && PlayerOk(r, "ValidActivator", targetPlayer, x),
+                "Proliferate" => PlayerOk(r, "ValidPlayer", targetPlayer, x),
                 "LifeReduced" => PlayerOk(r, "ValidPlayer", targetPlayer, x) && (r["IsDamage"] != "True" || damage)
                     && (r["Result"] is not { } res || Filter.Compare(g.State.Players[targetPlayer!.Value].Life - amount, res[..2], int.Parse(res[2..]))),
                 _ => false,

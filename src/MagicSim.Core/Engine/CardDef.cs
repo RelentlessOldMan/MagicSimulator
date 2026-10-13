@@ -3,7 +3,7 @@ using MagicSim.Core.Forge;
 
 namespace MagicSim.Core.Engine;
 
-public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower, ExileSource, Draw, ExileFromBattlefield, ExileAnyGraveyard }
+public enum CostPartKind { Sacrifice, Discard, PayLife, ExileFromGraveyard, TapUntapped, RemoveCounter, AddCounter, ExileSelf, ExileFromHand, ReturnToHand, Reveal, TapPower, ExileSource, Draw, ExileFromBattlefield, ExileAnyGraveyard, RemoveAnyCounter }
 
 /// <summary>A non-mana cost component: "Sac&lt;1/CARDNAME&gt;", "Discard&lt;0/Hand&gt;", "PayLife&lt;2&gt;", …</summary>
 public sealed record CostPart(CostPartKind Kind, string Amount, string Valid, string Raw);
@@ -765,6 +765,24 @@ public static partial class CardCompiler
                 face.SVars["__BattleCry"] = "DB$ PumpAll | ValidCards$ Creature.attacking+Other | NumAtt$ +1";
                 face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ Attacks | ValidCard$ Card.Self | Execute$ __BattleCry"), ctx));
                 return true;
+            case "Evolve":
+                // "Whenever a creature you control enters, if it has greater power or toughness than this, put a +1/+1 counter on this."
+                face.SVars["__Evolve"] = "DB$ PutCounter | Defined$ Self | CounterType$ P1P1 | CounterNum$ 1";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | TriggerZones$ Battlefield"
+                    + " | ValidCard$ Creature.YouCtrl+Other+evolvesSource | Execute$ __Evolve"), ctx));
+                return true;
+            case "Graft":
+                // "This enters with N +1/+1 counters. Whenever another creature enters, you may move a +1/+1 counter from this onto it."
+                if (!int.TryParse(Part(1), out _)) { ctx.Need("Keyword:Graft+" + Part(1)); return true; }
+                face.EtbCounters.Add(("P1P1", Part(1), null));
+                face.SVars["__Graft"] = "DB$ MoveCounter | Source$ Self | Defined$ TriggeredCard | CounterType$ P1P1 | CounterNum$ 1";
+                face.Triggers.Add(CompileTrigger(new ForgeParams("Mode$ ChangesZone | Origin$ Any | Destination$ Battlefield | TriggerZones$ Battlefield"
+                    + " | ValidCard$ Creature.Other | IsPresent$ Card.Self+counters_GE1_P1P1 | OptionalDecider$ You | Execute$ __Graft"), ctx));
+                return true;
+            case "Outlast":
+                // "[Cost], {T}: Put a +1/+1 counter on this creature. Activate only as a sorcery."
+                AddGenerated(face, ctx, $"AB$ PutCounter | Cost$ {Part(1)} T | Defined$ Self | CounterType$ P1P1 | CounterNum$ 1 | SorcerySpeed$ True | SpellDescription$ Outlast");
+                return true;
             case "Fuse":
                 return true;   // the card adds its fused spell once both halves are compiled
             case "Bloodthirst":
@@ -847,6 +865,19 @@ public static partial class CardCompiler
                 return true;
             case "ETBReplacement":
                 // "As this enters, choose …": K:ETBReplacement:Other:SVarName[:Mandatory]
+                // "Each other creature you control enters with …" (Master Biomancer): K:ETBReplacement:Other:SVar:Mandatory:Battlefield:<cards>.
+                if (Part(1) == "Other" && Part(3) == "Mandatory" && Part(4) == "Battlefield" && Part(5).Length > 0)
+                {
+                    if (!face.SVars.TryGetValue(Part(2), out var others)) { ctx.Need("SVarMissing:" + Part(2)); return true; }
+                    Filter.Parse(Part(5), ctx);
+                    if (CompileAbility(new ForgeParams(others), ctx, AbilityKind.Sub, 0) is { } entering)
+                        face.Replacements.Add(new ReplacementDef
+                        {
+                            P = new ForgeParams($"Event$ Moved | ActiveZones$ Battlefield | Destination$ Battlefield | ValidCard$ {Part(5)}"),
+                            Event = "Moved", Kind = ReplacementKind.EntersWithCounters, Face = face, With = entering,
+                        });
+                    return true;
+                }
                 if (Part(1) != "Other" || Part(3) is not ("" or "Mandatory") || Part(5).Length > 0)
                 {
                     ctx.Need("Keyword:ETBReplacement:" + Part(1) + (Part(3).Length > 0 ? "+" + Part(3) : "") + (Part(5).Length > 0 ? "+Condition" : ""));
@@ -1198,6 +1229,15 @@ public static partial class CardCompiler
             var args = m.Groups[2].Value.Split('/');
             var amount = args[0];
             var valid = args.Length > 1 ? args[1].Replace(';', ',') : "";   // "Artifact;Creature": either
+            // "RemoveAnyCounter<3/Any/Artifact.Other;Creature.Other/…>": counters of any kind from among these.
+            if (m.Groups[1].Value == "RemoveAnyCounter")
+            {
+                if (args.Length < 3 || args[1] != "Any") { ctx.Need("Cost:RemoveAnyCounter+" + (args.Length > 1 ? args[1] : "")); continue; }
+                valid = args[2].Replace(';', ',');
+                Filter.Parse(valid, ctx);
+                parts.Add(new CostPart(CostPartKind.RemoveAnyCounter, amount, valid, token));
+                continue;
+            }
             CostPartKind? kind = m.Groups[1].Value switch
             {
                 "Sac" => CostPartKind.Sacrifice,

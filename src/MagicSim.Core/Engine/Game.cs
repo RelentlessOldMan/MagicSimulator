@@ -1835,6 +1835,8 @@ public sealed partial class Game
         var before = c.CounterCount(kind);
         AddCounters(c, kind, n);
         if (n > 0) Fire(new TriggerEvent(TriggerMode.CounterAddedOnce, CardId: c.Id, Player: c.Controller, Amount: n, CounterType: kind));
+        // "Whenever a +1/+1 counter is put on this": once for each counter.
+        for (var i = 0; i < n; i++) Fire(new TriggerEvent(TriggerMode.CounterAdded, CardId: c.Id, Player: c.Controller, Amount: 1, CounterType: kind));
         if (kind != "LORE" || c.Zone != Zone.Battlefield) return;
         var chapters = c.CurrentFace.Chapters;
         for (var k = before + 1; k <= Math.Min(c.CounterCount(kind), chapters.Count); k++)

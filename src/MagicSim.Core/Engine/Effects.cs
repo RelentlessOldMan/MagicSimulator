@@ -272,7 +272,8 @@ sealed class ChangeZoneEffect : Effect
         else if (ab["ChangeType"] is { } ct) Filter.Parse(ct, ctx);
         if (ab["ChangeNum"] is { } cn && cn != "All") Engine.Amount.Parse(cn, ctx);
         if (ab["WithTotalCMC"] is { } total) Engine.Amount.Parse(total, ctx);
-        if (ab["Chooser"] is { } chooser && chooser != "You") ctx.Need("ChangeZone.Chooser:" + chooser);
+        // "Target player searches their library" (Fertilid): a goldfish opponent's library is only a count, so for them nothing is found.
+        if (ab["Chooser"] is { } chooser && chooser is not ("You" or "Targeted")) ctx.Need("ChangeZone.Chooser:" + chooser);
         Defined.ValidateCards(ab["Defined"], ctx);
         Defined.ValidatePlayers(ab["DefinedPlayer"], ctx);
     }
@@ -929,7 +930,11 @@ sealed class TapEffect : CardsEffect
 sealed class PutCounterEffect : CardsEffect
 {
     public override string Api => "PutCounter";
-    public override IReadOnlySet<string> Params { get; } = P("CounterType", "CounterNum", "Defined", "DividedAsYouChoose");
+    public override IReadOnlySet<string> Params { get; } = P("CounterType", "CounterNum", "Defined", "DividedAsYouChoose",
+        // Adapt N: N +1/+1 counters if it has none. Monstrosity N: if it isn't monstrous, N counters and it becomes monstrous.
+        "Adapt", "Monstrosity",
+        // "Put those counters on this" (The Ozolith): CounterType$ EachFromSource with EachFromSource$ <card>.
+        "EachFromSource");
 
     public override void Validate(AbilityDef ab, CompileContext ctx)
     {
@@ -937,11 +942,37 @@ sealed class PutCounterEffect : CardsEffect
         if (ab["Defined"] is { } who && Defined.IsPlayerRef(who)) Defined.ValidatePlayers(who, ctx);
         else base.Validate(ab, ctx);
         ValidateAmount(ab, "CounterNum", ctx);
-        if (ab["CounterType"] is null) ctx.Need("PutCounter.CounterType:none");
+        ValidateAmount(ab, "Adapt", ctx);
+        ValidateAmount(ab, "Monstrosity", ctx);
+        if (ab["CounterType"] is null && ab["Adapt"] is null && ab["Monstrosity"] is null) ctx.Need("PutCounter.CounterType:none");
+        if (ab["CounterType"] == "EachFromSource") Defined.ValidateCards(ab["EachFromSource"], ctx);
     }
 
     public override void Resolve(EffectContext x)
     {
+        if (x.Ability["Adapt"] is { } adapt)
+        {
+            if (x.Host.Zone == Zone.Battlefield && x.Host.CounterCount("P1P1") == 0) x.Game.PutCounters(x.Host, "P1P1", Amount(x, adapt, 1));
+            return;
+        }
+        if (x.Ability["Monstrosity"] is { } monstrosity)
+        {
+            if (x.Host.Zone != Zone.Battlefield || x.Host.Monstrous) return;
+            var m = Amount(x, monstrosity, 1);
+            x.Game.PutCounters(x.Host, "P1P1", m);
+            x.Host.Monstrous = true;
+            x.Game.Fire(new TriggerEvent(TriggerMode.BecomeMonstrous, CardId: x.Host.Id, Player: x.Controller, Amount: m));
+            return;
+        }
+        if (x.Ability["CounterType"] == "EachFromSource")
+        {
+            var from = Defined.Cards(x.Ability["EachFromSource"], x).Select(id => x.S[id]).FirstOrDefault();
+            var counters = from is null ? null : from.Zone == Zone.Battlefield ? from.Counters : from.LeftCounters ?? from.Counters;
+            foreach (var c in Cards(x))
+                foreach (var (k, v) in counters?.Where(kv => kv.Value > 0).ToList() ?? new())
+                    x.Game.PutCounters(c, k, v);
+            return;
+        }
         var n = Amount(x, x.Ability["CounterNum"], 1);
         var kind = x.Ability["CounterType"]!;
         if (x.Ability["Defined"] is { } who && Defined.IsPlayerRef(who))
