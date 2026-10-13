@@ -26,23 +26,7 @@ public static class Report
     public static object RunDocument(Runner.PreparedDeck deck, string deckPath, RunOptions o, IReadOnlyList<GameResult> games,
         IReadOnlyDictionary<string, double>? tableSeconds = null)
     {
-        var rows = new List<object>();
-        foreach (var table in games.GroupBy(g => g.Table))
-        {
-            foreach (var grp in table.GroupBy(g => (g.Mulligan, g.Seat)))
-                rows.Add(Row(table.Key, grp.Key.Mulligan, grp.Key.Seat, grp.Select(g => (g, 1.0)).ToList(), o.MaxTurn));
-            if (!o.Seats.Contains("play") || !o.Seats.Contains("draw")) continue;
-            var w = PlayWeight(table.Key);
-            foreach (var grp in table.GroupBy(g => g.Mulligan))
-            {
-                var play = grp.Where(g => g.Seat == "play").ToList();
-                var draw = grp.Where(g => g.Seat == "draw").ToList();
-                var weighted = play.Select(g => (g, w / play.Count))
-                    .Concat(draw.Select(g => (g, (1 - w) / draw.Count))).ToList();
-                rows.Add(Row(table.Key, grp.Key, "weighted", weighted, o.MaxTurn));
-            }
-        }
-
+        var rows = ResultRows(o, games);
         return new
         {
             schema = "magicsim.run/1",
@@ -63,6 +47,28 @@ public static class Report
                 by_table_s = tableSeconds.ToDictionary(kv => kv.Key, kv => Math.Round(kv.Value, 1)),
             },
         };
+    }
+
+    /// <summary>The <c>results</c> rows: one per (table, mulligan, seat), plus weighted rows when both seats were played.</summary>
+    public static List<Dictionary<string, object?>> ResultRows(RunOptions o, IReadOnlyList<GameResult> games)
+    {
+        var rows = new List<Dictionary<string, object?>>();
+        foreach (var table in games.GroupBy(g => g.Table))
+        {
+            foreach (var grp in table.GroupBy(g => (g.Mulligan, g.Seat)))
+                rows.Add(Row(table.Key, grp.Key.Mulligan, grp.Key.Seat, grp.Select(g => (g, 1.0)).ToList(), o.MaxTurn));
+            if (!o.Seats.Contains("play") || !o.Seats.Contains("draw")) continue;
+            var w = PlayWeight(table.Key);
+            foreach (var grp in table.GroupBy(g => g.Mulligan))
+            {
+                var play = grp.Where(g => g.Seat == "play").ToList();
+                var draw = grp.Where(g => g.Seat == "draw").ToList();
+                var weighted = play.Select(g => (g, w / play.Count))
+                    .Concat(draw.Select(g => (g, (1 - w) / draw.Count))).ToList();
+                rows.Add(Row(table.Key, grp.Key, "weighted", weighted, o.MaxTurn));
+            }
+        }
+        return rows;
     }
 
     /// <summary>One results row from weighted games (weights sum to 1 for weighted rows, else 1 each).</summary>

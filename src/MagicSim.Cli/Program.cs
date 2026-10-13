@@ -34,6 +34,7 @@ public static class Program
                 "cards" => Cards(opts),
                 "run" => Run(opts),
                 "replay" => Replay(opts),
+                "compare" => CompareCommand(opts),
                 "report" => HtmlReportCommand(opts),
                 "forge-setup" => await ForgeSetup(opts),
                 "forge-gauntlet" => ForgeGauntlet(opts),
@@ -197,6 +198,103 @@ public static class Program
         return (Runner.Prepare(deck, pool), path);
     }
 
+    /// <summary>
+    /// The base deck against variants on the same shuffles: --swap "Out=>In" (repeatable, one variant together),
+    /// --variant "Out=>In[;Out=>In]" (repeatable, one variant each), and any further deck files.
+    /// </summary>
+    private static int CompareCommand(Options o)
+    {
+        var opts = RunOptionsFrom(o);
+        if (o.Positional.Count == 0) throw new UsageException("compare needs a base deck");
+        var pool = new CardPool(ForgeLibrary.Load(o.Get("--forge")), CardIndex.Load(o.Get("--cards")));
+        var basePath = o.Positional[0];
+        var baseDeck = DeckReader.ReadFile(basePath);
+        var variants = new List<Variant>();
+        try
+        {
+            if (o.GetAll("--swap").Count > 0)
+                variants.Add(Core.Sim.Compare.Apply(baseDeck, o.GetAll("--swap").SelectMany(Core.Sim.Compare.ParseSwaps).ToList(), pool));
+            foreach (var spec in o.GetAll("--variant"))
+                variants.Add(Core.Sim.Compare.Apply(baseDeck, Core.Sim.Compare.ParseSwaps(spec), pool));
+        }
+        catch (SwapException e)
+        {
+            throw new UsageException(e.Message);
+        }
+        foreach (var path in o.Positional.Skip(1))
+            variants.Add(Core.Sim.Compare.FromDeck(baseDeck, DeckReader.ReadFile(path)));
+        if (variants.Count == 0) throw new UsageException("compare needs --swap \"Out=>In\", --variant \"Out=>In\" or a second deck file");
+
+        var basePrepared = Runner.Prepare(baseDeck, pool);
+        var perVariant = opts.Games * opts.Tables.Count * opts.Mulligans.Count * opts.Seats.Count;
+        var total = perVariant * (variants.Count + 1);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var done = 0;
+        IProgress<int> Progress() => new Progress<int>(n => Console.Error.Write($"\r{done + n}/{total} games ({sw.Elapsed.TotalSeconds:F0}s)"));
+        var tableSeconds = new Dictionary<string, double>();
+        var baseGames = Runner.Run(basePrepared, opts, progress: Progress(), tableSeconds: tableSeconds);
+        done += perVariant;
+        var docs = new List<object>();
+        var allGames = new List<GameResult>(baseGames);
+        var summaries = new List<(Variant V, List<Dictionary<string, object?>> Rows)>();
+        foreach (var v in variants)
+        {
+            var prepared = Runner.Prepare(v.Deck, pool);
+            var games = Runner.Run(prepared, opts, variant: v.Label, progress: Progress());
+            done += perVariant;
+            var doc = Core.Sim.Compare.VariantDocument(v, basePrepared, prepared, opts, baseGames, games);
+            docs.Add(doc);
+            summaries.Add((v, Core.Sim.Compare.DeltaRows(opts, baseGames, games)));
+            allGames.AddRange(games);
+            foreach (var name in prepared.Unsupported.Except(basePrepared.Unsupported))
+                Console.Error.WriteLine($"\rwarning: {v.Label} adds {name}, which the simulator plays as a blank, so its results are unreliable");
+        }
+        Console.Error.WriteLine($"\r{total}/{total} games in {sw.Elapsed.TotalSeconds:F1}s");
+        if (o.Get("--per-game") is { } perGame)
+            File.WriteAllLines(perGame, allGames.Select(Report.GameLine), new System.Text.UTF8Encoding(false));
+
+        var json = JsonSerializer.Serialize(new
+        {
+            schema = "magicsim.compare/1",
+            sim_version = Report.SimVersion,
+            @base = Report.RunDocument(basePrepared, basePath, opts, baseGames, tableSeconds),
+            variants = docs,
+        }, Report.Json);
+        Emit(o, json);
+        // With --json the table goes to stdout; otherwise stdout carries the JSON, so the table goes to stderr.
+        var table = o.Get("--json") is null ? Console.Error : Console.Out;
+        foreach (var line in CompareTable(summaries, opts.MaxTurn)) table.WriteLine(line);
+        return Ok;
+    }
+
+    /// <summary>A short readable summary: per variant and table, the headline (weighted, else only) rows.</summary>
+    private static IEnumerable<string> CompareTable(List<(Variant V, List<Dictionary<string, object?>> Rows)> summaries, int maxTurn)
+    {
+        string F(double x) => x.ToString("+0.00;-0.00;0.00", System.Globalization.CultureInfo.InvariantCulture);
+        string Pct(double x) => (x * 100).ToString("+0.0;-0.0;0.0", System.Globalization.CultureInfo.InvariantCulture);
+        string P(double p) => p < 0.001 ? "<.001" : p.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
+        yield return "";
+        yield return "Δ = variant minus base on the same shuffles. Capped mean: lower is faster. Won by Tn: points, with p (McNemar per seat, z-test when weighted).";
+        foreach (var (v, rows) in summaries)
+        {
+            yield return "";
+            yield return v.Label;
+            var headline = rows.Where(r => (string)r["seat"]! == "weighted").ToList();
+            if (headline.Count == 0) headline = rows;
+            foreach (var r in headline)
+            {
+                var ci = (double[])r["delta_mean_turn_capped_ci95"]!;
+                var cum = (Dictionary<string, double>)r["delta_cumulative_by_turn"]!;
+                var pt = (Dictionary<string, double>)r["p_value_by_turn"]!;
+                // The turns where the deck's results are changing most: the largest absolute deltas, in turn order.
+                var turns = cum.OrderByDescending(kv => Math.Abs(kv.Value)).ThenBy(kv => int.Parse(kv.Key)).Take(4)
+                    .Select(kv => int.Parse(kv.Key)).Order().ToList();
+                var byTurn = string.Join("  ", turns.Select(t => $"T{t} {Pct(cum[t.ToString()])} (p {P(pt[t.ToString()])})"));
+                yield return $"  {r["table"],-6} mull {r["mulligan"]} {r["seat"],-8} capped {F((double)r["delta_mean_turn_capped"]!)} [{F(ci[0])}, {F(ci[1])}] p {P((double)r["p_value_mean_turn_capped"]!)}   {byTurn}";
+            }
+        }
+    }
+
     private static int Run(Options o)
     {
         var opts = RunOptionsFrom(o);
@@ -332,6 +430,8 @@ public static class Program
 
               run <deck.txt> [--games N] [--seed S] [--mull A|B|C|all] [--seat play|draw|both]
                   [--table 1v1|1v1v1|both] [--max-turn T] [--rollouts R] [--threads N] [--json out.json] [--per-game games.jsonl]
+              compare <base.txt> [--swap "Out=>In"]... [--variant "Out=>In[;Out=>In]"]... [<other.txt>...] [same options as run]
+                                                   each variant vs the base on the same shuffles: deltas, intervals, McNemar
               replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--table 1v1|1v1v1]
                   [--max-turn T]
               report <run.json | deck.forge.json> [...] [--out report.html]

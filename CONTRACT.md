@@ -2,7 +2,7 @@
 
 This is the shared agreement between **MagicSimulator** (this repo), **MagicDecks** and **Cardinator**. It covers the deck file format, the card index, and the `sim` command line and its JSON output. Code against this file. Change it here first, then tell the other sessions.
 
-Status: **draft v0.8.6** (2026-10-12).
+Status: **draft v0.9** (2026-10-12).
 - v0.2 added review notes from MagicDecks and Cardinator.
 - v0.3 added per-game output (`--per-game`) and stated the in-game play goal.
 - v0.4 added per-game fields MagicDecks asked for, plus `sim replay`, and marked Cardinator's §1 support as planned.
@@ -17,11 +17,13 @@ Status: **draft v0.8.6** (2026-10-12).
 - v0.8.2: three more goldfish rules (§3): your attackers all attack the opponent with the least life, chosen as you declare them; effects on an opponent's library ("exiles the top twenty cards") take cards off their library count; and when an opponent separates cards into two piles (Fact or Fiction), they put the card with the highest mana value in a pile by itself. No field changes.
 - v0.8.3: one more goldfish rule (§3): when everyone votes (Expropriate, "will of the council"), each opponent votes for the first choice you didn't. At `1v1` that ties; at `1v1v1` they outvote you. No field changes.
 - v0.8.4: one more goldfish rule (§3): an opponent facing "loses life unless they discard" (Court of Ambition) takes the life loss unless it would kill them, and then discards if they can. No field changes.
+- v0.9: `compare` is built (§3). Beyond the spec it takes `--variant "Out=>In[;Out=>In]"` (repeatable, one variant each) so one call can test several variants, and each result row adds `p_value_by_turn`, `delta_cumulative_by_turn_ci95` and `p_value_mean_turn_capped`. Weighted rows use a z-test on the paired differences instead of McNemar. The document carries `sim_version`.
 - v0.8.6: every command takes `--low` (or the environment variable `MAGICSIM_LOW=1`): idle priority on a single core, one thread, and Forge games one at a time (§3). Use it for long runs on a machine someone is using. Nothing else changes.
 - v0.8.5: `run` output gains a `timing` block: wall-clock seconds for the whole run and for each table size, and the thread count (§3). It's the only part of the document that varies between identical runs. `sim report` shows run times, Forge's included. Nothing else changes.
 - v0.8.1: goldfish opponents take a turn that does nothing, and their hand is a count that discard can empty (§3). "Each opponent's upkeep" and "each end step" now trigger in their turns, and they draw a card in each, so mill decks get a little faster. No field changes.
 - Built: §1 deck format, §2 card index, and the `sync-cards`, `check`, `sync-forge` and `cards` commands.
-- Spec only, not built yet: `run`, `compare`, `cards` and profiles.
+- Also built: `run`, `replay`, `report`, `compare`, `forge-setup` and `forge-gauntlet`.
+- Spec only, not built yet: profiles.
 
 ---
 
@@ -135,6 +137,7 @@ sim run <deck.txt> [--profile p.yaml] [--games N] [--seed S]
         [--max-turn T] [--json out.json]
         [--per-game games.jsonl]
 sim compare <base.txt> --swap "Out=>In" [--swap ...] [same options as run]
+sim compare <base.txt> --variant "Out=>In[;Out=>In]" [--variant ...] [same options as run]
 sim compare <a.txt> <b.txt> [<c.txt> ...]           [same options as run]
 sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--table 1v1|1v1v1] [--profile p.yaml]
 ```
@@ -271,6 +274,7 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
 ```json
 {
   "schema": "magicsim.compare/1",
+  "sim_version": "0.1.0",
   "base": { "…": "same shape as a run document" },
   "variants": [
     {
@@ -283,18 +287,23 @@ sim replay <deck.txt> --game I [--seed S] [--mull A|B|C] [--seat play|draw] [--t
          "t1_rate": 0.318, "delta_t1": 0.006, "delta_t1_ci95": [-0.002, 0.014],
          "p_value": 0.14,
          "delta_cumulative_by_turn": {"1": 0.006, "2": 0.004, "3": -0.001},
+         "delta_cumulative_by_turn_ci95": {"1": [-0.002, 0.014], "2": [-0.006, 0.014], "3": [-0.012, 0.010]},
+         "p_value_by_turn": {"1": 0.14, "2": 0.41, "3": 0.88},
          "delta_mean_turn": -0.02, "delta_mean_turn_capped": -0.05,
-         "delta_mean_turn_capped_ci95": [-0.09, -0.01]}
+         "delta_mean_turn_capped_ci95": [-0.09, -0.01], "p_value_mean_turn_capped": 0.02}
       ]
     }
   ]
 }
 ```
 
-- **The test:** each base game is paired with the variant game that used the same shuffle. `p_value` comes from McNemar's test on turn-1 wins, a test suited to paired results.
+- **Variants:** all `--swap`s together make one variant. Each `--variant` is another, and so is each further deck file (its `swaps` list the card difference, for information). They all play the base deck's shuffles.
+- **The test:** each base game is paired with the variant game that used the same shuffle. `p_value` comes from McNemar's exact test on turn-1 wins, a test suited to paired results, and `p_value_by_turn["N"]` is the same test on "won by turn N". On `weighted` rows, which mix play and draw, these p-values come from a two-sided z-test on the weighted paired differences instead.
+- **Intervals:** `delta_t1_ci95`, `delta_cumulative_by_turn_ci95` and `delta_mean_turn_capped_ci95` are 95% intervals of the paired differences. `p_value_mean_turn_capped` tests the capped mean difference (z-test).
+- **Output:** the JSON goes to stdout or `--json`, as for `run`. A short readable table of the headline rows goes to stdout when `--json` is given, else to stderr. `--per-game` writes the base games, then each variant's, with `variant` set to its label.
 - **`unreliable: true`** means the variant adds a card the simulator can't play. Don't optimize toward it.
 - **Rows:** one per (table, mulligan, seat), including the `seat: "weighted"` rows. `delta_cumulative_by_turn` covers turns 1 through `max_turn`.
-- **Swap rules:** a `--swap` is a usage error (exit 2) if its `Out` card isn't in the deck or its `In` card isn't in the card index.
+- **Swap rules:** a `--swap` or `--variant` is a usage error (exit 2) if its `Out` card isn't in the main deck (commanders can't be swapped) or its `In` card has no Forge script. Names ignore case. Each swap moves one copy. A variant that adds a card the simulator plays as a blank is `unreliable`, and a warning goes to stderr.
 - **Not checked by compare:** bans and color identity. Callers check those first (MagicDecks uses `validate_deck.py`).
 
 #### `cards` output (`magicsim.cards/1`), built
